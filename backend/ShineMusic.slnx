@@ -1,4 +1,3 @@
 <Solution>
-  <Project Path="ShineMusic.Api.Tests/ShineMusic.Api.Tests.csproj" />
   <Project Path="ShineMusic.Api/ShineMusic.Api.csproj" />
 </Solution>

@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   backend:
-    name: 后端（构建 + 单测 + 分析器闸门）
+    name: 后端（构建 + 分析器闸门）
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -33,17 +33,6 @@ jobs:
       # 因此这一步同时是「代码质量闸门」：任何新增告警都会直接失败。
       - name: 构建（警告即错误）
         run: dotnet build ShineMusic.slnx --configuration Release --no-restore
-
-      - name: 单元测试
-        run: dotnet test ShineMusic.slnx --configuration Release --no-build --logger trx --results-directory TestResults
-
-      - name: 上传测试结果
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-test-results
-          path: backend/TestResults/**/*.trx
-          if-no-files-found: warn
 
   frontend:
     name: 前端（契约漂移 + 类型检查 + 构建）

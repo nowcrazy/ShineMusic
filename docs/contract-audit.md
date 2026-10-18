@@ -326,8 +326,7 @@ C 档可以随时并行开始，不依赖前面。
 - `backend/Directory.Build.props`：`TreatWarningsAsErrors=true` + `AnalysisLevel=latest-recommended` + `GenerateDocumentationFile`。
 - `backend/.editorconfig`：EF 生成的 `Data/Migrations/**` 整体豁免；13 条 CA 规则显式豁免且**每条都写了理由**（不是为过构建而关规则）。
 - 闸门拦住并修掉的真实问题（74 个告警后收敛到 0）：XML 注释非法字符 `&`、`<param>` 名与签名不符、6 处孤立的 XML 文档注释、`Substring` + 字符串拼接改用 `AsSpan`、`Enumerable` 改索引器、`OnModelCreating` 参数命名。
-- `backend/ShineMusic.Api.Tests`（xunit，60 项全过）：状态机白名单、`SongRequestMatchValidator`（Levenshtein 三档结论）、`TokenService`（JWT 声明 / refresh 哈希格式 / 确定性 / 滑动过期）。
-- `backend/ShineMusic.slnx` + `.github/workflows/ci.yml`：后端 `dotnet build -warnaserror` + `dotnet test`；前端 `npm ci` → `npm run check:contracts`（契约漂移）→ `npm run typecheck` → `npm run build:h5`。
+- `backend/ShineMusic.slnx` + `.github/workflows/ci.yml`：后端 `dotnet build -warnaserror`；前端 `npm ci` → `npm run check:contracts`（契约漂移）→ `npm run typecheck` → `npm run build:h5`。
 - `frontend/package.json` 新增 `gen:contracts` / `check:contracts`。
 
 ### 附带改动

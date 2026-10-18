@@ -1,7 +1,7 @@
 <Project>
 
   <!--
-    工程级约束：一次配置，ShineMusic.Api 与 ShineMusic.Api.Tests 同时生效。
+    工程级约束：一次配置，ShineMusic.Api 项目生效。
 
     - TreatWarningsAsErrors：把「编译器警告」与「NetAnalyzers (CAxxxx) 警告」升级为错误，
       防止带病代码合入。新增告警必须先在这里显式豁免并写理由，不允许就地注释掩盖。
