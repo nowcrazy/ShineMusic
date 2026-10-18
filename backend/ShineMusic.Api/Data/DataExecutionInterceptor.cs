@@ -92,7 +92,7 @@ public sealed class DataExecutionInterceptor : DbCommandInterceptor
                 builder.Append("; ");
             var value = parameter.Value?.ToString() ?? "NULL";
             if (value.Length > 64)
-                value = value.Substring(0, 64) + "...";
+                value = string.Concat(value.AsSpan(0, 64), "...");
             builder.Append(parameter.ParameterName).Append('=').Append(value);
         }
         return builder.ToString();

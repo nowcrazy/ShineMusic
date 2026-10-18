@@ -24,7 +24,7 @@ import {
 } from '@/services/admin-invitation'
 
 const email = ref('')
-const invitations = ref<Invitation[]>([])
+const invitations = ref<readonly Invitation[]>([])
 const loading = ref(false)
 const creating = ref(false)
 const loadError = ref('')

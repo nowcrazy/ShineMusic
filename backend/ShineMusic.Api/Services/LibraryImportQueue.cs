@@ -18,6 +18,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using ShineMusic.Api.Data;
 using ShineMusic.Api.Options;
+using ShineMusic.Api.Contracts;
 
 namespace ShineMusic.Api.Services;
 
@@ -139,7 +140,7 @@ public sealed class LibraryImportBackgroundService(
                 {
                     // 单个任务处理失败不应影响整个 worker，记录日志并标记失败后继续消费下一条。
                     logger.LogError(exception, "Failed to process import item {ImportItemId}.", itemId);
-                    await MarkFailedAsync(itemId, "internal_error", cancellationToken);
+                    await MarkFailedAsync(itemId, ErrorCodes.InternalError, cancellationToken);
                 }
             }
         }
@@ -180,18 +181,18 @@ public sealed class LibraryImportBackgroundService(
             await db.SaveChangesAsync(cancellationToken);
             // 通过隔离存储路径解析器定位上传文件的物理路径。
             if (!storagePaths.TryResolve(item.SourceStorageKey, out var sourcePath) || !File.Exists(sourcePath))
-                throw new MediaProcessingException("resource_not_found", "The uploaded file could not be found in quarantine.");
+                throw new MediaProcessingException(ErrorCodes.ResourceNotFound, "The uploaded file could not be found in quarantine.");
 
             var extension = Path.GetExtension(item.DisplayName).TrimStart('.').ToLowerInvariant();
             if (!uploadOptions.Value.AllowedFormats.Contains(extension, StringComparer.OrdinalIgnoreCase))
-                throw new MediaProcessingException("unsupported_media_format", "The file extension is not allowed.");
+                throw new MediaProcessingException(ErrorCodes.UnsupportedMediaFormat, "The file extension is not allowed.");
             if (new FileInfo(sourcePath).Length > uploadOptions.Value.MaxFileSizeBytes)
-                throw new MediaProcessingException("upload_too_large", "The file exceeded the configured upload limit.");
+                throw new MediaProcessingException(ErrorCodes.UploadTooLarge, "The file exceeded the configured upload limit.");
 
             // 使用 ffprobe 探测真实容器，防止扩展名伪造。
             var probe = await mediaService.ProbeAsync(sourcePath, cancellationToken);
             if (!MatchesAllowedContainer(probe.FormatNames, uploadOptions.Value.AllowedFormats))
-                throw new MediaProcessingException("unsupported_media_format", "The detected audio container is not allowed.");
+                throw new MediaProcessingException(ErrorCodes.UnsupportedMediaFormat, "The detected audio container is not allowed.");
 
             // 阶段 2：解析元数据 —— 状态置为 ParsingMetadata，保存探测结果。
             item.Status = LibraryImportItemStatuses.ParsingMetadata;
@@ -249,13 +250,13 @@ public sealed class LibraryImportBackgroundService(
             // 输出存储键格式：transcoded/{itemId}.m4a
             var outputKey = $"transcoded/{item.Id:N}.m4a";
             if (!storagePaths.TryResolve(outputKey, out var outputPath))
-                throw new MediaProcessingException("internal_error", "The transcode output path is invalid.");
+                throw new MediaProcessingException(ErrorCodes.InternalError, "The transcode output path is invalid.");
             // 调用 ffmpeg 将源文件转码为 AAC/m4a。
             await mediaService.TranscodeToAacAsync(sourcePath, outputPath, transcodingOptions.Value.BitrateKbps, cancellationToken);
             // 转码后再次探测，校验输出确实为 AAC 编码，防止静默失败。
             var outputProbe = await mediaService.ProbeAsync(outputPath, cancellationToken);
             if (!string.Equals(outputProbe.Codec, "aac", StringComparison.OrdinalIgnoreCase))
-                throw new MediaProcessingException("transcode_failed", "The output did not contain AAC audio.");
+                throw new MediaProcessingException(ErrorCodes.TranscodeFailed, "The output did not contain AAC audio.");
 
             // 阶段 4：完成 —— 转码产物落库，按来源分流：管理员导入进入人工审核发布队列；
             // 用户上传自动私有入库（立即可听），并进入“待审核转公开”队列。
@@ -370,7 +371,7 @@ public sealed class LibraryImportBackgroundService(
         var assetId = Guid.NewGuid();
         var playbackKey = $"playback/{track.Id:N}/{assetId:N}.m4a";
         if (!libraryPaths.TryResolve(playbackKey, out var finalPlaybackPath))
-            throw new MediaProcessingException("internal_error", "The playback destination is invalid.");
+            throw new MediaProcessingException(ErrorCodes.InternalError, "The playback destination is invalid.");
         Directory.CreateDirectory(Path.GetDirectoryName(finalPlaybackPath)!);
         System.IO.File.Copy(transcodedPath, finalPlaybackPath, overwrite: false);
         db.MediaAssets.Add(new MediaAsset
@@ -558,13 +559,13 @@ public sealed class LibraryImportBackgroundService(
     /// </summary>
     private static string SafeErrorMessage(string code) => code switch
     {
-        "unsupported_media_format" => "The file format is not supported.",
-        "upload_too_large" => "The file exceeded the configured upload limit.",
+        ErrorCodes.UnsupportedMediaFormat => "The file format is not supported.",
+        ErrorCodes.UploadTooLarge => "The file exceeded the configured upload limit.",
         "media_processor_unavailable" => "The server media processor is not available.",
         "media_processing_timeout" => "Media processing exceeded the configured time limit.",
-        "media_parse_failed" => "The media file could not be parsed.",
-        "transcode_failed" => "The media file could not be transcoded.",
-        "resource_not_found" => "The quarantined file could not be found.",
+        ErrorCodes.MediaParseFailed => "The media file could not be parsed.",
+        ErrorCodes.TranscodeFailed => "The media file could not be transcoded.",
+        ErrorCodes.ResourceNotFound => "The quarantined file could not be found.",
         _ => "The import item could not be processed."
     };
 }

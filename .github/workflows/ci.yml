@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: 后端（构建 + 单测 + 分析器闸门）
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: 还原依赖
+        run: dotnet restore ShineMusic.slnx
+
+      # Directory.Build.props 已开启 TreatWarningsAsErrors + NetAnalyzers，
+      # 因此这一步同时是「代码质量闸门」：任何新增告警都会直接失败。
+      - name: 构建（警告即错误）
+        run: dotnet build ShineMusic.slnx --configuration Release --no-restore
+
+      - name: 单元测试
+        run: dotnet test ShineMusic.slnx --configuration Release --no-build --logger trx --results-directory TestResults
+
+      - name: 上传测试结果
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-results
+          path: backend/TestResults/**/*.trx
+          if-no-files-found: warn
+
+  frontend:
+    name: 前端（契约漂移 + 类型检查 + 构建）
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 安装依赖
+        run: npm ci
+
+      # 契约漂移检测：重新跑一遍生成器，与仓库中的 api.generated.ts 比对。
+      # 后端改了 DTO 却没重新生成/提交前端契约时，这里失败。
+      - name: 检查契约是否与后端一致
+        run: npm run check:contracts
+
+      - name: 类型检查（vue-tsc --noEmit）
+        run: npm run typecheck
+
+      - name: 构建 H5
+        run: npm run build:h5
+
+      - name: 上传构建产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/**
+          if-no-files-found: warn

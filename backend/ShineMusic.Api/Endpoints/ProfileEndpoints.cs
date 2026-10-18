@@ -22,6 +22,11 @@ namespace ShineMusic.Api.Endpoints;
 [Route("api/v1/me")]
 [Authorize]
 [Tags("Profile")]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status403Forbidden)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
 public sealed class ProfileController : ControllerBase
 {
     // 头像请求体的 multipart 上限：在文件上限基础上留出 multipart 封装开销。
@@ -31,7 +36,7 @@ public sealed class ProfileController : ControllerBase
     // 返回：200 更新后的用户资料（含头像 URL）；400 昵称为空/超长或 Identity 校验失败；401 未登录。
     [HttpPatch(Name = "UpdateMyProfile")]
     public async Task<IResult> UpdateProfile(
-        UpdateProfileRequest request,
+        UpdateDisplayNameRequest request,
         UserManager<ApplicationUser> userManager,
         LibraryStoragePaths storagePaths,
         CancellationToken cancellationToken)
@@ -43,22 +48,20 @@ public sealed class ProfileController : ControllerBase
             return Results.Unauthorized();
 
         if (string.IsNullOrWhiteSpace(request.DisplayName) || request.DisplayName.Trim().Length > 100)
-            return ValidationError("displayName", "Display name is required and must be at most 100 characters.");
+            return ApiResults.ValidationError(HttpContext, "displayName", "Display name is required and must be at most 100 characters.");
 
         user.DisplayName = request.DisplayName.Trim();
         var result = await userManager.UpdateAsync(user);
         if (!result.Succeeded)
-            return ValidationError("displayName", string.Join(" ", result.Errors.Select(error => error.Description)));
+            return ApiResults.ValidationError(HttpContext, "displayName", string.Join(" ", result.Errors.Select(error => error.Description)));
 
         var roles = await userManager.GetRolesAsync(user);
-        return Results.Ok(new
-        {
-            id = user.Id,
-            email = user.Email,
-            displayName = user.DisplayName,
-            roles,
-            avatarUrl = UserAvatarFiles.BuildUrl(storagePaths, userId)
-        });
+        return Results.Ok(new CurrentUserDto(
+            user.Id,
+            user.Email ?? string.Empty,
+            user.DisplayName,
+            roles.ToList(),
+            UserAvatarFiles.BuildUrl(storagePaths, userId)));
     }
 
     // 【POST /api/v1/me/avatar】上传/更换头像（multipart/form-data，字段名 avatar）。
@@ -80,9 +83,9 @@ public sealed class ProfileController : ControllerBase
             return Results.Unauthorized();
 
         if (avatar is null || avatar.Length == 0)
-            return ValidationError("avatar", "An image file is required.");
+            return ApiResults.ValidationError(HttpContext, "avatar", "An image file is required.");
         if (avatar.Length > UserAvatarFiles.MaxBytes)
-            return Error(HttpContext, StatusCodes.Status413PayloadTooLarge, "avatar_too_large", "Avatar image must be at most 2MB.");
+            return ApiResults.Error(HttpContext, StatusCodes.Status413PayloadTooLarge, ErrorCodes.AvatarTooLarge, "Avatar image must be at most 2MB.");
 
         // 整体读入内存（≤2MB）后校验文件头，再落盘；避免流位置重置的兼容问题。
         using var buffer = new MemoryStream();
@@ -90,11 +93,11 @@ public sealed class ProfileController : ControllerBase
         var content = buffer.ToArray();
         var format = UserAvatarFiles.DetectFormat(content.AsSpan(0, Math.Min(content.Length, 16)));
         if (format is null)
-            return Error(HttpContext, StatusCodes.Status415UnsupportedMediaType, "unsupported_media_format", "Only JPEG, PNG and WebP images are accepted.");
+            return ApiResults.Error(HttpContext, StatusCodes.Status415UnsupportedMediaType, ErrorCodes.UnsupportedMediaFormat, "Only JPEG, PNG and WebP images are accepted.");
 
         // storageKey 由服务端拼装（avatars/{userId}{ext}），userId 为 Guid 不含路径分隔符，无法穿越。
         if (!storagePaths.TryResolve($"{UserAvatarFiles.DirectoryKey}{userId}{format.Value.Extension}", out var targetPath))
-            return Error(HttpContext, StatusCodes.Status500InternalServerError, "internal_error", "Unable to resolve avatar storage path.");
+            return ApiResults.Error(HttpContext, StatusCodes.Status500InternalServerError, ErrorCodes.InternalError, "Unable to resolve avatar storage path.");
         var directory = Path.GetDirectoryName(targetPath)!;
         Directory.CreateDirectory(directory);
 
@@ -102,7 +105,7 @@ public sealed class ProfileController : ControllerBase
         UserAvatarFiles.DeleteAll(storagePaths, userId);
         await System.IO.File.WriteAllBytesAsync(targetPath, content, cancellationToken);
 
-        return Results.Ok(new { avatarUrl = UserAvatarFiles.BuildUrl(storagePaths, userId) });
+        return Results.Ok(new AvatarUrlDto(UserAvatarFiles.BuildUrl(storagePaths, userId)));
     }
 
     // 【GET /api/v1/me/avatar】读取当前用户头像（匿名不可见，必须登录且头像存在）。
@@ -114,7 +117,7 @@ public sealed class ProfileController : ControllerBase
             return Results.Unauthorized();
         var path = UserAvatarFiles.FindFilePath(storagePaths, userId);
         if (path is null || !System.IO.File.Exists(path))
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
         // 扩展名决定 Content-Type（文件由本服务的上传端点写入，扩展名与真实格式一致）。
         var contentType = Path.GetExtension(path).ToLowerInvariant() switch
         {
@@ -152,27 +155,14 @@ public sealed class ProfileController : ControllerBase
             return Results.Unauthorized();
 
         if (string.IsNullOrWhiteSpace(request.CurrentPassword) || string.IsNullOrWhiteSpace(request.NewPassword))
-            return ValidationError("password", "Current and new password are required.");
+            return ApiResults.ValidationError(HttpContext, "password", "Current and new password are required.");
 
         var result = await userManager.ChangePasswordAsync(user, request.CurrentPassword, request.NewPassword);
         if (!result.Succeeded)
-            return ValidationError("password", string.Join(" ", result.Errors.Select(error => error.Description)));
+            return ApiResults.ValidationError(HttpContext, "password", string.Join(" ", result.Errors.Select(error => error.Description)));
         return Results.NoContent();
     }
 
-    /// <summary>构造字段级 400 validation_error 响应。</summary>
-    private IResult ValidationError(string field, string message) => Results.BadRequest(
-        new ApiErrorResponse(new ApiErrorDetail("validation_error", $"{field}: {message}", HttpContext.TraceIdentifier)));
-
-    /// <summary>构造统一的 404 错误响应。</summary>
-    private IResult NotFound(HttpContext ctx) => Results.NotFound(
-        new ApiErrorResponse(new ApiErrorDetail("resource_not_found", "The requested resource was not found.", ctx.TraceIdentifier)));
-
-    /// <summary>构造指定状态码的业务错误响应。</summary>
-    private static IResult Error(HttpContext ctx, int statusCode, string code, string message) => Results.Json(
-        new ApiErrorResponse(new ApiErrorDetail(code, message, ctx.TraceIdentifier)), statusCode: statusCode);
 }
 
 // 以下为本端点组使用的请求 DTO（由请求体反序列化）。
-public sealed record UpdateProfileRequest(string DisplayName);                       // 昵称修改请求体
-public sealed record ChangePasswordRequest(string CurrentPassword, string NewPassword); // 密码修改请求体

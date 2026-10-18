@@ -60,7 +60,7 @@ export function mapTrack(track: ApiTrack): Track {
 export interface HomeFeed {
   featured: Track | null // 焦点推荐曲目
   featuredCollectionId: string | null // 焦点关联的合集 ID（用于“查看合集”），无则 null
-  collections: ApiCollectionSummary[] // 精选合集摘要列表
+  collections: readonly ApiCollectionSummary[] // 精选合集摘要列表
   recentlyAdded: Track[] // 最近新增（映射后）
   dailyMix: Track[] // 每日推荐分区（无数据时为空数组）
   trending: Track[] // 热门趋势分区（最近新增前 4 条，无数据时为空数组）
@@ -141,7 +141,7 @@ export async function getTracks(query: TrackQuery = {}): Promise<ApiPageResult<T
  * - 请求：GET /api/v1/genres?pageSize=100（匿名）
  * @returns 流派名字符串数组（取分页 items）
  */
-export async function getGenres(): Promise<string[]> {
+export async function getGenres(): Promise<readonly string[]> {
   const result = await http.get<ApiPageResult<string>>(`${API_PREFIX}/genres?pageSize=100`, false)
   return result.items
 }
@@ -151,7 +151,7 @@ export async function getGenres(): Promise<string[]> {
  * - 请求：GET /api/v1/collections?pageSize=50（匿名）
  * @returns 合集摘要数组
  */
-export async function getCollections(): Promise<ApiCollectionSummary[]> {
+export async function getCollections(): Promise<readonly ApiCollectionSummary[]> {
   const result = await http.get<ApiPageResult<ApiCollectionSummary>>(
     `${API_PREFIX}/collections?pageSize=50`,
     false,

@@ -4,6 +4,7 @@
 
 using MailKit.Net.Smtp;
 using MailKit.Security;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MimeKit;
 using ShineMusic.Api.Options;
@@ -28,7 +29,7 @@ public interface IInvitationEmailSender
 /// <summary>
 /// 基于 MailKit 的邀请邮件发送实现（主构造函数注入邀请邮件配置）。
 /// </summary>
-public sealed class InvitationEmailSender(IOptions<InvitationEmailOptions> emailOptions) : IInvitationEmailSender
+public sealed class InvitationEmailSender(IOptions<InvitationEmailOptions> emailOptions, ILogger<InvitationEmailSender> logger) : IInvitationEmailSender
 {
     /// <inheritdoc />
     public async Task SendInvitationAsync(string email, string token, DateTime expiresAtUtc, CancellationToken cancellationToken)
@@ -40,12 +41,16 @@ public sealed class InvitationEmailSender(IOptions<InvitationEmailOptions> email
             string.IsNullOrWhiteSpace(options.SmtpHost) ||
             options.SmtpPort is < 1 or > 65535)
         {
+            logger.LogError("Invitation email not sent to {Email}: settings incomplete.", email);
             throw new InvalidOperationException("Invitation email settings are incomplete.");
         }
 
         // 用户名与密码必须“成对配置”：要么都提供（需认证的 SMTP），要么都留空（内网免认证中继）。
         if ((string.IsNullOrWhiteSpace(options.Username)) != (string.IsNullOrWhiteSpace(options.Password)))
+        {
+            logger.LogError("Invitation email not sent to {Email}: SMTP username and password must be configured together.", email);
             throw new InvalidOperationException("Both SMTP username and password must be configured together.");
+        }
 
         // 邀请注册链接：令牌放在 URL 的 fragment（# 之后）——fragment 不会发送到服务器、不会出现在服务端日志与 Referer 中。
         // 先清空 Query 再设置 Fragment，避免继承基址上的多余查询串。
@@ -120,15 +125,24 @@ public sealed class InvitationEmailSender(IOptions<InvitationEmailOptions> email
             HtmlBody = htmlBody
         }.ToMessageBody();
 
-        using var client = new SmtpClient();
-        // 加密策略：UseSsl=true 表示连接即 TLS（SMTPS/465）；否则使用 STARTTLS 升级明文连接（587）。
-        var socketOptions = options.UseSsl ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTls;
-        await client.ConnectAsync(options.SmtpHost, options.SmtpPort, socketOptions, cancellationToken);
-        // 仅在配置了用户名时才进行认证（与上面的成对校验呼应）。
-        if (!string.IsNullOrWhiteSpace(options.Username))
-            await client.AuthenticateAsync(options.Username, options.Password, cancellationToken);
-        await client.SendAsync(message, cancellationToken);
-        // quit=true：发送 QUIT 命令优雅断开连接。
-        await client.DisconnectAsync(true, cancellationToken);
+        try
+        {
+            using var client = new SmtpClient();
+            // 加密策略：UseSsl=true 表示连接即 TLS（SMTPS/465）；否则使用 STARTTLS 升级明文连接（587）。
+            var socketOptions = options.UseSsl ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTls;
+            await client.ConnectAsync(options.SmtpHost, options.SmtpPort, socketOptions, cancellationToken);
+            // 仅在配置了用户名时才进行认证（与上面的成对校验呼应）。
+            if (!string.IsNullOrWhiteSpace(options.Username))
+                await client.AuthenticateAsync(options.Username, options.Password, cancellationToken);
+            await client.SendAsync(message, cancellationToken);
+            // quit=true：发送 QUIT 命令优雅断开连接。
+            await client.DisconnectAsync(true, cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            // 任何 SMTP 连接/认证/发送异常都记录到日志（落入 logs/app），便于排查邮件发不出去的问题。
+            logger.LogError(exception, "Failed to send invitation email to {Email}.", email);
+            throw;
+        }
     }
 }

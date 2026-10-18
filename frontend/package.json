@@ -8,6 +8,8 @@
     "build:h5": "uni build",
     "dev:app": "uni -p app",
     "build:app": "uni build -p app --mode app",
+    "gen:contracts": "python ../backend/tools/generate-ts-contracts.py",
+    "check:contracts": "python ../backend/tools/generate-ts-contracts.py --check",
     "typecheck": "vue-tsc --noEmit"
   },
   "dependencies": {

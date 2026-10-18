@@ -16,6 +16,9 @@ namespace ShineMusic.Api.Endpoints;
 [ApiController]
 [Route("api/v1")]
 [Tags("Lyrics")]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
 public sealed class LyricController : ControllerBase
 {
     [HttpGet("tracks/{trackId:guid}/lyrics", Name = "GetTrackLyrics")]
@@ -27,7 +30,7 @@ public sealed class LyricController : ControllerBase
             .Select(candidate => new { candidate.PublishedAt, candidate.OwnerUserId })
             .FirstOrDefaultAsync(cancellationToken);
         if (track is null || !PrivateTrackAccess.CanAccess(track.PublishedAt, track.OwnerUserId, HttpContext.User))
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
 
         var lyrics = await db.Lyrics.AsNoTracking()
             .Where(lyric => lyric.TrackId == trackId)
@@ -51,7 +54,7 @@ public sealed class LyricController : ControllerBase
             .Select(candidate => new { candidate.PublishedAt, candidate.OwnerUserId })
             .FirstOrDefaultAsync(cancellationToken);
         if (track is null || !PrivateTrackAccess.CanAccess(track.PublishedAt, track.OwnerUserId, HttpContext.User))
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
 
         // 优先取标记为默认的歌词；若没有默认，则取该曲目最早创建的一份作为兜底。
         // SQLite 不支持 DateTimeOffset ORDER BY，取到内存后排序。
@@ -62,7 +65,7 @@ public sealed class LyricController : ControllerBase
             .OrderByDescending(item => item.IsDefault)
             .ThenBy(item => item.CreatedAtUtc)
             .FirstOrDefault();
-        return lyric is null ? NotFound(HttpContext) : Results.Ok(ToDto(lyric));
+        return lyric is null ? ApiResults.NotFound(HttpContext) : Results.Ok(ToDto(lyric));
     }
 
     internal static LyricDto ToDto(Lyric lyric) => new(
@@ -74,8 +77,6 @@ public sealed class LyricController : ControllerBase
         lyric.IsDefault,
         lyric.UpdatedAtUtc);
 
-    private static IResult NotFound(HttpContext ctx) => Results.NotFound(
-        new ApiErrorResponse(new ApiErrorDetail("resource_not_found", "The requested resource was not found.", ctx.TraceIdentifier)));
 }
 
 /// <summary>管理端歌词维护接口：为已发布曲目增删改歌词。</summary>
@@ -83,6 +84,11 @@ public sealed class LyricController : ControllerBase
 [Route("api/v1/admin")]
 [Authorize(Roles = "admin")]
 [Tags("Admin Lyrics")]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status403Forbidden)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
 public sealed class LyricManagementController : ControllerBase
 {
     [HttpGet("tracks/{trackId:guid}/lyrics", Name = "GetAdminTrackLyrics")]
@@ -90,7 +96,7 @@ public sealed class LyricManagementController : ControllerBase
     {
         var track = await db.Tracks.AsNoTracking().FirstOrDefaultAsync(track => track.Id == trackId, cancellationToken);
         if (track is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
 
         var lyrics = await db.Lyrics.AsNoTracking()
             .Where(lyric => lyric.TrackId == trackId)
@@ -110,14 +116,14 @@ public sealed class LyricManagementController : ControllerBase
     {
         var track = await db.Tracks.FirstOrDefaultAsync(track => track.Id == trackId, cancellationToken);
         if (track is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
 
         if (string.IsNullOrWhiteSpace(request.Content))
-            return ValidationError(HttpContext, "content", "Content must not be empty.");
+            return ApiResults.ValidationError(HttpContext, "content", "Content must not be empty.");
 
         var format = NormalizeFormat(request.Format);
         if (format is null)
-            return ValidationError(HttpContext, "format", "Format must be 'plain' or 'lrc'.");
+            return ApiResults.ValidationError(HttpContext, "format", "Format must be 'plain' or 'lrc'.");
 
         // 若新歌词被设为默认，先取消同曲目其他歌词的默认标记，保证同一曲目最多一份默认。
         if (request.IsDefault)
@@ -151,16 +157,16 @@ public sealed class LyricManagementController : ControllerBase
     {
         var lyric = await db.Lyrics.FirstOrDefaultAsync(lyric => lyric.Id == lyricId, cancellationToken);
         if (lyric is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
 
         if (request.Content is not null && string.IsNullOrWhiteSpace(request.Content))
-            return ValidationError(HttpContext, "content", "Content must not be empty.");
+            return ApiResults.ValidationError(HttpContext, "content", "Content must not be empty.");
 
         if (request.Format is not null)
         {
             var format = NormalizeFormat(request.Format);
             if (format is null)
-                return ValidationError(HttpContext, "format", "Format must be 'plain' or 'lrc'.");
+                return ApiResults.ValidationError(HttpContext, "format", "Format must be 'plain' or 'lrc'.");
             lyric.Format = format;
         }
 
@@ -197,7 +203,7 @@ public sealed class LyricManagementController : ControllerBase
     {
         var lyric = await db.Lyrics.FirstOrDefaultAsync(lyric => lyric.Id == lyricId, cancellationToken);
         if (lyric is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
 
         db.Lyrics.Remove(lyric);
         AdminAudit.Add(HttpContext, db, "lyric.deleted", "lyric", lyricId, new { lyric.TrackId });
@@ -215,9 +221,5 @@ public sealed class LyricManagementController : ControllerBase
             _ => null
         };
 
-    private static IResult ValidationError(HttpContext ctx, string field, string message) =>
-        Results.BadRequest(new ApiErrorResponse(new ApiErrorDetail("validation_error", $"{field}: {message}", ctx.TraceIdentifier)));
 
-    private static IResult NotFound(HttpContext ctx) => Results.NotFound(
-        new ApiErrorResponse(new ApiErrorDetail("resource_not_found", "The requested resource was not found.", ctx.TraceIdentifier)));
 }

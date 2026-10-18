@@ -31,7 +31,7 @@ type CachedTrack = {
 }
 
 // —— 列表态 ——
-const collections = ref<ApiCollectionSummary[]>([])
+const collections = ref<readonly ApiCollectionSummary[]>([])
 const loading = ref(false)
 const listMessage = ref('')
 
@@ -51,7 +51,7 @@ const editMessage = ref('')
 // —— 添加曲目搜索面板 ——
 const addPanelOpen = ref(false)
 const addQuery = ref('')
-const addResults = ref<ApiTrack[]>([])
+const addResults = ref<readonly ApiTrack[]>([])
 const addSearching = ref(false)
 const addMessage = ref('')
 

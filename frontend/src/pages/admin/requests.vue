@@ -32,7 +32,7 @@ const filters: { key: Filter; label: string }[] = [
 ]
 
 const filter = ref<Filter>('')
-const items = ref<ApiSongRequest[]>([])
+const items = ref<readonly ApiSongRequest[]>([])
 const loading = ref(true)
 const loadError = ref(false)
 const busyId = ref('')

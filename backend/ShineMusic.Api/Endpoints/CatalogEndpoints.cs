@@ -12,6 +12,9 @@ namespace ShineMusic.Api.Endpoints;
 /// <summary>Serves published catalog content and media streams.</summary>
 [ApiController]
 [Route("api/v1")]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
 public sealed class CatalogController : ControllerBase
 {
     private const int DefaultPageSize = 20;
@@ -58,7 +61,7 @@ public sealed class CatalogController : ControllerBase
             _ => null!
         };
         if (query is null)
-            return ValidationError(HttpContext, "sort", "sort must be recent, title, or duration.");
+            return ApiResults.ValidationError(HttpContext, "sort", "sort must be recent, title, or duration.");
 
         var tracks = await query.Skip((pageNumber - 1) * size).Take(size).ToListAsync(cancellationToken);
         return Results.Ok(new PageResult<TrackDto>(tracks.Select(ToDto).ToArray(), pageNumber, size, total));
@@ -80,7 +83,7 @@ public sealed class CatalogController : ControllerBase
                 .Include(candidate => candidate.MediaAssets.Where(asset => asset.IsPublished))
                 .FirstOrDefaultAsync(candidate => candidate.Id == trackId && candidate.PublishedAt == null, cancellationToken);
             if (privateTrack is null || !PrivateTrackAccess.CanAccess(privateTrack.PublishedAt, privateTrack.OwnerUserId, HttpContext.User))
-                return NotFound(HttpContext);
+                return ApiResults.NotFound(HttpContext);
             track = privateTrack;
         }
         return Results.Ok(ToDto(track));
@@ -97,7 +100,7 @@ public sealed class CatalogController : ControllerBase
     {
         if (!featureOptions.Value.AnonymousPlayback && HttpContext.User.Identity?.IsAuthenticated != true)
             return Results.Json(new ApiErrorResponse(new ApiErrorDetail(
-                "authentication_required", "Authentication is required.", HttpContext.TraceIdentifier)),
+                ErrorCodes.AuthenticationRequired, "Authentication is required.", HttpContext.TraceIdentifier)),
                 statusCode: StatusCodes.Status401Unauthorized);
 
         // 私有曲目（用户上传、未公开）的可见性判断：上传者本人与管理员可播放，其他人按 404 处理。
@@ -106,7 +109,7 @@ public sealed class CatalogController : ControllerBase
             .Select(candidate => new { candidate.PublishedAt, candidate.OwnerUserId })
             .FirstOrDefaultAsync(cancellationToken);
         if (track is null || !PrivateTrackAccess.CanAccess(track.PublishedAt, track.OwnerUserId, HttpContext.User))
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
 
         var asset = await db.MediaAssets.AsNoTracking()
             .Where(asset => asset.TrackId == trackId && asset.IsPublished)
@@ -114,13 +117,13 @@ public sealed class CatalogController : ControllerBase
             .Select(asset => new { asset.StorageKey, asset.Container })
             .FirstOrDefaultAsync(cancellationToken);
         if (asset is null || !storagePaths.TryResolve(asset.StorageKey, out var filePath) || !System.IO.File.Exists(filePath))
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
 
         var contentType = GetAudioContentType(asset.Container);
         if (contentType is null)
         {
             return Results.Json(
-                new ApiErrorResponse(new ApiErrorDetail("unsupported_media_format", "The media format is not supported.", HttpContext.TraceIdentifier)),
+                new ApiErrorResponse(new ApiErrorDetail(ErrorCodes.UnsupportedMediaFormat, "The media format is not supported.", HttpContext.TraceIdentifier)),
                 statusCode: StatusCodes.Status415UnsupportedMediaType);
         }
 
@@ -176,7 +179,7 @@ public sealed class CatalogController : ControllerBase
                 .ThenInclude(track => track.MediaAssets.Where(asset => asset.IsPublished))
             .FirstOrDefaultAsync(cancellationToken);
         if (album is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
 
         var tracks = album.Tracks.OrderBy(track => track.DiscNumber).ThenBy(track => track.TrackNumber).ThenBy(track => track.Title)
             .Select(ToDto).ToArray();
@@ -236,7 +239,7 @@ public sealed class CatalogController : ControllerBase
                 .ThenInclude(track => track.MediaAssets.Where(asset => asset.IsPublished))
             .FirstOrDefaultAsync(cancellationToken);
         if (artist is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
 
         var albums = artist.AlbumArtists.Select(link => link.Album)
             .Where(album => album.Tracks.Any(track => track.PublishedAt != null))
@@ -309,7 +312,7 @@ public sealed class CatalogController : ControllerBase
                 .ThenInclude(link => link.Track).ThenInclude(track => track.MediaAssets.Where(asset => asset.IsPublished))
             .FirstOrDefaultAsync(cancellationToken);
         if (collection is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
 
         var tracks = collection.CollectionTracks.OrderBy(link => link.SortOrder).Select(link => ToDto(link.Track)).ToArray();
         return Results.Ok(new CollectionDetailDto(collection.Id, collection.Title, collection.Description, ArtworkUrl(collection.ArtworkId), tracks));
@@ -424,15 +427,11 @@ public sealed class CatalogController : ControllerBase
         size = pageSize ?? DefaultPageSize;
         error = null;
         if (pageNumber < 1)
-            error = ValidationError(ctx, "page", "page must be at least 1.");
+            error = ApiResults.ValidationError(ctx, "page", "page must be at least 1.");
         else if (size < 1 || size > MaximumPageSize)
-            error = ValidationError(ctx, "pageSize", $"pageSize must be between 1 and {MaximumPageSize}.");
+            error = ApiResults.ValidationError(ctx, "pageSize", $"pageSize must be between 1 and {MaximumPageSize}.");
         return error is null;
     }
 
-    private static IResult ValidationError(HttpContext ctx, string field, string message) =>
-        Results.BadRequest(new ApiErrorResponse(new ApiErrorDetail("validation_error", $"{field}: {message}", ctx.TraceIdentifier)));
 
-    private static IResult NotFound(HttpContext ctx) => Results.NotFound(
-        new ApiErrorResponse(new ApiErrorDetail("resource_not_found", "The requested resource was not found.", ctx.TraceIdentifier)));
 }

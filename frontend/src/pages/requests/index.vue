@@ -21,6 +21,7 @@ import {
   type SongRequestTimelineItem,
 } from '@/services/requests'
 import { isAdmin, isAuthenticated, requireLogin } from '@/services/session'
+import { describeError, ErrorCodes } from '@/services/errors'
 import { formatDate } from '@/utils/format'
 import type { ApiSongRequest } from '@/types/music'
 import { ApiError } from '@/services/http'
@@ -37,7 +38,7 @@ const tabs: { key: Tab; label: string }[] = [
 ]
 
 // —— 列表与分页状态 ——
-const items = ref<ApiSongRequest[]>([])
+const items = ref<readonly ApiSongRequest[]>([])
 const loading = ref(true)
 const loadingMore = ref(false)
 const loadError = ref(false)
@@ -138,10 +139,10 @@ async function handleVote(item: ApiSongRequest) {
     // 请求失败：回滚乐观更新
     item.myVote = false
     item.voteCount -= 1
-    if (error instanceof ApiError && error.code === 'resource_conflict') {
+    if (error instanceof ApiError && error.code === ErrorCodes.ResourceConflict) {
       uni.showToast({ title: '该需求已关闭投票', icon: 'none' })
     } else {
-      uni.showToast({ title: '操作失败，请稍后再试', icon: 'none' })
+      uni.showToast({ title: describeError(error, '操作失败，请稍后再试'), icon: 'none' })
     }
   } finally {
     const cleared = new Set(pendingVotes.value)
@@ -190,7 +191,7 @@ async function submitRequest() {
   } catch (error) {
     const message =
       error instanceof ApiError
-        ? error.code === 'resource_conflict'
+        ? error.code === ErrorCodes.ResourceConflict
           ? error.message.includes('library')
             ? '这首歌已在曲库中'
             : '已有相同的需求，去投一票吧'
@@ -279,7 +280,7 @@ async function handleResubmit(item: ApiSongRequest) {
   } catch (error) {
     const message =
       error instanceof ApiError
-        ? error.code === 'resource_conflict'
+        ? error.code === ErrorCodes.ResourceConflict
           ? '已有相同的有效需求'
           : error.message
         : '提交失败，请稍后再试'

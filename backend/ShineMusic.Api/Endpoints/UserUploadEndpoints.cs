@@ -23,6 +23,11 @@ namespace ShineMusic.Api.Endpoints;
 [Authorize]
 [FeatureGate(nameof(FeatureOptions.UserUploads))]
 [Tags("My Uploads")]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status403Forbidden)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
 public sealed class UserUploadController : ControllerBase
 {
     // 预检与上传匹配的时长容差（毫秒），与歌词外部源容差保持一致。
@@ -48,9 +53,9 @@ public sealed class UserUploadController : ControllerBase
             return Results.Unauthorized();
         if (!MediaTypeHeaderValue.TryParse(HttpContext.Request.ContentType, out var contentType) ||
             !string.Equals(contentType.MediaType.Value, "multipart/form-data", StringComparison.OrdinalIgnoreCase))
-            return ValidationError(HttpContext, "contentType", "A multipart/form-data request is required.");
+            return ApiResults.ValidationError(HttpContext, "contentType", "A multipart/form-data request is required.");
         if (HttpContext.Request.ContentLength is > 0 && HttpContext.Request.ContentLength > uploadOptions.Value.MaxBatchSizeBytes)
-            return Error(HttpContext, StatusCodes.Status413PayloadTooLarge, "upload_too_large", "The upload batch exceeded the configured limit.");
+            return ApiResults.Error(HttpContext, StatusCodes.Status413PayloadTooLarge, ErrorCodes.UploadTooLarge, "The upload batch exceeded the configured limit.");
 
         ImportStagingService.StagedResult staged;
         try
@@ -59,23 +64,23 @@ public sealed class UserUploadController : ControllerBase
         }
         catch (UploadLimitException)
         {
-            return Error(HttpContext, StatusCodes.Status413PayloadTooLarge, "upload_too_large", "The file or batch exceeded the configured upload limit.");
+            return ApiResults.Error(HttpContext, StatusCodes.Status413PayloadTooLarge, ErrorCodes.UploadTooLarge, "The file or batch exceeded the configured upload limit.");
         }
         catch (EmptyUploadException)
         {
-            return ValidationError(HttpContext, "files", "Empty files are not accepted.");
+            return ApiResults.ValidationError(HttpContext, "files", "Empty files are not accepted.");
         }
         catch (UnsupportedFormatException)
         {
-            return Error(HttpContext, StatusCodes.Status415UnsupportedMediaType, "unsupported_media_format", "The file extension is not allowed.");
+            return ApiResults.Error(HttpContext, StatusCodes.Status415UnsupportedMediaType, ErrorCodes.UnsupportedMediaFormat, "The file extension is not allowed.");
         }
         catch (InvalidDataException)
         {
-            return Error(HttpContext, StatusCodes.Status413PayloadTooLarge, "upload_too_large", "The multipart request exceeded its configured limit.");
+            return ApiResults.Error(HttpContext, StatusCodes.Status413PayloadTooLarge, ErrorCodes.UploadTooLarge, "The multipart request exceeded its configured limit.");
         }
         catch (InvalidOperationException)
         {
-            return Error(HttpContext, StatusCodes.Status500InternalServerError, "internal_error", "Unable to stage the upload.");
+            return ApiResults.Error(HttpContext, StatusCodes.Status500InternalServerError, ErrorCodes.InternalError, "Unable to stage the upload.");
         }
 
         if (staged.OrphanLyrics.Count > 0)
@@ -182,9 +187,9 @@ public sealed class UserUploadController : ControllerBase
         if (!HttpContext.User.TryGetUserId(out var userId))
             return Results.Unauthorized();
         if (request.Files.Count == 0)
-            return ValidationError(HttpContext, "files", "At least one file fingerprint is required.");
+            return ApiResults.ValidationError(HttpContext, "files", "At least one file fingerprint is required.");
         if (request.Files.Count > MaxPrecheckFiles)
-            return ValidationError(HttpContext, "files", $"At most {MaxPrecheckFiles} file fingerprints per request.");
+            return ApiResults.ValidationError(HttpContext, "files", $"At most {MaxPrecheckFiles} file fingerprints per request.");
 
         // 按标题粗筛候选（SQL 侧小写精确匹配），再在内存中按时长/艺人精确匹配。
         var normalizedTitles = request.Files
@@ -282,9 +287,9 @@ public sealed class UserUploadController : ControllerBase
             return Results.Unauthorized();
         var trackIds = request.TrackIds.Distinct().ToArray();
         if (trackIds.Length == 0)
-            return ValidationError(HttpContext, "trackIds", "At least one track id is required.");
+            return ApiResults.ValidationError(HttpContext, "trackIds", "At least one track id is required.");
         if (trackIds.Length > 200)
-            return ValidationError(HttpContext, "trackIds", "At most 200 tracks per request.");
+            return ApiResults.ValidationError(HttpContext, "trackIds", "At most 200 tracks per request.");
 
         // 仅允许引用公开曲目与本人私有曲目。
         var referenceable = await db.Tracks.AsNoTracking()
@@ -325,7 +330,7 @@ public sealed class UserUploadController : ControllerBase
         var item = await db.UserLibraryItems.FirstOrDefaultAsync(
             candidate => candidate.UserId == userId && candidate.TrackId == trackId, cancellationToken);
         if (item is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
         db.UserLibraryItems.Remove(item);
         await db.SaveChangesAsync(cancellationToken);
         return Results.NoContent();
@@ -336,10 +341,4 @@ public sealed class UserUploadController : ControllerBase
 
     private static string? ArtworkUrl(Guid? artworkId) => artworkId is null ? null : $"/api/v1/artwork/{artworkId.Value}";
 
-    private static IResult ValidationError(HttpContext ctx, string field, string message) => Results.BadRequest(
-        new ApiErrorResponse(new ApiErrorDetail("validation_error", $"{field}: {message}", ctx.TraceIdentifier)));
-    private static IResult NotFound(HttpContext ctx) => Results.NotFound(
-        new ApiErrorResponse(new ApiErrorDetail("resource_not_found", "The requested resource was not found.", ctx.TraceIdentifier)));
-    private static IResult Error(HttpContext ctx, int statusCode, string code, string message) => Results.Json(
-        new ApiErrorResponse(new ApiErrorDetail(code, message, ctx.TraceIdentifier)), statusCode: statusCode);
 }

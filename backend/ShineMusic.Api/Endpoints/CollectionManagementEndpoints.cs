@@ -24,6 +24,11 @@ namespace ShineMusic.Api.Endpoints;
 [Route("api/v1/admin/collections")]
 [Authorize(Roles = "admin")]
 [Tags("Admin Collections")]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status403Forbidden)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
 public sealed class CollectionManagementController : ControllerBase
 {
     // 单个歌单曲目数量上限（与用户歌单上限保持一致）。
@@ -39,18 +44,18 @@ public sealed class CollectionManagementController : ControllerBase
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.Title) || request.Title.Trim().Length > 100)
-            return ValidationError("title", "Title is required and must be at most 100 characters.");
+            return ApiResults.ValidationError(HttpContext, "title", "Title is required and must be at most 100 characters.");
         if (request.Description is { Length: > 500 })
-            return ValidationError("description", "Description must be at most 500 characters.");
+            return ApiResults.ValidationError(HttpContext, "description", "Description must be at most 500 characters.");
 
         var parseResult = ParseTrackIds(request.TrackIds);
         if (parseResult.Error is not null)
             return parseResult.Error;
         var trackIds = parseResult.Value!;
         if (trackIds.Length > MaxTracksPerCollection)
-            return ValidationError("trackIds", $"At most {MaxTracksPerCollection} tracks per collection.");
+            return ApiResults.ValidationError(HttpContext, "trackIds", $"At most {MaxTracksPerCollection} tracks per collection.");
         if (trackIds.Length > 0 && !await AllTracksPublishedAsync(db, trackIds, cancellationToken))
-            return ValidationError("trackIds", "All tracks must exist and be published.");
+            return ApiResults.ValidationError(HttpContext, "trackIds", "All tracks must exist and be published.");
 
         Guid? artworkId = null;
         if (!string.IsNullOrWhiteSpace(request.ArtworkId))
@@ -59,7 +64,7 @@ public sealed class CollectionManagementController : ControllerBase
             if (artworkResult.Error is not null)
                 return artworkResult.Error;
             if (!await db.Artworks.AnyAsync(item => item.Id == artworkResult.Value, cancellationToken))
-                return ValidationError("artworkId", "The specified artwork does not exist.");
+                return ApiResults.ValidationError(HttpContext, "artworkId", "The specified artwork does not exist.");
             artworkId = artworkResult.Value;
         }
         else if (trackIds.Length > 0)
@@ -110,18 +115,18 @@ public sealed class CollectionManagementController : ControllerBase
         var collection = await db.EditorialCollections
             .FirstOrDefaultAsync(item => item.Id == collectionId, cancellationToken);
         if (collection is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
 
         if (request.Title is not null)
         {
             if (string.IsNullOrWhiteSpace(request.Title) || request.Title.Trim().Length > 100)
-                return ValidationError("title", "Title is required and must be at most 100 characters.");
+                return ApiResults.ValidationError(HttpContext, "title", "Title is required and must be at most 100 characters.");
             collection.Title = request.Title.Trim();
         }
         if (request.Description is not null)
         {
             if (request.Description.Length > 500)
-                return ValidationError("description", "Description must be at most 500 characters.");
+                return ApiResults.ValidationError(HttpContext, "description", "Description must be at most 500 characters.");
             collection.Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim();
         }
         if (request.IsPublished is not null)
@@ -132,7 +137,7 @@ public sealed class CollectionManagementController : ControllerBase
             if (artworkResult.Error is not null)
                 return artworkResult.Error;
             if (!await db.Artworks.AnyAsync(item => item.Id == artworkResult.Value, cancellationToken))
-                return ValidationError("artworkId", "The specified artwork does not exist.");
+                return ApiResults.ValidationError(HttpContext, "artworkId", "The specified artwork does not exist.");
             collection.ArtworkId = artworkResult.Value;
         }
 
@@ -160,7 +165,7 @@ public sealed class CollectionManagementController : ControllerBase
         var collection = await db.EditorialCollections
             .FirstOrDefaultAsync(item => item.Id == collectionId, cancellationToken);
         if (collection is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
 
         // CollectionTrack 无级联外键删除行为，先显式删除关联行再删歌单本体。
         await db.Set<CollectionTrack>().Where(link => link.CollectionId == collectionId)
@@ -184,16 +189,16 @@ public sealed class CollectionManagementController : ControllerBase
         var collection = await db.EditorialCollections
             .FirstOrDefaultAsync(item => item.Id == collectionId, cancellationToken);
         if (collection is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
 
         var parseResult = ParseTrackIds(request.TrackIds);
         if (parseResult.Error is not null)
             return parseResult.Error;
         var trackIds = parseResult.Value!;
         if (trackIds.Length > MaxTracksPerCollection)
-            return ValidationError("trackIds", $"At most {MaxTracksPerCollection} tracks per collection.");
+            return ApiResults.ValidationError(HttpContext, "trackIds", $"At most {MaxTracksPerCollection} tracks per collection.");
         if (trackIds.Length > 0 && !await AllTracksPublishedAsync(db, trackIds, cancellationToken))
-            return ValidationError("trackIds", "All tracks must exist and be published.");
+            return ApiResults.ValidationError(HttpContext, "trackIds", "All tracks must exist and be published.");
 
         await db.Set<CollectionTrack>().Where(link => link.CollectionId == collectionId)
             .ExecuteDeleteAsync(cancellationToken);
@@ -212,12 +217,12 @@ public sealed class CollectionManagementController : ControllerBase
     private (Guid[]? Value, IResult? Error) ParseTrackIds(string[] rawIds)
     {
         if (rawIds.Length > MaxTracksPerCollection)
-            return (null, ValidationError("trackIds", $"At most {MaxTracksPerCollection} tracks per collection."));
+            return (null, ApiResults.ValidationError(HttpContext, "trackIds", $"At most {MaxTracksPerCollection} tracks per collection."));
         var parsed = new List<Guid>(rawIds.Length);
         foreach (var raw in rawIds)
         {
             if (!Guid.TryParse(raw, out var id))
-                return (null, ValidationError("trackIds", $"'{raw}' is not a valid track id."));
+                return (null, ApiResults.ValidationError(HttpContext, "trackIds", $"'{raw}' is not a valid track id."));
             if (!parsed.Contains(id))
                 parsed.Add(id);
         }
@@ -228,7 +233,7 @@ public sealed class CollectionManagementController : ControllerBase
     private (Guid Value, IResult? Error) ParseArtworkId(string rawId) =>
         Guid.TryParse(rawId, out var id)
             ? (id, null)
-            : (Guid.Empty, ValidationError("artworkId", $"'{rawId}' is not a valid artwork id."));
+            : (Guid.Empty, ApiResults.ValidationError(HttpContext, "artworkId", $"'{rawId}' is not a valid artwork id."));
 
     /// <summary>校验给定曲目 ID 是否全部存在且已发布（已发布曲目才可进入公共歌单）。</summary>
     private static async Task<bool> AllTracksPublishedAsync(MusicDbContext db, Guid[] trackIds, CancellationToken cancellationToken) =>
@@ -239,13 +244,7 @@ public sealed class CollectionManagementController : ControllerBase
     private static CollectionSummaryDto ToSummary(Guid id, string title, string? description, Guid? artworkId, int trackCount) =>
         new(id, title, description, artworkId is null ? null : $"/api/v1/artwork/{artworkId.Value}", trackCount);
 
-    /// <summary>构造字段级 400 validation_error 响应。</summary>
-    private IResult ValidationError(string field, string message) => Results.BadRequest(
-        new ApiErrorResponse(new ApiErrorDetail("validation_error", $"{field}: {message}", HttpContext.TraceIdentifier)));
 
-    /// <summary>构造统一的 404 错误响应。</summary>
-    private IResult NotFound(HttpContext ctx) => Results.NotFound(
-        new ApiErrorResponse(new ApiErrorDetail("resource_not_found", "The requested resource was not found.", ctx.TraceIdentifier)));
 }
 
 // 以下为本端点组使用的请求 DTO（由请求体反序列化）。

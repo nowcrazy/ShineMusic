@@ -14,7 +14,7 @@ import { getTracks, type TrackQuery } from '@/services/catalog'
 import type { Track } from '@/types/music'
 
 // 列表与分页状态：当前曲目 / 首屏加载 / 加载更多 / 失败态 / 当前页码 / 每页条数 / 总条数 / 查询条件
-const tracks = ref<Track[]>([])
+const tracks = ref<readonly Track[]>([])
 const loading = ref(true)
 const loadingMore = ref(false)
 const loadError = ref(false)

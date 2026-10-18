@@ -11,7 +11,7 @@ import { AudioLines, BadgeCheck } from 'lucide-vue-next'
 import { login, registerWithInvitation, validateInvitation } from '@/services/session'
 import { loadFavorites } from '@/services/library'
 import { loadFeedback } from '@/services/feedback'
-import { ApiError } from '@/services/http'
+import { describeError } from '@/services/errors'
 import { formatDate } from '@/utils/format'
 import type { ApiInvitationValidation } from '@/types/music'
 
@@ -114,24 +114,19 @@ async function handleRegister() {
       uni.reLaunch({ url: '/pages/home/index' })
     }, 300)
   } catch (error) {
-    errorMessage.value = error instanceof ApiError ? error.message : '注册失败，请稍后再试'
+    errorMessage.value = describeError(error, '注册失败，请稍后再试')
   } finally {
     submitting.value = false
   }
 }
 
 /**
- * 邀请令牌校验错误转中文提示
+ * 邀请令牌校验错误转中文提示。文案映射集中在 services/errors.describeError。
  * @param error validateInvitation 抛出的异常（期望为 ApiError）
  * @returns 可直接展示的错误文案
  */
 function invitationError(error: unknown): string {
-  if (!(error instanceof ApiError)) return '验证失败，请稍后再试'
-  if (error.code === 'invitation_invalid') return '邀请令牌无效'
-  if (error.code === 'invitation_expired') return '邀请链接已过期'
-  if (error.code === 'invitation_redeemed') return '邀请链接已经被使用'
-  if (error.status === 0) return '无法连接服务器，请检查网络或 API 配置'
-  return error.message
+  return describeError(error, '验证失败，请稍后再试')
 }
 </script>
 

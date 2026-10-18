@@ -13,6 +13,11 @@ namespace ShineMusic.Api.Endpoints;
 [Route("api/v1/admin")]
 [Authorize(Roles = "admin")]
 [Tags("Admin Catalog")]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status403Forbidden)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
 public sealed class CatalogManagementController : ControllerBase
 {
     [HttpGet("tracks", Name = "GetAdminTracks")]
@@ -65,22 +70,22 @@ public sealed class CatalogManagementController : ControllerBase
         CancellationToken cancellationToken)
     {
         if (update.Title is not null && (string.IsNullOrWhiteSpace(update.Title) || update.Title.Trim().Length > 300))
-            return ValidationError(HttpContext, "title", "Title must be between 1 and 300 characters.");
+            return ApiResults.ValidationError(HttpContext, "title", "Title must be between 1 and 300 characters.");
         if (update.Artists is { Count: > 10 } || update.Artists?.Any(value => string.IsNullOrWhiteSpace(value) || value.Trim().Length > 200) == true)
-            return ValidationError(HttpContext, "artists", "At most 10 non-empty artist names of 200 characters are allowed.");
+            return ApiResults.ValidationError(HttpContext, "artists", "At most 10 non-empty artist names of 200 characters are allowed.");
         if (update.Genres is { Count: > 30 } || update.Genres?.Any(value => string.IsNullOrWhiteSpace(value) || value.Trim().Length > 100) == true)
-            return ValidationError(HttpContext, "genres", "At most 30 non-empty genre names of 100 characters are allowed.");
+            return ApiResults.ValidationError(HttpContext, "genres", "At most 30 non-empty genre names of 100 characters are allowed.");
         if (update.TrackNumber is <= 0 || update.DiscNumber is <= 0 || update.ReleaseYear is < 1800 or > 2200)
-            return ValidationError(HttpContext, "metadata", "Track and disc numbers must be positive and release year must be between 1800 and 2200.");
+            return ApiResults.ValidationError(HttpContext, "metadata", "Track and disc numbers must be positive and release year must be between 1800 and 2200.");
 
         var track = await db.Tracks.Include(item => item.TrackArtists).Include(item => item.TrackGenres)
             .FirstOrDefaultAsync(item => item.Id == trackId && item.PublishedAt != null, cancellationToken);
         if (track is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
         if (update.AlbumId.HasValue && !await db.Albums.AnyAsync(item => item.Id == update.AlbumId.Value, cancellationToken))
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
         if (update.ArtworkId.HasValue && !await db.Artworks.AnyAsync(item => item.Id == update.ArtworkId.Value, cancellationToken))
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
 
         if (update.Title is not null) track.Title = update.Title.Trim();
         if (update.AlbumId.HasValue) track.AlbumId = update.AlbumId;
@@ -124,18 +129,18 @@ public sealed class CatalogManagementController : ControllerBase
         CancellationToken cancellationToken)
     {
         if (update.Title is not null && (string.IsNullOrWhiteSpace(update.Title) || update.Title.Trim().Length > 300))
-            return ValidationError(HttpContext, "title", "Title must be between 1 and 300 characters.");
+            return ApiResults.ValidationError(HttpContext, "title", "Title must be between 1 and 300 characters.");
         if (update.Artists is { Count: > 10 } || update.Artists?.Any(value => string.IsNullOrWhiteSpace(value) || value.Trim().Length > 200) == true)
-            return ValidationError(HttpContext, "artists", "At most 10 non-empty artist names of 200 characters are allowed.");
+            return ApiResults.ValidationError(HttpContext, "artists", "At most 10 non-empty artist names of 200 characters are allowed.");
         if (update.ReleaseYear is < 1800 or > 2200)
-            return ValidationError(HttpContext, "releaseYear", "Release year must be between 1800 and 2200.");
+            return ApiResults.ValidationError(HttpContext, "releaseYear", "Release year must be between 1800 and 2200.");
 
         var album = await db.Albums.Include(item => item.AlbumArtists)
             .FirstOrDefaultAsync(item => item.Id == albumId, cancellationToken);
         if (album is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
         if (update.ArtworkId.HasValue && !await db.Artworks.AnyAsync(item => item.Id == update.ArtworkId.Value, cancellationToken))
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
         if (update.Title is not null) album.Title = update.Title.Trim();
         if (update.ReleaseYear.HasValue) album.ReleaseYear = update.ReleaseYear;
         if (update.ArtworkId.HasValue) album.ArtworkId = update.ArtworkId;
@@ -161,12 +166,12 @@ public sealed class CatalogManagementController : ControllerBase
         CancellationToken cancellationToken)
     {
         if (update.Name is not null && (string.IsNullOrWhiteSpace(update.Name) || update.Name.Trim().Length > 200))
-            return ValidationError(HttpContext, "name", "Name must be between 1 and 200 characters.");
+            return ApiResults.ValidationError(HttpContext, "name", "Name must be between 1 and 200 characters.");
         if (update.Biography?.Length > 4000)
-            return ValidationError(HttpContext, "biography", "Biography must be at most 4000 characters.");
+            return ApiResults.ValidationError(HttpContext, "biography", "Biography must be at most 4000 characters.");
         var artist = await db.Artists.FirstOrDefaultAsync(item => item.Id == artistId, cancellationToken);
         if (artist is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
         if (update.Name is not null) artist.Name = update.Name.Trim();
         if (update.Biography is not null) artist.Biography = string.IsNullOrWhiteSpace(update.Biography) ? null : update.Biography.Trim();
         AdminAudit.Add(HttpContext, db, "artist.updated", "artist", artist.Id, ChangedFields(update));
@@ -183,22 +188,22 @@ public sealed class CatalogManagementController : ControllerBase
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(update.Title) || update.Title.Trim().Length > 200)
-            return ValidationError(HttpContext, "title", "Title is required and must be at most 200 characters.");
+            return ApiResults.ValidationError(HttpContext, "title", "Title is required and must be at most 200 characters.");
         if (update.Description?.Length > 2000 || update.TrackIds is null || update.TrackIds.Count > 500)
-            return ValidationError(HttpContext, "collection", "Description or track list exceeds its limit.");
+            return ApiResults.ValidationError(HttpContext, "collection", "Description or track list exceeds its limit.");
         if (update.TrackIds.Distinct().Count() != update.TrackIds.Count)
-            return ValidationError(HttpContext, "trackIds", "Track IDs must be unique.");
+            return ApiResults.ValidationError(HttpContext, "trackIds", "Track IDs must be unique.");
 
         var collection = await db.EditorialCollections.Include(item => item.CollectionTracks)
             .FirstOrDefaultAsync(item => item.Id == collectionId, cancellationToken);
         if (collection is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
         if (update.ArtworkId.HasValue && !await db.Artworks.AnyAsync(item => item.Id == update.ArtworkId.Value, cancellationToken))
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
         var publishedTrackIds = await db.Tracks.Where(track => track.PublishedAt != null && update.TrackIds.Contains(track.Id))
             .Select(track => track.Id).ToListAsync(cancellationToken);
         if (publishedTrackIds.Count != update.TrackIds.Count)
-            return ValidationError(HttpContext, "trackIds", "Every collection track must be published.");
+            return ApiResults.ValidationError(HttpContext, "trackIds", "Every collection track must be published.");
 
         collection.Title = update.Title.Trim();
         collection.Description = string.IsNullOrWhiteSpace(update.Description) ? null : update.Description.Trim();
@@ -387,17 +392,13 @@ public sealed class CatalogManagementController : ControllerBase
         size = pageSize ?? 20;
         error = null;
         if (pageNumber < 1)
-            error = ValidationError(ctx, "page", "page must be at least 1.");
+            error = ApiResults.ValidationError(ctx, "page", "page must be at least 1.");
         else if (size is < 1 or > 100)
-            error = ValidationError(ctx, "pageSize", "pageSize must be between 1 and 100.");
+            error = ApiResults.ValidationError(ctx, "pageSize", "pageSize must be between 1 and 100.");
         return error is null;
     }
 
-    private static IResult ValidationError(HttpContext ctx, string field, string message) => Results.BadRequest(
-        new ApiErrorResponse(new ApiErrorDetail("validation_error", $"{field}: {message}", ctx.TraceIdentifier)));
 
-    private static IResult NotFound(HttpContext ctx) => Results.NotFound(
-        new ApiErrorResponse(new ApiErrorDetail("resource_not_found", "The requested resource was not found.", ctx.TraceIdentifier)));
 }
 
 public sealed record UpdateAdminTrackRequest(

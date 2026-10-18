@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using ShineMusic.Api.Contracts;
+using ShineMusic.Api.Domain;
 using ShineMusic.Api.Data;
 using ShineMusic.Api.Options;
 using ShineMusic.Api.Services;
@@ -14,6 +15,9 @@ namespace ShineMusic.Api.Endpoints;
 [ApiController]
 [Route("api/v1")]
 [FeatureGate(nameof(FeatureOptions.SongRequests))]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
 public sealed class SongRequestController : ControllerBase
 {
     [HttpGet("song-requests", Name = "GetSongRequests")]
@@ -28,7 +32,7 @@ public sealed class SongRequestController : ControllerBase
         if (!TryGetPaging(HttpContext, page, pageSize, out var error, out var pageNumber, out var size))
             return error!;
         if (!TryGetSort(sort, out var sortBy))
-            return ValidationError(HttpContext, "sort", "sort must be votes or createdAt.");
+            return ApiResults.ValidationError(HttpContext, "sort", "sort must be votes or createdAt.");
 
         var userId = TryGetUserId(HttpContext.User, out var authenticatedUserId) ? authenticatedUserId : (Guid?)null;
         // 公共需求池保留已满足/已归档的需求，但沉到列表底部；被拒绝/撤回的记录不展示。
@@ -88,7 +92,7 @@ public sealed class SongRequestController : ControllerBase
                 AsUtc(item.UpdatedAtUtc),
                 userId.HasValue && item.CreatedByUserId == userId.Value))
             .FirstOrDefaultAsync(cancellationToken);
-        return request is null ? NotFound(HttpContext) : Results.Ok(request);
+        return request is null ? ApiResults.NotFound(HttpContext) : Results.Ok(request);
     }
 
     [HttpPost("song-requests", Name = "CreateSongRequest")]
@@ -102,11 +106,11 @@ public sealed class SongRequestController : ControllerBase
         if (!TryGetUserId(HttpContext.User, out var userId))
             return Results.Unauthorized();
         if (string.IsNullOrWhiteSpace(request.Title) || request.Title.Trim().Length > 200)
-            return ValidationError(HttpContext, "title", "Title is required and must be at most 200 characters.");
+            return ApiResults.ValidationError(HttpContext, "title", "Title is required and must be at most 200 characters.");
         if (string.IsNullOrWhiteSpace(request.ArtistName) || request.ArtistName.Trim().Length > 200)
-            return ValidationError(HttpContext, "artistName", "Artist name is required and must be at most 200 characters.");
+            return ApiResults.ValidationError(HttpContext, "artistName", "Artist name is required and must be at most 200 characters.");
         if (request.AlbumTitle?.Length > 200 || request.Note?.Length > 1000)
-            return ValidationError(HttpContext, "details", "Album title must be at most 200 characters and note at most 1000 characters.");
+            return ApiResults.ValidationError(HttpContext, "details", "Album title must be at most 200 characters and note at most 1000 characters.");
 
         var title = request.Title.Trim();
         var artist = request.ArtistName.Trim();
@@ -119,7 +123,7 @@ public sealed class SongRequestController : ControllerBase
             track.Title.ToUpper() == normalizedTitle &&
             track.TrackArtists.Any(link => link.Artist.Name.ToUpper() == normalizedArtist), cancellationToken);
         if (alreadyInLibrary)
-            return Results.Conflict(new ApiErrorResponse(new ApiErrorDetail("resource_conflict", "This song is already in the library.", HttpContext.TraceIdentifier)));
+            return Results.Conflict(new ApiErrorResponse(new ApiErrorDetail(ErrorCodes.ResourceConflict, "This song is already in the library.", HttpContext.TraceIdentifier)));
 
         var duplicate = await db.SongRequests.FirstOrDefaultAsync(item =>
             item.NormalizedTitle == normalizedTitle &&
@@ -128,7 +132,7 @@ public sealed class SongRequestController : ControllerBase
             item.Status != SongRequestStatuses.Declined &&
             item.Status != SongRequestStatuses.Withdrawn, cancellationToken);
         if (duplicate is not null)
-            return Results.Conflict(new ApiErrorResponse(new ApiErrorDetail("resource_conflict", "An active request for this song already exists.", HttpContext.TraceIdentifier)));
+            return Results.Conflict(new ApiErrorResponse(new ApiErrorDetail(ErrorCodes.ResourceConflict, "An active request for this song already exists.", HttpContext.TraceIdentifier)));
 
         var now = DateTime.UtcNow;
         var entity = new SongRequestRecord
@@ -167,9 +171,9 @@ public sealed class SongRequestController : ControllerBase
             return Results.Unauthorized();
         var request = await db.SongRequests.AsNoTracking().FirstOrDefaultAsync(item => item.Id == requestId, cancellationToken);
         if (request is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
         if (request.Status is SongRequestStatuses.Fulfilled or SongRequestStatuses.Declined or SongRequestStatuses.Withdrawn)
-            return Results.Conflict(new ApiErrorResponse(new ApiErrorDetail("resource_conflict", "Voting is closed for this request.", HttpContext.TraceIdentifier)));
+            return Results.Conflict(new ApiErrorResponse(new ApiErrorDetail(ErrorCodes.ResourceConflict, "Voting is closed for this request.", HttpContext.TraceIdentifier)));
 
         // 已点过：幂等返回成功，既不报错也不新增计数（点赞不可取消，重复点击无副作用）。
         if (!await db.SongRequestVotes.AnyAsync(vote => vote.RequestId == requestId && vote.UserId == userId, cancellationToken))
@@ -234,22 +238,22 @@ public sealed class SongRequestController : ControllerBase
             return Results.Unauthorized();
         var request = await db.SongRequests.FirstOrDefaultAsync(item => item.Id == requestId, cancellationToken);
         if (request is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
 
         var isAdmin = HttpContext.User.IsInRole("admin");
         // 非本人且非管理员：按不存在处理，避免泄露记录存在性。
         if (!isAdmin && request.CreatedByUserId != userId)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
 
         // 已结束（已满足/已拒绝/已撤回）的记录不可再撤回。
         if (request.Status is SongRequestStatuses.Fulfilled or SongRequestStatuses.Declined or SongRequestStatuses.Withdrawn)
-            return Results.Conflict(new ApiErrorResponse(new ApiErrorDetail("resource_conflict", "This request can no longer be withdrawn.", HttpContext.TraceIdentifier)));
+            return Results.Conflict(new ApiErrorResponse(new ApiErrorDetail(ErrorCodes.ResourceConflict, "This request can no longer be withdrawn.", HttpContext.TraceIdentifier)));
 
         // 提交人只能在 open 阶段撤回；管理员可在 open/planned 阶段代为撤回（尚未启动处理，避免导入任务孤儿）。
         if (!isAdmin && request.Status != SongRequestStatuses.Open)
-            return Results.Conflict(new ApiErrorResponse(new ApiErrorDetail("resource_conflict", "Only open requests can be withdrawn by the submitter.", HttpContext.TraceIdentifier)));
+            return Results.Conflict(new ApiErrorResponse(new ApiErrorDetail(ErrorCodes.ResourceConflict, "Only open requests can be withdrawn by the submitter.", HttpContext.TraceIdentifier)));
         if (isAdmin && request.Status is not (SongRequestStatuses.Open or SongRequestStatuses.Planned))
-            return Results.Conflict(new ApiErrorResponse(new ApiErrorDetail("resource_conflict", "Only open or planned requests can be withdrawn.", HttpContext.TraceIdentifier)));
+            return Results.Conflict(new ApiErrorResponse(new ApiErrorDetail(ErrorCodes.ResourceConflict, "Only open or planned requests can be withdrawn.", HttpContext.TraceIdentifier)));
 
         var previousStatus = request.Status;
         request.Status = SongRequestStatuses.Withdrawn;
@@ -285,14 +289,14 @@ public sealed class SongRequestController : ControllerBase
         if (!TryGetUserId(HttpContext.User, out var adminUserId))
             return Results.Unauthorized();
         if (string.IsNullOrWhiteSpace(reopen.Reason) || reopen.Reason.Trim().Length > 2000)
-            return ValidationError(HttpContext, "reason", "A reason is required and must be at most 2000 characters.");
+            return ApiResults.ValidationError(HttpContext, "reason", "A reason is required and must be at most 2000 characters.");
 
         var request = await db.SongRequests.FirstOrDefaultAsync(item => item.Id == requestId, cancellationToken);
         if (request is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
         // 只有被拒绝的需求可以重新开启；已入库/已撤回属于不可逆结果。
         if (request.Status != SongRequestStatuses.Declined)
-            return Results.Conflict(new ApiErrorResponse(new ApiErrorDetail("resource_conflict",
+            return Results.Conflict(new ApiErrorResponse(new ApiErrorDetail(ErrorCodes.ResourceConflict,
                 "Only declined requests can be reopened.", HttpContext.TraceIdentifier)));
 
         var reason = reopen.Reason.Trim();
@@ -329,7 +333,7 @@ public sealed class SongRequestController : ControllerBase
             .Select(item => new { item.Id, item.CreatedAtUtc, item.CreatedByUserId, item.Status })
             .FirstOrDefaultAsync(cancellationToken);
         if (request is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
 
         var viewerId = TryGetUserId(HttpContext.User, out var authenticatedUserId) ? authenticatedUserId : (Guid?)null;
         var canSeeNotes = HttpContext.User.IsInRole("admin") || (viewerId.HasValue && request.CreatedByUserId == viewerId.Value);
@@ -380,13 +384,13 @@ public sealed class SongRequestController : ControllerBase
         if (!TryGetPaging(HttpContext, page, pageSize, out var error, out var pageNumber, out var size))
             return error!;
         if (!TryGetSort(sort, out var sortBy))
-            return ValidationError(HttpContext, "sort", "sort must be votes or createdAt.");
+            return ApiResults.ValidationError(HttpContext, "sort", "sort must be votes or createdAt.");
         IQueryable<SongRequestRecord> query = db.SongRequests.AsNoTracking();
         if (!string.IsNullOrWhiteSpace(status))
         {
             var normalizedStatus = status.Trim().ToLowerInvariant();
             if (!SongRequestStatuses.All.Contains(normalizedStatus))
-                return ValidationError(HttpContext, "status", "The song request status is not supported.");
+                return ApiResults.ValidationError(HttpContext, "status", "The song request status is not supported.");
             query = query.Where(request => request.Status == normalizedStatus);
         }
         var total = await query.CountAsync(cancellationToken);
@@ -421,23 +425,23 @@ public sealed class SongRequestController : ControllerBase
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(update.Status) || !SongRequestStatuses.All.Contains(update.Status.Trim().ToLowerInvariant()))
-            return ValidationError(HttpContext, "status", "A valid song request status is required.");
+            return ApiResults.ValidationError(HttpContext, "status", "A valid song request status is required.");
         if (update.AdminNote?.Length > 2000)
-            return ValidationError(HttpContext, "adminNote", "Admin note must be at most 2000 characters.");
+            return ApiResults.ValidationError(HttpContext, "adminNote", "Admin note must be at most 2000 characters.");
 
         var request = await db.SongRequests.FirstOrDefaultAsync(item => item.Id == requestId, cancellationToken);
         if (request is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
         var status = update.Status.Trim().ToLowerInvariant();
 
         // 状态流转白名单：禁止任意跳转（如 fulfilled→open），并强制拒绝时填写原因。
-        if (status != request.Status && !IsTransitionAllowed(request.Status, status))
-            return ValidationError(HttpContext, "status", $"Cannot transition from {request.Status} to {status}.");
+        if (status != request.Status && !SongRequestStateMachine.IsTransitionAllowed(request.Status, status))
+            return ApiResults.ValidationError(HttpContext, "status", $"Cannot transition from {request.Status} to {status}.");
         if (status != request.Status && status == SongRequestStatuses.Declined && string.IsNullOrWhiteSpace(update.AdminNote))
-            return ValidationError(HttpContext, "adminNote", "An admin note (reason) is required when declining a request.");
+            return ApiResults.ValidationError(HttpContext, "adminNote", "An admin note (reason) is required when declining a request.");
 
         if (status == SongRequestStatuses.Fulfilled && update.MatchedTrackId is null)
-            return ValidationError(HttpContext, "matchedTrackId", "A published track must be linked when fulfilling a request.");
+            return ApiResults.ValidationError(HttpContext, "matchedTrackId", "A published track must be linked when fulfilling a request.");
         if (update.MatchedTrackId is Guid trackId)
         {
             var track = await CatalogController.PublishedTracks(db)
@@ -449,7 +453,7 @@ public sealed class SongRequestController : ControllerBase
                 })
                 .FirstOrDefaultAsync(cancellationToken);
             if (track is null)
-                return NotFound(HttpContext);
+                return ApiResults.NotFound(HttpContext);
 
             // 与「联动上传发布」同款校验：PATCH 直接关联曲目时也须确保曲目与需求一致，防止绕过。
             var matchCheck = fulfillmentOptions.Value.Check("TitleArtistMatch");
@@ -457,7 +461,7 @@ public sealed class SongRequestController : ControllerBase
             {
                 var verdict = SongRequestMatchValidator.Validate(track.Title, track.Artists, request, fulfillmentOptions.Value.TitleArtistMatch);
                 if (verdict.Kind == MatchVerdictKind.Mismatch && !matchCheck.AllowAdminOverride)
-                    return ValidationError(HttpContext, "matchedTrackId",
+                    return ApiResults.ValidationError(HttpContext, "matchedTrackId",
                         $"曲目《{verdict.TrackDisplay}》与需求《{verdict.RequestDisplay}》不一致，无法关联。");
             }
         }
@@ -526,22 +530,6 @@ public sealed class SongRequestController : ControllerBase
         AsUtc(request.UpdatedAtUtc),
         createdByMe);
 
-    /// <summary>
-    /// 合法状态流转白名单：允许向前推进/跳级，禁止回退，终态无出口。
-    /// 唯一例外是 declined → open：管理员可在补到音源后重新开启（走专用 reopen 端点）。
-    /// </summary>
-    private static readonly Dictionary<string, HashSet<string>> AllowedTransitions = new()
-    {
-        [SongRequestStatuses.Open] = [SongRequestStatuses.Planned, SongRequestStatuses.InProgress, SongRequestStatuses.Fulfilled, SongRequestStatuses.Declined, SongRequestStatuses.Withdrawn],
-        [SongRequestStatuses.Planned] = [SongRequestStatuses.InProgress, SongRequestStatuses.Fulfilled, SongRequestStatuses.Declined, SongRequestStatuses.Withdrawn],
-        [SongRequestStatuses.InProgress] = [SongRequestStatuses.Fulfilled, SongRequestStatuses.Declined],
-        [SongRequestStatuses.Fulfilled] = [],
-        [SongRequestStatuses.Declined] = [SongRequestStatuses.Open],
-        [SongRequestStatuses.Withdrawn] = []
-    };
-
-    private static bool IsTransitionAllowed(string from, string to) =>
-        AllowedTransitions.TryGetValue(from, out var allowed) && allowed.Contains(to);
 
     private static bool TryGetUserId(ClaimsPrincipal principal, out Guid userId) => Guid.TryParse(principal.FindFirstValue("sub"), out userId);
     private static bool TryGetPaging(HttpContext ctx, int? page, int? pageSize, out IResult? error, out int pageNumber, out int size)
@@ -550,9 +538,9 @@ public sealed class SongRequestController : ControllerBase
         size = pageSize ?? 20;
         error = null;
         if (pageNumber < 1)
-            error = ValidationError(ctx, "page", "page must be at least 1.");
+            error = ApiResults.ValidationError(ctx, "page", "page must be at least 1.");
         else if (size < 1 || size > 100)
-            error = ValidationError(ctx, "pageSize", "pageSize must be between 1 and 100.");
+            error = ApiResults.ValidationError(ctx, "pageSize", "pageSize must be between 1 and 100.");
         return error is null;
     }
     private static bool TryGetSort(string? sort, out string sortBy)
@@ -563,8 +551,4 @@ public sealed class SongRequestController : ControllerBase
     private static string Normalize(string value) => value.Trim().ToUpperInvariant();
     private static string? NormalizeOptional(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     private static DateTime AsUtc(DateTime value) => DateTime.SpecifyKind(value, DateTimeKind.Utc);
-    private static IResult ValidationError(HttpContext ctx, string field, string message) => Results.BadRequest(
-        new ApiErrorResponse(new ApiErrorDetail("validation_error", $"{field}: {message}", ctx.TraceIdentifier)));
-    private static IResult NotFound(HttpContext ctx) => Results.NotFound(
-        new ApiErrorResponse(new ApiErrorDetail("resource_not_found", "The requested resource was not found.", ctx.TraceIdentifier)));
 }

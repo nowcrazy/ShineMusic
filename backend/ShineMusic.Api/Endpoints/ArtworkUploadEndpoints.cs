@@ -19,6 +19,11 @@ namespace ShineMusic.Api.Endpoints;
 [Route("api/v1/admin")]
 [Authorize(Roles = "admin")]
 [Tags("Admin Artwork")]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status403Forbidden)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
 public sealed class ArtworkUploadController : ControllerBase
 {
     /// <summary>单张封面大小上限：5MB，避免超大图占用存储与带宽。</summary>
@@ -41,9 +46,9 @@ public sealed class ArtworkUploadController : ControllerBase
         CancellationToken cancellationToken)
     {
         if (file is null || file.Length == 0)
-            return ValidationError(HttpContext, "file", "请上传图片文件。");
+            return ApiResults.ValidationError(HttpContext, "file", "请上传图片文件。");
         if (file.Length > MaxBytes)
-            return ValidationError(HttpContext, "file", "图片大小不能超过 5MB。");
+            return ApiResults.ValidationError(HttpContext, "file", "图片大小不能超过 5MB。");
 
         // 读入内存后做魔术字节校验：不信任客户端声明的 Content-Type 与文件名扩展名，
         // 以防伪装扩展名/类型写入非图片二进制。
@@ -52,12 +57,12 @@ public sealed class ArtworkUploadController : ControllerBase
         var bytes = memory.GetBuffer().AsSpan(0, (int)memory.Length);
         var detected = DetectFormat(bytes);
         if (detected is null)
-            return ValidationError(HttpContext, "file", "仅支持 JPEG / PNG / WEBP / GIF 图片。");
+            return ApiResults.ValidationError(HttpContext, "file", "仅支持 JPEG / PNG / WEBP / GIF 图片。");
 
         var artworkId = Guid.NewGuid();
         var storageKey = $"artwork/{artworkId:N}{detected.Extension}";
         if (!storagePaths.TryResolve(storageKey, out var filePath))
-            return Error(HttpContext, 500, "storage_error", "无法写入封面文件。");
+            return ApiResults.Error(HttpContext, 500, ErrorCodes.StorageError, "无法写入封面文件。");
 
         var directory = Path.GetDirectoryName(filePath)!;
         Directory.CreateDirectory(directory);
@@ -68,7 +73,7 @@ public sealed class ArtworkUploadController : ControllerBase
         AdminAudit.Add(HttpContext, db, "artwork.uploaded", "artwork", artworkId, new { detected.ContentType });
         await db.SaveChangesAsync(cancellationToken);
 
-        return Results.Ok(new { id = artworkId, artworkUrl = $"/api/v1/artwork/{artworkId}" });
+        return Results.Ok(new ArtworkUploadResultDto(artworkId, $"/api/v1/artwork/{artworkId}"));
     }
 
     /// <summary>按文件头（魔术字节）判定图片格式；非法或非图片返回 null。</summary>
@@ -93,9 +98,5 @@ public sealed class ArtworkUploadController : ControllerBase
         return null;
     }
 
-    private static IResult ValidationError(HttpContext ctx, string field, string message) =>
-        Results.BadRequest(new ApiErrorResponse(new ApiErrorDetail("validation_error", $"{field}: {message}", ctx.TraceIdentifier)));
 
-    private static IResult Error(HttpContext ctx, int statusCode, string code, string message) =>
-        Results.Json(new ApiErrorResponse(new ApiErrorDetail(code, message, ctx.TraceIdentifier)), statusCode: statusCode);
 }

@@ -14,6 +14,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 using Microsoft.EntityFrameworkCore;
 using ShineMusic.Api.Contracts;
 using ShineMusic.Api.Data;
@@ -25,8 +26,15 @@ namespace ShineMusic.Api.Endpoints;
 [ApiController]
 [Route("api/v1/auth")]
 [Tags("Authentication")]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
 public sealed class AuthController : ControllerBase
 {
+    private readonly ILogger<AuthController> _logger;
+
+    public AuthController(ILogger<AuthController> logger) => _logger = logger;
+
     // 【POST /api/v1/auth/invitations/validate】注册前校验邀请令牌（匿名）。
     // 请求体：ValidateInvitationRequest.InvitationToken（明文一次性令牌）。
     // 返回：200 InvitationValidationResponse（脱敏邮箱 + 到期时间 UTC）；
@@ -39,16 +47,16 @@ public sealed class AuthController : ControllerBase
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.InvitationToken))
-            return ValidationError(HttpContext, "invitationToken", "Invitation token is required."); // 400：令牌缺失
+            return ApiResults.ValidationError(HttpContext, "invitationToken", "Invitation token is required."); // 400：令牌缺失
 
         // 数据库只存令牌哈希，按哈希查找邀请记录。
         var tokenHash = TokenService.HashToken(request.InvitationToken);
         var invitation = await db.Invitations
             .FirstOrDefaultAsync(item => item.TokenHash == tokenHash, cancellationToken);
         if (invitation is null)
-            return InvitationError(HttpContext, "invitation_invalid", "The invitation is invalid."); // 400：哈希无匹配
+            return InvitationError(HttpContext, ErrorCodes.InvitationInvalid, "The invitation is invalid."); // 400：哈希无匹配
         if (invitation.Status == InvitationStatuses.Redeemed)
-            return InvitationError(HttpContext, "invitation_redeemed", "The invitation has already been used."); // 400：已被核销
+            return InvitationError(HttpContext, ErrorCodes.InvitationRedeemed, "The invitation has already been used."); // 400：已被核销
         if (invitation.ExpiresAtUtc <= DateTime.UtcNow)
         {
             // 惰性过期：首次在过期后被使用时把 Sent 状态落库为 Expired，便于管理端列表展示。
@@ -57,10 +65,10 @@ public sealed class AuthController : ControllerBase
                 invitation.Status = InvitationStatuses.Expired;
                 await db.SaveChangesAsync(cancellationToken);
             }
-            return InvitationError(HttpContext, "invitation_expired", "The invitation has expired."); // 400：已过期
+            return InvitationError(HttpContext, ErrorCodes.InvitationExpired, "The invitation has expired."); // 400：已过期
         }
         if (invitation.Status != InvitationStatuses.Sent)
-            return InvitationError(HttpContext, "invitation_invalid", "The invitation is not available."); // 400：Created/失败/撤销等非 Sent 状态不可用
+            return InvitationError(HttpContext, ErrorCodes.InvitationInvalid, "The invitation is not available."); // 400：Created/失败/撤销等非 Sent 状态不可用
 
         return Results.Ok(new InvitationValidationResponse(
             MaskEmail(invitation.Email),
@@ -81,21 +89,21 @@ public sealed class AuthController : ControllerBase
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.InvitationToken))
-            return ValidationError(HttpContext, "invitationToken", "Invitation token is required."); // 400
+            return ApiResults.ValidationError(HttpContext, "invitationToken", "Invitation token is required."); // 400
         if (string.IsNullOrWhiteSpace(request.Password))
-            return ValidationError(HttpContext, "password", "Password is required."); // 400
+            return ApiResults.ValidationError(HttpContext, "password", "Password is required."); // 400
         if (string.IsNullOrWhiteSpace(request.DisplayName) || request.DisplayName.Trim().Length > 100)
-            return ValidationError(HttpContext, "displayName", "Display name is required and must be at most 100 characters."); // 400
+            return ApiResults.ValidationError(HttpContext, "displayName", "Display name is required and must be at most 100 characters."); // 400
 
         var tokenHash = TokenService.HashToken(request.InvitationToken);
         var invitation = await db.Invitations
             .FirstOrDefaultAsync(item => item.TokenHash == tokenHash, cancellationToken);
         if (invitation is null)
-            return InvitationError(HttpContext, "invitation_invalid", "The invitation is invalid."); // 400
+            return InvitationError(HttpContext, ErrorCodes.InvitationInvalid, "The invitation is invalid."); // 400
 
         var now = DateTime.UtcNow;
         if (invitation.Status == InvitationStatuses.Redeemed)
-            return InvitationError(HttpContext, "invitation_redeemed", "The invitation has already been used."); // 400
+            return InvitationError(HttpContext, ErrorCodes.InvitationRedeemed, "The invitation has already been used."); // 400
         if (invitation.ExpiresAtUtc <= now)
         {
             if (invitation.Status == InvitationStatuses.Sent)
@@ -103,10 +111,10 @@ public sealed class AuthController : ControllerBase
                 invitation.Status = InvitationStatuses.Expired;
                 await db.SaveChangesAsync(cancellationToken);
             }
-            return InvitationError(HttpContext, "invitation_expired", "The invitation has expired."); // 400
+            return InvitationError(HttpContext, ErrorCodes.InvitationExpired, "The invitation has expired."); // 400
         }
         if (invitation.Status != InvitationStatuses.Sent)
-            return InvitationError(HttpContext, "invitation_invalid", "The invitation is not available."); // 400
+            return InvitationError(HttpContext, ErrorCodes.InvitationInvalid, "The invitation is not available."); // 400
 
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
         // 抢占式核销：仅当状态仍为 Sent 且未过期时更新成功（CAS 语义），防止两个并发注册共用同一邀请。
@@ -118,7 +126,7 @@ public sealed class AuthController : ControllerBase
         if (redeemed != 1)
         {
             await transaction.RollbackAsync(cancellationToken);
-            return InvitationError(HttpContext, "invitation_invalid", "The invitation is invalid or expired."); // 400：并发竞争失败
+            return InvitationError(HttpContext, ErrorCodes.InvitationInvalid, "The invitation is invalid or expired."); // 400：并发竞争失败
         }
 
         // 邮箱取自邀请本身而非请求体，保证注册者只能使用受邀邮箱。
@@ -165,16 +173,25 @@ public sealed class AuthController : ControllerBase
             ? request.Username?.Trim()
             : request.Email.Trim();
         if (string.IsNullOrWhiteSpace(loginIdentifier) || string.IsNullOrWhiteSpace(request.Password))
-            return ValidationError(HttpContext, "credentials", "Email or username and password are required."); // 400
+            return ApiResults.ValidationError(HttpContext, "credentials", "Email or username and password are required."); // 400
 
         var user = await userManager.FindByEmailAsync(loginIdentifier);
         user ??= await userManager.FindByNameAsync(loginIdentifier);
         if (user is null)
-            return Unauthorized(HttpContext); // 401：用户不存在（与密码错误返回完全一致的响应）
+        {
+            // 账号不存在：仅服务端记录（响应与密码错误保持一致，避免邮箱枚举）；带 TraceId 便于定位。
+            _logger.LogWarning("Login failed: account not found for {Login}. TraceId={TraceId}", loginIdentifier, HttpContext.TraceIdentifier);
+            return Unauthorized(HttpContext);
+        }
 
         var signInResult = await signInManager.CheckPasswordSignInAsync(user, request.Password, lockoutOnFailure: true);
         if (!signInResult.Succeeded)
-            return Unauthorized(HttpContext); // 401：密码错误或账号被锁定
+        {
+            // 密码错误或账号被锁定：记录原因 + 账号 + TraceId，出问题可快速排查某一账号的登录异常。
+            var reason = signInResult.IsLockedOut ? "account_locked" : "bad_password";
+            _logger.LogWarning("Login failed: {Reason} for {Login}. TraceId={TraceId}", reason, loginIdentifier, HttpContext.TraceIdentifier);
+            return Unauthorized(HttpContext);
+        }
 
         // 校验通过：签发 JWT 访问令牌并落库新的刷新令牌（仅存哈希）。
         var tokens = await IssueTokensAsync(user, userManager, tokenService, db, cancellationToken);
@@ -195,7 +212,7 @@ public sealed class AuthController : ControllerBase
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.RefreshToken))
-            return ValidationError(HttpContext, "refreshToken", "Refresh token is required."); // 400
+            return ApiResults.ValidationError(HttpContext, "refreshToken", "Refresh token is required."); // 400
 
         var tokenHash = TokenService.HashToken(request.RefreshToken);
         var storedToken = await db.RefreshTokens.AsNoTracking()
@@ -325,13 +342,11 @@ public sealed class AuthController : ControllerBase
     /// <summary>把 Identity 错误集合合并为单个 400 validation_error 响应。</summary>
     private static IResult IdentityValidationError(HttpContext ctx, IEnumerable<IdentityError> errors) =>
         Results.BadRequest(new ApiErrorResponse(new ApiErrorDetail(
-            "validation_error",
+            ErrorCodes.ValidationError,
             string.Join(" ", errors.Select(error => error.Description)),
             ctx.TraceIdentifier)));
 
     /// <summary>构造字段级 400 validation_error 响应。</summary>
-    private static IResult ValidationError(HttpContext ctx, string field, string message) =>
-        Results.BadRequest(new ApiErrorResponse(new ApiErrorDetail("validation_error", $"{field}: {message}", ctx.TraceIdentifier)));
 
     /// <summary>构造邀请相关 400 响应（invitation_invalid/redeemed/expired 等业务错误码）。</summary>
     private static IResult InvitationError(HttpContext ctx, string code, string message) =>
@@ -339,7 +354,7 @@ public sealed class AuthController : ControllerBase
 
     /// <summary>构造统一的 401 authentication_required 响应；文案不区分“用户不存在/密码错误”，防止邮箱枚举。</summary>
     private static IResult Unauthorized(HttpContext ctx) => Results.Json(
-        new ApiErrorResponse(new ApiErrorDetail("authentication_required", "Email or password is invalid.", ctx.TraceIdentifier)),
+        new ApiErrorResponse(new ApiErrorDetail(ErrorCodes.AuthenticationRequired, "Email or password is invalid.", ctx.TraceIdentifier)),
         statusCode: StatusCodes.Status401Unauthorized);
 }
 

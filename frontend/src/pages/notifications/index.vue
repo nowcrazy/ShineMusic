@@ -23,7 +23,7 @@ import { isAuthenticated } from '@/services/session'
 import { formatDate } from '@/utils/format'
 import { ApiError } from '@/services/http'
 
-const items = ref<ApiNotification[]>([])
+const items = ref<readonly ApiNotification[]>([])
 const loading = ref(true)
 const loadError = ref(false)
 const busy = ref(false)

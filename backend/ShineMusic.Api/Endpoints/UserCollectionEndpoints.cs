@@ -15,6 +15,11 @@ namespace ShineMusic.Api.Endpoints;
 [Authorize]
 [FeatureGate(nameof(FeatureOptions.UserCollections))]
 [Tags("My Library")]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status403Forbidden)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
 public sealed class UserCollectionController : ControllerBase
 {
     [HttpGet("favorites", Name = "GetMyFavorites")]
@@ -48,7 +53,7 @@ public sealed class UserCollectionController : ControllerBase
         if (!HttpContext.User.TryGetUserId(out var userId))
             return Results.Unauthorized();
         if (!await CatalogController.PublishedTracks(db).AnyAsync(track => track.Id == trackId, cancellationToken))
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
 
         // 幂等写入：已收藏则直接返回，未收藏则落库（并发重复插入由唯一键兜底忽略）。
         if (!await db.Favorites.AnyAsync(favorite => favorite.UserId == userId && favorite.TrackId == trackId, cancellationToken))
@@ -116,11 +121,11 @@ public sealed class UserCollectionController : ControllerBase
         if (!HttpContext.User.TryGetUserId(out var userId))
             return Results.Unauthorized();
         if (string.IsNullOrWhiteSpace(request.Name) || request.Name.Trim().Length > 100)
-            return ValidationError(HttpContext, "name", "Playlist name is required and must be at most 100 characters.");
+            return ApiResults.ValidationError(HttpContext, "name", "Playlist name is required and must be at most 100 characters.");
         if (request.Description?.Length > 500)
-            return ValidationError(HttpContext, "description", "Description must be at most 500 characters.");
+            return ApiResults.ValidationError(HttpContext, "description", "Description must be at most 500 characters.");
         if (request.ArtworkId.HasValue && !await PublicArtworks(db).AnyAsync(item => item.Id == request.ArtworkId.Value, cancellationToken))
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
 
         var now = DateTime.UtcNow;
         var playlist = new UserPlaylist
@@ -150,7 +155,7 @@ public sealed class UserCollectionController : ControllerBase
         var playlist = await db.UserPlaylists.AsNoTracking()
             .FirstOrDefaultAsync(item => item.Id == playlistId && item.UserId == userId, cancellationToken);
         if (playlist is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
 
         var tracks = await (from link in db.UserPlaylistTracks.AsNoTracking()
                             join track in CatalogController.PublishedTracks(db) on link.TrackId equals track.Id
@@ -177,17 +182,17 @@ public sealed class UserCollectionController : ControllerBase
         if (!HttpContext.User.TryGetUserId(out var userId))
             return Results.Unauthorized();
         if (request.Name is not null && (string.IsNullOrWhiteSpace(request.Name) || request.Name.Trim().Length > 100))
-            return ValidationError(HttpContext, "name", "Playlist name must be between 1 and 100 characters.");
+            return ApiResults.ValidationError(HttpContext, "name", "Playlist name must be between 1 and 100 characters.");
         if (request.Description?.Length > 500)
-            return ValidationError(HttpContext, "description", "Description must be at most 500 characters.");
+            return ApiResults.ValidationError(HttpContext, "description", "Description must be at most 500 characters.");
         if (request.ArtworkId.HasValue && request.ClearArtwork)
-            return ValidationError(HttpContext, "artworkId", "Specify either artworkId or clearArtwork, not both.");
+            return ApiResults.ValidationError(HttpContext, "artworkId", "Specify either artworkId or clearArtwork, not both.");
         if (request.ArtworkId.HasValue && !await PublicArtworks(db).AnyAsync(item => item.Id == request.ArtworkId.Value, cancellationToken))
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
 
         var playlist = await db.UserPlaylists.FirstOrDefaultAsync(item => item.Id == playlistId && item.UserId == userId, cancellationToken);
         if (playlist is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
         if (request.Name is not null)
             playlist.Name = request.Name.Trim();
         if (request.Description is not null)
@@ -211,7 +216,7 @@ public sealed class UserCollectionController : ControllerBase
             return Results.Unauthorized();
         var playlist = await db.UserPlaylists.FirstOrDefaultAsync(item => item.Id == playlistId && item.UserId == userId, cancellationToken);
         if (playlist is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
         db.UserPlaylists.Remove(playlist);
         await db.SaveChangesAsync(cancellationToken);
         return Results.NoContent();
@@ -228,9 +233,9 @@ public sealed class UserCollectionController : ControllerBase
             return Results.Unauthorized();
         var playlistExists = await db.UserPlaylists.AnyAsync(item => item.Id == playlistId && item.UserId == userId, cancellationToken);
         if (!playlistExists)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
         if (!await CatalogController.PublishedTracks(db).AnyAsync(track => track.Id == trackId, cancellationToken))
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
 
         if (!await db.UserPlaylistTracks.AnyAsync(link => link.PlaylistId == playlistId && link.TrackId == trackId, cancellationToken))
         {
@@ -267,7 +272,7 @@ public sealed class UserCollectionController : ControllerBase
             return Results.Unauthorized();
         var playlistExists = await db.UserPlaylists.AnyAsync(item => item.Id == playlistId && item.UserId == userId, cancellationToken);
         if (!playlistExists)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
         await db.UserPlaylistTracks.Where(link => link.PlaylistId == playlistId && link.TrackId == trackId)
             .ExecuteDeleteAsync(cancellationToken);
         await db.UserPlaylists.Where(item => item.Id == playlistId)
@@ -281,9 +286,9 @@ public sealed class UserCollectionController : ControllerBase
         size = pageSize ?? 20;
         error = null;
         if (pageNumber < 1)
-            error = ValidationError(ctx, "page", "page must be at least 1.");
+            error = ApiResults.ValidationError(ctx, "page", "page must be at least 1.");
         else if (size < 1 || size > 100)
-            error = ValidationError(ctx, "pageSize", "pageSize must be between 1 and 100.");
+            error = ApiResults.ValidationError(ctx, "pageSize", "pageSize must be between 1 and 100.");
         return error is null;
     }
 
@@ -293,8 +298,4 @@ public sealed class UserCollectionController : ControllerBase
             db.Albums.Any(album => album.ArtworkId == artwork.Id && album.Tracks.Any(track => track.PublishedAt != null)) ||
             db.EditorialCollections.Any(collection => collection.ArtworkId == artwork.Id && collection.IsPublished));
     private static string? NormalizeOptional(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-    private static IResult ValidationError(HttpContext ctx, string field, string message) =>
-        Results.BadRequest(new ApiErrorResponse(new ApiErrorDetail("validation_error", $"{field}: {message}", ctx.TraceIdentifier)));
-    private static IResult NotFound(HttpContext ctx) => Results.NotFound(
-        new ApiErrorResponse(new ApiErrorDetail("resource_not_found", "The requested resource was not found.", ctx.TraceIdentifier)));
 }

@@ -5,6 +5,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using System.IdentityModel.Tokens.Jwt;
@@ -17,6 +18,7 @@ using ShineMusic.Api.Endpoints;
 using ShineMusic.Api.Logging;
 using ShineMusic.Api.Options;
 using ShineMusic.Api.Services;
+using ShineMusic.Api.Contracts;
 using Microsoft.OpenApi;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -71,6 +73,32 @@ builder.Services.AddSwaggerGen(c =>
     // IDocumentFilter 适配。当前端到端联调仍以真实 JWT 为主。
 });
 builder.Services.AddControllers();
+// ===== 统一 400 错误体（契约一致性） =====
+// [ApiController] 默认会在模型绑定失败（JSON 语法错误、字段类型不匹配、缺失必填项）时
+// 直接返回 RFC 7807 的 application/problem+json，字段是 type/title/errors，
+// 与全站约定的 { "error": { "code", "message", "traceId" } } 不是同一套结构。
+// 前端 services/http.ts 只解析后者，遇到前者会把真实原因压成「请求失败：400」并丢掉 traceId。
+// 这里接管默认工厂，把多条校验错误折叠成第一条，包装成自定义错误体。
+builder.Services.Configure<ApiBehaviorOptions>(options =>
+{
+    options.InvalidModelStateResponseFactory = context =>
+    {
+        var detail = string.Join('；', context.ModelState
+            .Where(entry => entry.Value?.Errors.Count > 0)
+            .Select(entry =>
+            {
+                var message = entry.Value!.Errors[0].ErrorMessage;
+                return string.IsNullOrEmpty(entry.Key) || entry.Key == "$"
+                    ? message
+                    : $"{entry.Key}: {message}";
+            }));
+        return new BadRequestObjectResult(new ApiErrorResponse(
+            new ApiErrorDetail(
+                ErrorCodes.ValidationError,
+                string.IsNullOrWhiteSpace(detail) ? "请求参数不合法。" : detail,
+                context.HttpContext.TraceIdentifier)));
+    };
+});
 builder.Services.AddHttpClient();
 // ===== 响应压缩：对 JSON 等文本响应启用 gzip/brotli，减小传输体积（客户端未声明支持时自动跳过） =====
 builder.Services.AddResponseCompression(options =>
@@ -306,15 +334,15 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             {
                 context.HandleResponse();
                 context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                await context.Response.WriteAsJsonAsync(new ShineMusic.Api.Contracts.ApiErrorResponse(
-                    new ShineMusic.Api.Contracts.ApiErrorDetail("authentication_required", "Authentication is required.", context.HttpContext.TraceIdentifier)));
+                await context.Response.WriteAsJsonAsync(new ApiErrorResponse(
+                    new ApiErrorDetail(ErrorCodes.AuthenticationRequired, "Authentication is required.", context.HttpContext.TraceIdentifier)));
             },
             // 已登录但权限/角色不足时，同样返回统一结构的 403 JSON。
             OnForbidden = async context =>
             {
                 context.Response.StatusCode = StatusCodes.Status403Forbidden;
-                await context.Response.WriteAsJsonAsync(new ShineMusic.Api.Contracts.ApiErrorResponse(
-                    new ShineMusic.Api.Contracts.ApiErrorDetail("permission_denied", "You do not have permission to access this resource.", context.HttpContext.TraceIdentifier)));
+                await context.Response.WriteAsJsonAsync(new ApiErrorResponse(
+                    new ApiErrorDetail(ErrorCodes.PermissionDenied, "You do not have permission to access this resource.", context.HttpContext.TraceIdentifier)));
             }
         };
     });
@@ -341,26 +369,54 @@ if (app.Environment.IsDevelopment())
 app.UseExceptionHandler(exceptionHandler => exceptionHandler.Run(async context =>
 {
     var exception = context.Features.Get<IExceptionHandlerFeature>()?.Error;
+    // 未处理异常统一收敛为 500 JSON，先记录带 TraceId 的日志（落入 logs/app），再向客户端返回脱敏错误信息。
+    // 日志带方法/路径/TraceId，配合 operations/data 日志即可顺着 TraceId 还原整条请求链路。
     context.RequestServices.GetRequiredService<ILoggerFactory>()
-        .CreateLogger("UnhandledException")
-        .LogError(exception, "Unhandled exception while handling request {TraceId}.", context.TraceIdentifier);
+        .CreateLogger("App.UnhandledException")
+        .LogError(exception, "Unhandled exception on {Method} {Path} (TraceId={TraceId}).",
+            context.Request.Method, context.Request.Path, context.TraceIdentifier);
     context.Response.StatusCode = StatusCodes.Status500InternalServerError;
-    await Results.Json(new ShineMusic.Api.Contracts.ApiErrorResponse(
-        new ShineMusic.Api.Contracts.ApiErrorDetail("internal_error", "An unexpected error occurred.", context.TraceIdentifier)))
+    await Results.Json(new ApiErrorResponse(
+        new ApiErrorDetail(ErrorCodes.InternalError, "An unexpected error occurred.", context.TraceIdentifier)))
         .ExecuteAsync(context);
 }));
+// ===== 兜底错误体：把「没有响应体」的失败状态补齐成自定义错误体 =====
+// 典型场景：路由未命中（404）、HTTP 方法不匹配（405）。此时 ASP.NET 只写状态码、Content-Type 为空、
+// 响应体 0 字节，前端 http.ts 拿不到 code/message/traceId，只能显示「请求失败：404」。
+// 判断条件是 ContentType 为空——业务 400/401/404/409 都已写入 JSON，此中间件不会重复介入。
+app.Use(async (context, next) =>
+{
+    await next();
+    var response = context.Response;
+
+    // 只处理「失败了但又什么都没说」的情况；已开始写入响应或已声明内容类型的交给原逻辑。
+    if (response.StatusCode < StatusCodes.Status400BadRequest) return;
+    if (response.HasStarted) return;
+    if (!string.IsNullOrEmpty(response.ContentType)) return;
+    if (response.ContentLength is > 0) return;
+
+    response.ContentType = "application/json";
+    await response.WriteAsJsonAsync(new ApiErrorResponse(
+        new ApiErrorDetail(
+            ResolveStatusCodeCode(response.StatusCode),
+            $"接口不存在或请求方式不被支持（HTTP {response.StatusCode}）。",
+            context.TraceIdentifier)));
+});
+
 // 响应压缩放在管道靠前位置，使后续所有 JSON/文本响应都能被压缩。
 app.UseResponseCompression();
 // 显式启用路由：确保后续中间件（如限流）能读到端点元数据（[EnableRateLimiting] 等）。
 app.UseRouting();
 // CORS 必须先于认证/授权，认证先于授权，三者配合端点路由完成跨域与访问控制。
 app.UseCors("Client");
+// ===== 操作日志中间件：注册在认证之前，使「未携带/无效令牌」导致的 401/403 也被记录
+// （否则鉴权短路会跳过本中间件，丢失最需要被定位的鉴权失败）。finally 中才读取 context.User，
+// 此时下游认证已执行完毕，登录用户仍可取。 =====
+app.UseMiddleware<ShineMusic.Api.Middleware.OperationLoggingMiddleware>();
 app.UseAuthentication();
 app.UseAuthorization();
 // 限流中间件：需在端点路由之前，[EnableRateLimiting] 标注的端点才会生效。
 app.UseRateLimiter();
-// ===== 操作日志中间件：在所有 HTTP 操作完成后记录方法/路径/用户/状态码/耗时（落 logs/operations） =====
-app.UseMiddleware<ShineMusic.Api.Middleware.OperationLoggingMiddleware>();
 
 // ===== 端点映射：注册控制器路由（必须在认证/授权之后，否则鉴权中间件不生效） =====
 app.MapControllers();
@@ -505,3 +561,21 @@ static string ReadPassword()
     }
     return password.ToString();
 }
+
+// 兜底错误体的状态码 → 错误码映射。与 Contracts/ErrorCodes 保持一致，
+// 只覆盖「没有响应体」的一类状态，其余（400/401/409 等）均已由业务代码写出自定义错误体。
+static string ResolveStatusCodeCode(int statusCode) => statusCode switch
+{
+    400 => ErrorCodes.ValidationError,
+    401 => ErrorCodes.AuthenticationRequired,
+    403 => ErrorCodes.PermissionDenied,
+    404 => ErrorCodes.ResourceNotFound,
+    405 => ErrorCodes.ResourceNotFound,
+    406 => ErrorCodes.UnsupportedMediaFormat,
+    408 => ErrorCodes.InternalError,
+    413 => ErrorCodes.PayloadTooLarge,
+    415 => ErrorCodes.UnsupportedMediaFormat,
+    429 => ErrorCodes.RateLimited,
+    >= 500 => ErrorCodes.InternalError,
+    _ => ErrorCodes.ResourceNotFound
+};

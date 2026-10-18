@@ -60,9 +60,9 @@ const tabs = ['为你', '发现', '曲库', '我的'] as const
 // —— “为你”Feed 数据：精选曲目、最近加入、专题列表、头图专题、风格、错误态 ——
 const featured = ref<Track | null>(null)
 const recentTracks = ref<Track[]>([])
-const collections = ref<ApiCollectionSummary[]>([])
+const collections = ref<readonly ApiCollectionSummary[]>([])
 const heroCollection = ref<ApiCollectionSummary | null>(null)
-const genres = ref<string[]>([])
+const genres = ref<readonly string[]>([])
 const selectedGenre = ref('全部') // 风格 chips 当前选中项（本地过滤最近加入）
 const loadError = ref(false)
 
@@ -74,7 +74,7 @@ const searched = ref(false)
 let searchTimer: ReturnType<typeof setTimeout> | undefined
 
 // —— “收藏 / 我的”页数据：我的歌单与加载态（收藏曲目来自 library 全局 favoriteTracks） ——
-const myPlaylists = ref<ApiPlaylistSummary[]>([])
+const myPlaylists = ref<readonly ApiPlaylistSummary[]>([])
 const libraryLoading = ref(false)
 
 // —— “曲库”页数据：我的曲库引用（UserLibraryItem，含私有与公开） ——
@@ -180,7 +180,7 @@ const DEFAULT_COLLECTIONS: ApiCollectionSummary[] = [
   { id: 'default-minyao', title: '民谣故事', description: '一把吉他一杯酒', artworkUrl: null, trackCount: 50 },
 ]
 // 精选专题：后端无合集时回退到内置兜底合集
-const displayCollections = computed<ApiCollectionSummary[]>(() =>
+const displayCollections = computed<readonly ApiCollectionSummary[]>(() =>
   collections.value.length ? collections.value : DEFAULT_COLLECTIONS,
 )
 // 编辑精选大卡：优先真实头图专题 / 精选曲目，再回退到内置兜底合集，保证始终有内容

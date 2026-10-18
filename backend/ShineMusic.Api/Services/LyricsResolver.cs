@@ -195,7 +195,7 @@ public sealed class LyricsResolver(
 
         var client = httpClientFactory.CreateClient(HttpClientName);
         var title = query.Title!.Trim();
-        var artist = query.Artists.FirstOrDefault()?.Trim() ?? string.Empty;
+        var artist = query.Artists.Count > 0 ? query.Artists[0]?.Trim() ?? string.Empty : string.Empty;
         long? durationSeconds = query.DurationMs is > 0
             ? (long)Math.Round(query.DurationMs.Value / 1000.0, MidpointRounding.AwayFromZero)
             : null;
@@ -296,7 +296,7 @@ public sealed class LyricsResolver(
     }
 
     /// <summary>
-    /// 多艺人匹配：候选的艺人字段可能用 / & , feat. 连接多位艺人，拆开后取最高相似度。
+    /// 多艺人匹配：候选的艺人字段可能用 / 、 &amp; 、 feat. 连接多位艺人，拆开后取最高相似度。
     /// </summary>
     private static double BestArtistSimilarity(IReadOnlyList<string> artists, string? candidateArtist)
     {

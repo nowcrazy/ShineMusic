@@ -16,6 +16,9 @@ namespace ShineMusic.Api.Endpoints;
 
 /// <summary>Returns artwork only when it is referenced by publicly visible content. 封面端点：仅当封面被公开展示的内容引用时才返回图片，防止未发布/孤立封面被直接枚举访问。</summary>
 [ApiController]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
 public sealed class ArtworkController : ControllerBase
 {
     // 允许输出的图片 MIME 白名单；数据库中的 ContentType 不在此列时按 404 处理，避免伪造类型。
@@ -49,19 +52,14 @@ public sealed class ArtworkController : ControllerBase
             .FirstOrDefaultAsync(cancellationToken);
         // 404：记录不存在，或内容类型不在图片白名单内（统一不报具体原因，避免探测）。
         if (artwork is null || !AllowedContentTypes.Contains(artwork.ContentType))
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
 
         // 404：storageKey 解析后跳出媒体根目录（目录穿越），或物理文件实际不存在。
         if (!storagePaths.TryResolve(artwork.StorageKey, out var filePath) || !System.IO.File.Exists(filePath))
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
 
         // 以物理路径流式返回文件，Content-Type 使用数据库中已通过白名单校验的类型。
         return Results.File(filePath, artwork.ContentType);
     }
 
-    /// <summary>构造统一的 404 错误响应。</summary>
-    /// <param name="context">当前 HTTP 上下文（依赖注入），用于取 TraceIdentifier。</param>
-    /// <returns>404 + ApiErrorResponse(resource_not_found)。</returns>
-    private static IResult NotFound(HttpContext ctx) => Results.NotFound(
-        new ApiErrorResponse(new ApiErrorDetail("resource_not_found", "The requested resource was not found.", ctx.TraceIdentifier)));
 }

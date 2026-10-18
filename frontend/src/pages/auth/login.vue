@@ -10,7 +10,7 @@ import { AudioLines } from 'lucide-vue-next'
 import { login } from '@/services/session'
 import { loadFavorites } from '@/services/library'
 import { loadFeedback } from '@/services/feedback'
-import { ApiError } from '@/services/http'
+import { describeError } from '@/services/errors'
 
 // 表单状态：邮箱 / 密码 / 提交中（防重复点击）/ 错误文案
 const email = ref('')
@@ -29,19 +29,13 @@ function focusPassword() {
 }
 
 /**
- * 将后端/网络错误转换为中文友好提示
- * @param error login 抛出的异常（期望为 ApiError）
+ * 将后端/网络错误转换为中文友好提示。
+ * 文案映射集中在 services/errors.describeError，本页不再自己写错误码字面量。
+ * @param error 提交过程抛出的异常（期望为 ApiError）
  * @returns 可直接展示的错误文案
  */
 function friendlyError(error: unknown): string {
-  if (error instanceof ApiError) {
-    if (error.code === 'authentication_required') return '邮箱或密码不正确'
-    if (error.code === 'validation_error') return error.message
-    if (error.status === 429) return '尝试次数过多，请稍后再试'
-    if (error.status === 0) return '无法连接服务器，请检查网络或 API 配置'
-    return error.message
-  }
-  return '登录失败，请稍后再试'
+  return describeError(error, '登录失败，请稍后再试')
 }
 
 /**

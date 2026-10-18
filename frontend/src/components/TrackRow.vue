@@ -18,7 +18,7 @@ const props = withDefaults(
   defineProps<{
     track: Track
     index?: number
-    queue?: Track[]
+    queue?: readonly Track[]
     showHeart?: boolean
   }>(),
   { index: undefined, queue: undefined, showHeart: true },

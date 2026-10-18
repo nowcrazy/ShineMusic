@@ -12,8 +12,10 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
-using ShineMusic.Api.Data;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using ShineMusic.Api.Contracts;
+using ShineMusic.Api.Data;
 using ShineMusic.Api.Options;
 
 namespace ShineMusic.Api.Services;
@@ -69,9 +71,10 @@ public sealed record ParsedAudioMetadata(
 /// 负责通过外部进程完成音频容器探测与转码，所有进程调用均带超时与取消处理，
 /// 超时或非零退出码会抛出带错误码的 <see cref="MediaProcessingException"/>。
 /// </summary>
-public sealed class FfmpegMediaService(IOptions<FfmpegOptions> options)
+public sealed class FfmpegMediaService(IOptions<FfmpegOptions> options, ILogger<FfmpegMediaService> logger)
 {
     private readonly FfmpegOptions _options = options.Value;
+    private readonly ILogger<FfmpegMediaService> _logger = logger;
 
     /// <summary>
     /// 使用 ffprobe 探测指定音频文件的容器、编码器、比特率与时长。
@@ -86,7 +89,8 @@ public sealed class FfmpegMediaService(IOptions<FfmpegOptions> options)
         var json = await RunAsync(
             _options.ProbeExecutablePath,
             ["-v", "error", "-show_entries", "format=format_name,duration,bit_rate", "-show_entries", "stream=codec_type,codec_name,bit_rate", "-of", "json", sourcePath],
-            cancellationToken);
+            cancellationToken,
+            $"probe {sourcePath}");
         try
         {
             using var document = JsonDocument.Parse(json);
@@ -94,7 +98,10 @@ public sealed class FfmpegMediaService(IOptions<FfmpegOptions> options)
             // 校验是否存在音频流，若不存在直接拒绝该文件。
             if (!root.TryGetProperty("streams", out var streams) ||
                 !streams.EnumerateArray().Any(stream => stream.TryGetProperty("codec_type", out var type) && type.GetString() == "audio"))
-                throw new MediaProcessingException("media_parse_failed", "The file does not contain an audio stream.");
+            {
+                _logger.LogWarning("Probe found no audio stream in {Source}.", sourcePath);
+                throw new MediaProcessingException(ErrorCodes.MediaParseFailed, "The file does not contain an audio stream.");
+            }
 
             // 取第一条音频流作为探测目标。
             var audioStream = streams.EnumerateArray().First(stream =>
@@ -118,7 +125,8 @@ public sealed class FfmpegMediaService(IOptions<FfmpegOptions> options)
         }
         catch (JsonException exception)
         {
-            throw new MediaProcessingException("media_parse_failed", $"ffprobe returned invalid metadata: {exception.Message}");
+            _logger.LogError(exception, "ffprobe returned unparseable metadata for {Source}.", sourcePath);
+            throw new MediaProcessingException(ErrorCodes.MediaParseFailed, $"ffprobe returned invalid metadata: {exception.Message}");
         }
     }
 
@@ -138,24 +146,25 @@ public sealed class FfmpegMediaService(IOptions<FfmpegOptions> options)
         return RunForExitAsync(
             _options.ExecutablePath,
             ["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", sourcePath, "-map", "0:a:0", "-vn", "-c:a", "aac", "-b:a", $"{bitrateKbps}k", "-movflags", "+faststart", destinationPath],
-            cancellationToken);
+            cancellationToken,
+            $"transcode {sourcePath} -> {destinationPath}");
     }
 
     /// <summary>
     /// 运行外部进程并捕获其标准输出。
     /// </summary>
-    private async Task<string> RunAsync(string executable, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+    private async Task<string> RunAsync(string executable, IReadOnlyList<string> arguments, CancellationToken cancellationToken, string? operationLabel = null)
     {
-        var result = await RunProcessAsync(executable, arguments, captureOutput: true, cancellationToken);
+        var result = await RunProcessAsync(executable, arguments, captureOutput: true, cancellationToken, operationLabel);
         return result.StandardOutput;
     }
 
     /// <summary>
     /// 运行外部进程，仅等待其退出，不捕获标准输出（用于转码等不需要输出的场景）。
     /// </summary>
-    private async Task RunForExitAsync(string executable, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+    private async Task RunForExitAsync(string executable, IReadOnlyList<string> arguments, CancellationToken cancellationToken, string? operationLabel = null)
     {
-        await RunProcessAsync(executable, arguments, captureOutput: false, cancellationToken);
+        await RunProcessAsync(executable, arguments, captureOutput: false, cancellationToken, operationLabel);
     }
 
     /// <summary>
@@ -165,7 +174,8 @@ public sealed class FfmpegMediaService(IOptions<FfmpegOptions> options)
         string executable,
         IReadOnlyList<string> arguments,
         bool captureOutput,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? operationLabel = null)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -186,7 +196,8 @@ public sealed class FfmpegMediaService(IOptions<FfmpegOptions> options)
         }
         catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or InvalidOperationException)
         {
-            // 可执行文件不存在或无执行权限时，转换为统一异常。
+            // 可执行文件不存在或无执行权限时，转换为统一异常，并记录日志便于定位（如 ffmpeg 未安装/路径错）。
+            _logger.LogError(exception, "Media processor {Executable} failed to start ({Operation}).", Path.GetFileName(executable), operationLabel ?? executable);
             throw new MediaProcessingException("media_processor_unavailable", $"Unable to start {Path.GetFileName(executable)}.");
         }
 
@@ -202,7 +213,11 @@ public sealed class FfmpegMediaService(IOptions<FfmpegOptions> options)
             var standardError = await errorTask;
             // 非零退出码视为处理失败，使用 stderr 内容作为错误信息。
             if (process.ExitCode != 0)
-                throw new MediaProcessingException("media_parse_failed", string.IsNullOrWhiteSpace(standardError) ? "The media processor rejected the file." : standardError.Trim());
+            {
+                var detail = string.IsNullOrWhiteSpace(standardError) ? "The media processor rejected the file." : standardError.Trim();
+                _logger.LogError("Media processing failed ({Operation}): {Detail}", operationLabel ?? executable, detail);
+                throw new MediaProcessingException(ErrorCodes.MediaParseFailed, detail);
+            }
             return new ProcessResult(standardOutput, standardError);
         }
         catch (OperationCanceledException)
@@ -218,6 +233,7 @@ public sealed class FfmpegMediaService(IOptions<FfmpegOptions> options)
             // 区分是调用方主动取消还是超时：主动取消则向上传播，超时则抛出超时异常。
             if (cancellationToken.IsCancellationRequested)
                 throw;
+            _logger.LogError("Media processing timed out ({Operation}) after the configured limit.", operationLabel ?? executable);
             throw new MediaProcessingException("media_processing_timeout", "Media processing exceeded the configured timeout.");
         }
     }
@@ -318,6 +334,9 @@ public sealed class AudioMetadataParser(QuarantineStoragePaths storagePaths)
         catch (Exception exception) when (exception is TagLib.UnsupportedFormatException or TagLib.CorruptFileException or IOException or ArgumentException)
         {
             // 格式不支持、文件损坏或 IO 异常时，返回带告警的空元数据，避免中断导入流水线。
+            // 注意：这里进的是 Warnings（告警码，原样展示在管理端导入列表里），
+            // 不要替换成 ErrorCodes.MediaParseFailed —— 那是 ImportQueue.SafeErrorMessage 的失败码，
+            // 两者是不同通道，历史上就写成了 metadata_parse_failed，保留原值避免前端展示变化。
             return new ParsedAudioMetadata(null, [], null, null, null, null, [], null, null, null, ["metadata_parse_failed"]);
         }
     }

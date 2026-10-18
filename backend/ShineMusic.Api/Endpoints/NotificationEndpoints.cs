@@ -20,6 +20,11 @@ namespace ShineMusic.Api.Endpoints;
 [Route("api/v1/me/notifications")]
 [Authorize]
 [Tags("Notifications")]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status403Forbidden)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
 public sealed class NotificationController : ControllerBase
 {
     // 【GET /api/v1/me/notifications】分页拉取当前用户的消息（可选只看未读）。
@@ -120,5 +125,5 @@ public sealed class NotificationController : ControllerBase
 
     /// <summary>统一 404 响应：不区分「不存在」与「不属于当前用户」，避免泄露他人消息存在性。</summary>
     private IResult ResourceNotFound() => Results.NotFound(
-        new ApiErrorResponse(new ApiErrorDetail("resource_not_found", "The requested resource was not found.", HttpContext.TraceIdentifier)));
+        new ApiErrorResponse(new ApiErrorDetail(ErrorCodes.ResourceNotFound, "The requested resource was not found.", HttpContext.TraceIdentifier)));
 }

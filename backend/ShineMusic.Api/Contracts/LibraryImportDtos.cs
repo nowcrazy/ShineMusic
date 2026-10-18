@@ -132,3 +132,12 @@ public sealed record UpdateImportItemRequest(
 /// <param name="Item">导入条目本体。</param>
 /// <param name="UploadedByUserId">批次上传者用户 Id；用于区分管理员导入与用户上传。</param>
 public sealed record LibraryImportItemWithUploaderDto(LibraryImportItemDto Item, Guid? UploadedByUserId);
+/// <summary>导入项发布成功后的结果：正式库中的曲目标识与该导入项的最新状态。</summary>
+/// <param name="TrackId">入库曲目标识。</param>
+/// <param name="Status">导入项发布后的状态标识（通常为 published）。</param>
+public sealed record PublishImportItemResultDto(Guid TrackId, string Status);
+
+/// <summary>封面上传成功后的结果：封面标识与其读取地址。</summary>
+/// <param name="Id">封面唯一标识。</param>
+/// <param name="ArtworkUrl">封面读取地址。</param>
+public sealed record ArtworkUploadResultDto(Guid Id, string ArtworkUrl);

@@ -28,6 +28,11 @@ namespace ShineMusic.Api.Endpoints;
 [Authorize]
 [FeatureGate(nameof(FeatureOptions.ListeningEvents))]
 [Tags("My Listening")]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status403Forbidden)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
 public sealed class ListeningController : ControllerBase
 {
     [HttpPost("play-events", Name = "RecordPlayEvent")]
@@ -40,10 +45,10 @@ public sealed class ListeningController : ControllerBase
         if (!HttpContext.User.TryGetUserId(out var userId))
             return Results.Unauthorized();
         if (!ListeningEventTypes.IsValid(request.EventType))
-            return ValidationError(HttpContext, "eventType", "eventType must be one of: play, complete, skip.");
+            return ApiResults.ValidationError(HttpContext, "eventType", "eventType must be one of: play, complete, skip.");
         // 已公开曲目任意用户可上报；私有曲目（用户上传、未公开）仅上传者本人可上报。
         if (!await AccessibleTracks(db, userId).AnyAsync(track => track.Id == request.TrackId, cancellationToken))
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
 
         db.ListeningEvents.Add(new ListeningEvent
         {
@@ -82,10 +87,10 @@ public sealed class ListeningController : ControllerBase
         if (!HttpContext.User.TryGetUserId(out var userId))
             return Results.Unauthorized();
         if (!UserFeedbackKinds.IsValid(request.Kind))
-            return ValidationError(HttpContext, "kind", "kind must be one of: like, dislike, not_interested.");
+            return ApiResults.ValidationError(HttpContext, "kind", "kind must be one of: like, dislike, not_interested.");
         // 已公开曲目任意用户可反馈；私有曲目（用户上传、未公开）仅上传者本人可反馈。
         if (!await AccessibleTracks(db, userId).AnyAsync(track => track.Id == trackId, cancellationToken))
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
 
         var now = DateTime.UtcNow;
         var existing = await db.UserTrackFeedbacks
@@ -127,9 +132,5 @@ public sealed class ListeningController : ControllerBase
         db.Tracks.AsNoTracking()
             .Where(track => track.PublishedAt != null || track.OwnerUserId == userId);
 
-    private static IResult ValidationError(HttpContext ctx, string field, string message) =>
-        Results.BadRequest(new ApiErrorResponse(new ApiErrorDetail("validation_error", $"{field}: {message}", ctx.TraceIdentifier)));
 
-    private static IResult NotFound(HttpContext ctx) => Results.NotFound(
-        new ApiErrorResponse(new ApiErrorDetail("resource_not_found", "The requested resource was not found.", ctx.TraceIdentifier)));
 }

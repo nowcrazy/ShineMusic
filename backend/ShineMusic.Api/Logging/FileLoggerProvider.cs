@@ -7,6 +7,7 @@
 
 using System.Collections.Concurrent;
 using System.Globalization;
+using System.IO;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -17,6 +18,9 @@ public sealed class FileLoggerOptions
 {
     /// <summary>日志根目录（建议使用绝对路径，避免随工作目录漂移）。</summary>
     public string LogsRoot { get; set; } = "logs";
+
+    /// <summary>日志文件最长保留天数，超过则自动清理（默认 30 天；设为 0 表示不清理）。</summary>
+    public int MaxRetentionDays { get; set; } = 30;
 }
 
 /// <summary>空作用域占位（无外部作用域时返回），避免 BeginScope 抛空。</summary>
@@ -31,6 +35,8 @@ internal sealed class NullScope : IDisposable
 public sealed class FileLoggerProvider : ILoggerProvider
 {
     private readonly string _logsRoot;
+    private readonly int _retentionDays;
+    private DateTime _lastPruneUtc;
     private bool _disposed;
 
     // key = "category|yyyy-MM-dd" -> 当日对应的文件写入器
@@ -38,15 +44,19 @@ public sealed class FileLoggerProvider : ILoggerProvider
 
     public FileLoggerProvider(IOptionsMonitor<FileLoggerOptions> options)
     {
-        _logsRoot = options.CurrentValue.LogsRoot;
+        var current = options.CurrentValue;
+        _logsRoot = current.LogsRoot;
+        _retentionDays = current.MaxRetentionDays;
     }
 
     public ILogger CreateLogger(string categoryName) => new FileLogger(this, categoryName);
 
-    /// <summary>是否该把此 category 写入文件（仅 Operations / Data 两类落盘）。</summary>
+    /// <summary>是否该把此 category 写入文件。
+    /// 框架/基础设施日志（Microsoft.*、System.*）只走控制台，避免污染业务日志；
+    /// 其余业务/服务/异常/操作/数据日志全部落盘，确保任何错误都不会只存在于控制台而被遗漏。</summary>
     private static bool IsFileTarget(string category) =>
-        category.StartsWith("Operations", StringComparison.OrdinalIgnoreCase) ||
-        category.StartsWith("Data", StringComparison.OrdinalIgnoreCase);
+        !category.StartsWith("Microsoft.", StringComparison.OrdinalIgnoreCase) &&
+        !category.StartsWith("System.", StringComparison.OrdinalIgnoreCase);
 
     internal void Write(string categoryName, LogLevel level, string message, Exception? exception)
     {
@@ -64,7 +74,40 @@ public sealed class FileLoggerProvider : ILoggerProvider
     {
         var (folder, prefix) = CategoryRouting(categoryName);
         Directory.CreateDirectory(folder);
+        MaybePrune(folder);
         return Path.Combine(folder, $"{prefix}-{date:yyyy-MM-dd}.log");
+    }
+
+    /// <summary>按保留天数清理过期日志：最多每 6 小时执行一次，且清理失败绝不影响正常日志写入。</summary>
+    private void MaybePrune(string folder)
+    {
+        if (_retentionDays <= 0)
+            return;
+        var now = DateTime.UtcNow;
+        if (now - _lastPruneUtc < TimeSpan.FromHours(6))
+            return;
+        _lastPruneUtc = now;
+        try
+        {
+            var cutoff = now.AddDays(-_retentionDays);
+            foreach (var file in Directory.EnumerateFiles(folder, "*.log"))
+            {
+                try
+                {
+                    var info = new FileInfo(file);
+                    if (info.CreationTimeUtc < cutoff)
+                        info.Delete();
+                }
+                catch
+                {
+                    // 单个文件删除失败忽略，继续处理其余文件。
+                }
+            }
+        }
+        catch
+        {
+            // 目录不可访问等异常一律忽略，日志清理不能干扰业务。
+        }
     }
 
     /// <summary>按 category 前缀决定目标目录与文件名前缀，实现“操作/数据”分离。</summary>
@@ -74,6 +117,7 @@ public sealed class FileLoggerProvider : ILoggerProvider
             return (Path.Combine(_logsRoot, "operations"), "operations");
         if (category.StartsWith("Data", StringComparison.OrdinalIgnoreCase))
             return (Path.Combine(_logsRoot, "data"), "data");
+        // 业务/服务/异常等自定义日志统一进 app 目录，与“操作”“数据”分离，互不污染。
         return (Path.Combine(_logsRoot, "app"), "app");
     }
 
@@ -112,6 +156,14 @@ internal sealed class FileWriter : IDisposable
             _writer.Write(" [");
             _writer.Write(level.ToString().ToUpperInvariant());
             _writer.Write("] ");
+            // 关联标识：把当前请求的 TraceId 附到每条日志，使“请求 → SQL → 异常 → 外部调用”串成同一条线索。
+            var traceId = CorrelationContext.CurrentTraceId;
+            if (!string.IsNullOrEmpty(traceId))
+            {
+                _writer.Write("[trace:");
+                _writer.Write(traceId);
+                _writer.Write("] ");
+            }
             _writer.WriteLine(message);
             if (exception is not null)
             {

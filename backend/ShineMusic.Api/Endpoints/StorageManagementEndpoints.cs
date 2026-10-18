@@ -14,6 +14,11 @@ namespace ShineMusic.Api.Endpoints;
 [Route("api/v1/admin")]
 [Authorize(Roles = "admin")]
 [Tags("Admin Storage")]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status403Forbidden)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
 public sealed class StorageManagementController : ControllerBase
 {
     /// <summary>【GET /api/v1/admin/storage/audit】对账审计：输出孤儿/缺失/空目录明细（只读）。</summary>
@@ -62,7 +67,7 @@ public sealed class StorageManagementController : ControllerBase
         var result = await storage.DeleteTrackAsync(db, trackId, cancellationToken);
         if (result is null)
             return Results.NotFound(new ApiErrorResponse(
-                new ApiErrorDetail("resource_not_found", "The requested track was not found.", HttpContext.TraceIdentifier)));
+                new ApiErrorDetail(ErrorCodes.ResourceNotFound, "The requested track was not found.", HttpContext.TraceIdentifier)));
 
         AdminAudit.Add(HttpContext, db, "track.deleted", "track", trackId, new
         {

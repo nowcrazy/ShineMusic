@@ -20,6 +20,11 @@ namespace ShineMusic.Api.Endpoints;
 [Authorize(Roles = "admin")]
 [FeatureGate(nameof(FeatureOptions.AdminLibraryImport))]
 [Tags("Admin Library Import")]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status403Forbidden)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
 public sealed class LibraryImportController : ControllerBase
 {
     [HttpPost("imports", Name = "UploadLibraryImportBatch")]
@@ -35,10 +40,10 @@ public sealed class LibraryImportController : ControllerBase
         var options = uploadOptions.Value;
         if (!MediaTypeHeaderValue.TryParse(HttpContext.Request.ContentType, out var contentType) ||
             !string.Equals(contentType.MediaType.Value, "multipart/form-data", StringComparison.OrdinalIgnoreCase))
-            return ValidationError(HttpContext, "contentType", "A multipart/form-data request is required.");
+            return ApiResults.ValidationError(HttpContext, "contentType", "A multipart/form-data request is required.");
 
         if (HttpContext.Request.ContentLength is > 0 && HttpContext.Request.ContentLength > options.MaxBatchSizeBytes)
-            return Error(HttpContext, StatusCodes.Status413PayloadTooLarge, "upload_too_large", "The upload batch exceeded the configured limit.");
+            return ApiResults.Error(HttpContext, StatusCodes.Status413PayloadTooLarge, ErrorCodes.UploadTooLarge, "The upload batch exceeded the configured limit.");
 
         Guid? songRequestId = null;
         ImportStagingService.StagedResult staged;
@@ -48,23 +53,23 @@ public sealed class LibraryImportController : ControllerBase
         }
         catch (UploadLimitException)
         {
-            return Error(HttpContext, StatusCodes.Status413PayloadTooLarge, "upload_too_large", "The file or batch exceeded the configured upload limit.");
+            return ApiResults.Error(HttpContext, StatusCodes.Status413PayloadTooLarge, ErrorCodes.UploadTooLarge, "The file or batch exceeded the configured upload limit.");
         }
         catch (EmptyUploadException)
         {
-            return ValidationError(HttpContext, "files", "Empty files are not accepted.");
+            return ApiResults.ValidationError(HttpContext, "files", "Empty files are not accepted.");
         }
         catch (UnsupportedFormatException)
         {
-            return Error(HttpContext, StatusCodes.Status415UnsupportedMediaType, "unsupported_media_format", "The file extension is not allowed.");
+            return ApiResults.Error(HttpContext, StatusCodes.Status415UnsupportedMediaType, ErrorCodes.UnsupportedMediaFormat, "The file extension is not allowed.");
         }
         catch (InvalidDataException)
         {
-            return Error(HttpContext, StatusCodes.Status413PayloadTooLarge, "upload_too_large", "The multipart request exceeded its configured limit.");
+            return ApiResults.Error(HttpContext, StatusCodes.Status413PayloadTooLarge, ErrorCodes.UploadTooLarge, "The multipart request exceeded its configured limit.");
         }
         catch (InvalidOperationException)
         {
-            return Error(HttpContext, StatusCodes.Status500InternalServerError, "internal_error", "Unable to stage the upload.");
+            return ApiResults.Error(HttpContext, StatusCodes.Status500InternalServerError, ErrorCodes.InternalError, "Unable to stage the upload.");
         }
 
         // 未与任何音频配对的歌词文件会被忽略；显式记告警，避免用户误以为歌词已挂上。
@@ -80,9 +85,9 @@ public sealed class LibraryImportController : ControllerBase
             if (!string.IsNullOrWhiteSpace(requestIdValue))
             {
                 if (requestIdValue.Length > 64)
-                    return ValidationError(HttpContext, "songRequestId", "songRequestId must be at most 64 characters.");
+                    return ApiResults.ValidationError(HttpContext, "songRequestId", "songRequestId must be at most 64 characters.");
                 if (!Guid.TryParse(requestIdValue.Trim(), out var parsedRequestId))
-                    return ValidationError(HttpContext, "songRequestId", "songRequestId must be a UUID.");
+                    return ApiResults.ValidationError(HttpContext, "songRequestId", "songRequestId must be a UUID.");
                 songRequestId = parsedRequestId;
             }
 
@@ -90,9 +95,9 @@ public sealed class LibraryImportController : ControllerBase
                 .Select(file => new PendingUpload(file.ItemId, file.DisplayName, file.StorageKey, file.ContentHash, file.SizeBytes))
                 .ToList();
             if (pendingFiles.Count == 0)
-                return ValidationError(HttpContext, "files", "At least one audio file is required.");
+                return ApiResults.ValidationError(HttpContext, "files", "At least one audio file is required.");
             if (songRequestId.HasValue && !await db.SongRequests.AnyAsync(request => request.Id == songRequestId.Value, cancellationToken))
-                return NotFound(HttpContext);
+                return ApiResults.NotFound(HttpContext);
 
             var hashes = pendingFiles.Select(file => file.ContentHash).ToArray();
             var duplicateInLibrary = await db.MediaAssets.AnyAsync(asset => hashes.Contains(asset.ContentHash), cancellationToken);
@@ -100,7 +105,7 @@ public sealed class LibraryImportController : ControllerBase
                 item.Status != LibraryImportItemStatuses.Rejected && item.Status != LibraryImportItemStatuses.ProcessingFailed,
                 cancellationToken);
             if (duplicateInLibrary || duplicateInQueue || hashes.Distinct(StringComparer.Ordinal).Count() != hashes.Length)
-                return Error(HttpContext, StatusCodes.Status409Conflict, "resource_conflict", "The upload batch contains audio that is already published or being processed.");
+                return ApiResults.Error(HttpContext, StatusCodes.Status409Conflict, ErrorCodes.ResourceConflict, "The upload batch contains audio that is already published or being processed.");
 
             var createdByUserId = Guid.Parse(HttpContext.User.FindFirstValue("sub")!);
             var batch = new LibraryImportBatch
@@ -180,7 +185,7 @@ public sealed class LibraryImportController : ControllerBase
             .Include(item => item.Items.Where(item => !item.IsDeleted))
             .FirstOrDefaultAsync(item => item.Id == importId, cancellationToken);
         if (batch is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
         var requests = await LoadRequestsAsync(db, batch.Items.Select(item => item.SongRequestId), cancellationToken);
         return Results.Ok(ToDto(batch, requests, fulfillmentOptions.Value));
     }
@@ -194,7 +199,7 @@ public sealed class LibraryImportController : ControllerBase
     {
         var item = await db.LibraryImportItems.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == itemId && !candidate.IsDeleted, cancellationToken);
         if (item is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
         var requests = await LoadRequestsAsync(db, [item.SongRequestId], cancellationToken);
         var request = item.SongRequestId is Guid requestId && requests.TryGetValue(requestId, out var matched) ? matched : null;
         return Results.Ok(ToDto(item, request, fulfillmentOptions.Value));
@@ -210,21 +215,21 @@ public sealed class LibraryImportController : ControllerBase
     {
         var item = await db.LibraryImportItems.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == itemId, cancellationToken);
         if (item is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
         var storageKey = item.TranscodedStorageKey ?? item.SourceStorageKey;
         if (storagePaths.TryResolve(storageKey, out var path) && System.IO.File.Exists(path))
             return Results.File(path, GetAudioContentType(item.TranscodedStorageKey is null ? item.Container : "m4a"), enableRangeProcessing: true);
 
         // 用户上传已私有入库：隔离区文件已随入库清理，回退到曲库中的播放资产。
         if (item.PublishedTrackId is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
         var asset = await db.MediaAssets.AsNoTracking()
             .Where(candidate => candidate.TrackId == item.PublishedTrackId.Value && candidate.IsPublished)
             .OrderByDescending(candidate => candidate.IsPrimary)
             .Select(candidate => new { candidate.StorageKey, candidate.Container })
             .FirstOrDefaultAsync(cancellationToken);
         if (asset is null || !libraryPaths.TryResolve(asset.StorageKey, out path) || !System.IO.File.Exists(path))
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
         return Results.File(path, GetAudioContentType(asset.Container), enableRangeProcessing: true);
     }
 
@@ -238,15 +243,15 @@ public sealed class LibraryImportController : ControllerBase
     {
         var item = await db.LibraryImportItems.FirstOrDefaultAsync(candidate => candidate.Id == itemId, cancellationToken);
         if (item is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
         if (item.Status is LibraryImportItemStatuses.Published or LibraryImportItemStatuses.Rejected)
-            return Conflict(HttpContext, "This import item can no longer be edited.");
+            return ApiResults.Conflict(HttpContext, "This import item can no longer be edited.");
         if (update.Title is not null && (string.IsNullOrWhiteSpace(update.Title) || update.Title.Trim().Length > 300))
-            return ValidationError(HttpContext, "title", "Title must be between 1 and 300 characters.");
+            return ApiResults.ValidationError(HttpContext, "title", "Title must be between 1 and 300 characters.");
         if (update.Artists is { Count: > 10 } || update.Artists?.Any(artist => string.IsNullOrWhiteSpace(artist) || artist.Trim().Length > 200) == true)
-            return ValidationError(HttpContext, "artists", "At most 10 non-empty artist names of 200 characters are allowed.");
+            return ApiResults.ValidationError(HttpContext, "artists", "At most 10 non-empty artist names of 200 characters are allowed.");
         if (update.AlbumTitle?.Length > 300 || update.Genres is { Count: > 30 } || update.Genres?.Any(genre => genre.Trim().Length > 100) == true)
-            return ValidationError(HttpContext, "metadata", "Album or genre metadata exceeds its limit.");
+            return ApiResults.ValidationError(HttpContext, "metadata", "Album or genre metadata exceeds its limit.");
 
         item.Title = update.Title?.Trim() ?? item.Title;
         if (update.Artists is not null)
@@ -271,7 +276,7 @@ public sealed class LibraryImportController : ControllerBase
         if (update.SongRequestId.HasValue)
         {
             if (!await db.SongRequests.AnyAsync(request => request.Id == update.SongRequestId.Value, cancellationToken))
-                return NotFound(HttpContext);
+                return ApiResults.NotFound(HttpContext);
             item.SongRequestId = update.SongRequestId;
         }
         item.MetadataReviewed = !string.IsNullOrWhiteSpace(item.Title) && DeserializeList(item.ArtistsJson).Count > 0;
@@ -296,22 +301,22 @@ public sealed class LibraryImportController : ControllerBase
     {
         var item = await db.LibraryImportItems.FirstOrDefaultAsync(candidate => candidate.Id == itemId, cancellationToken);
         if (item is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
         if (item.Status is LibraryImportItemStatuses.Published or LibraryImportItemStatuses.Rejected)
-            return Conflict(HttpContext, "This import item can no longer be edited.");
+            return ApiResults.Conflict(HttpContext, "This import item can no longer be edited.");
 
         if (!MediaTypeHeaderValue.TryParse(HttpContext.Request.ContentType, out var contentType) ||
             !string.Equals(contentType.MediaType.Value, "multipart/form-data", StringComparison.OrdinalIgnoreCase))
-            return ValidationError(HttpContext, "contentType", "A multipart/form-data request is required.");
+            return ApiResults.ValidationError(HttpContext, "contentType", "A multipart/form-data request is required.");
 
         var form = await HttpContext.Request.ReadFormAsync(cancellationToken);
-        var file = form.Files.FirstOrDefault();
+        var file = form.Files.Count > 0 ? form.Files[0] : null;
         if (file is null || file.Length == 0)
-            return ValidationError(HttpContext, "file", "A lyrics file is required.");
+            return ApiResults.ValidationError(HttpContext, "file", "A lyrics file is required.");
 
         var extension = Path.GetExtension(file.FileName).TrimStart('.').ToLowerInvariant();
         if (extension is not ("lrc" or "txt"))
-            return Error(HttpContext, StatusCodes.Status415UnsupportedMediaType, "unsupported_media_format", "Only .lrc and .txt lyrics files are supported.");
+            return ApiResults.Error(HttpContext, StatusCodes.Status415UnsupportedMediaType, ErrorCodes.UnsupportedMediaFormat, "Only .lrc and .txt lyrics files are supported.");
 
         string content;
         await using (var stream = file.OpenReadStream())
@@ -320,7 +325,7 @@ public sealed class LibraryImportController : ControllerBase
             content = await reader.ReadToEndAsync(cancellationToken);
         }
         if (string.IsNullOrWhiteSpace(content))
-            return ValidationError(HttpContext, "file", "The lyrics file is empty.");
+            return ApiResults.ValidationError(HttpContext, "file", "The lyrics file is empty.");
 
         item.Lyrics = content.Trim();
         // 人工上传的歌词文件，来源标记为 manual，置信度视为最高。
@@ -347,7 +352,7 @@ public sealed class LibraryImportController : ControllerBase
     {
         var item = await db.LibraryImportItems.FirstOrDefaultAsync(candidate => candidate.Id == itemId, cancellationToken);
         if (item is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
 
         // 用户上传的私有曲目转公开：曲目已在处理完成时私有入库（仅上传者可听），
         // 此处由管理员审核决定是否进入公共曲库（设置发布时间），并同步审核中修正过的元数据。
@@ -357,7 +362,7 @@ public sealed class LibraryImportController : ControllerBase
         if (item.Status != LibraryImportItemStatuses.ReadyToPublish ||
             item.TranscodeStatus != "succeeded" || !item.MetadataReviewed ||
             string.IsNullOrWhiteSpace(item.TranscodedStorageKey))
-            return Conflict(HttpContext, "The item must be transcoded successfully and reviewed before publishing.");
+            return ApiResults.Conflict(HttpContext, "The item must be transcoded successfully and reviewed before publishing.");
 
         // 发布前完整性校验：歌名、艺人、时长缺一不可；歌词是可选内容
         // （用户上传往往没有歌词，缺失时播放器显示“暂无歌词”，不影响播放与上架）。
@@ -366,14 +371,14 @@ public sealed class LibraryImportController : ControllerBase
         if (DeserializeList(item.ArtistsJson).Count == 0) missing.Add("artists");
         if (item.DurationMs is null or <= 0) missing.Add("duration");
         if (missing.Count > 0)
-            return Conflict(HttpContext, $"Cannot publish: missing required fields — {string.Join(", ", missing)}.");
+            return ApiResults.Conflict(HttpContext, $"Cannot publish: missing required fields — {string.Join(", ", missing)}.");
 
         if (!quarantinePaths.TryResolve(item.SourceStorageKey, out var sourcePath) || !System.IO.File.Exists(sourcePath) ||
             !quarantinePaths.TryResolve(item.TranscodedStorageKey, out var transcodedPath) || !System.IO.File.Exists(transcodedPath))
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
 
         if (await db.MediaAssets.AnyAsync(asset => asset.ContentHash == item.ContentHash, cancellationToken))
-            return Conflict(HttpContext, "This audio has already been published.");
+            return ApiResults.Conflict(HttpContext, "This audio has already been published.");
 
         // 点歌需求联动：发布前校验「待上架曲目」是否确实是「需求要的那首歌」，
         // 防止把《你是最美的太阳》错配到《天下》这类张冠李戴。
@@ -382,7 +387,7 @@ public sealed class LibraryImportController : ControllerBase
             var request = await db.SongRequests.FirstOrDefaultAsync(
                 candidate => candidate.Id == item.SongRequestId.Value, cancellationToken);
             if (request is null)
-                return NotFound(HttpContext);
+                return ApiResults.NotFound(HttpContext);
 
             var matchCheck = fulfillmentOptions.Value.Check("TitleArtistMatch");
             if (matchCheck.IsEnabled)
@@ -394,15 +399,15 @@ public sealed class LibraryImportController : ControllerBase
                 {
                     // 核心检查：是否允许管理员覆盖由全局配置决定（TitleArtistMatch.AllowAdminOverride）。
                     if (!matchCheck.AllowAdminOverride)
-                        return Error(HttpContext, StatusCodes.Status409Conflict, "song_request_mismatch",
+                        return ApiResults.Error(HttpContext, StatusCodes.Status409Conflict, ErrorCodes.SongRequestMismatch,
                             $"曲目《{verdict.TrackDisplay}》与需求《{verdict.RequestDisplay}》不一致，无法关联。请修正元数据后再发布。");
 
                     // 允许覆盖时：必须显式 forceFulfill + 原因，并强制留痕。
                     if (!forceFulfill)
-                        return Error(HttpContext, StatusCodes.Status409Conflict, "song_request_mismatch_override_required",
+                        return ApiResults.Error(HttpContext, StatusCodes.Status409Conflict, ErrorCodes.SongRequestMismatchOverrideRequired,
                             $"曲目《{verdict.TrackDisplay}》与需求《{verdict.RequestDisplay}》不一致。若确认无误，请以 forceFulfill=true 并填写 overrideReason 强制关联。");
                     if (fulfillmentOptions.Value.AdminBypassRequiresReason && string.IsNullOrWhiteSpace(overrideReason))
-                        return ValidationError(HttpContext, "overrideReason", "强制关联时必须填写原因。");
+                        return ApiResults.ValidationError(HttpContext, "overrideReason", "强制关联时必须填写原因。");
 
                     AdminAudit.Add(HttpContext, db, "song_request.forced_match", "song_request", request.Id, new
                     {
@@ -447,7 +452,7 @@ public sealed class LibraryImportController : ControllerBase
         var originalKey = $"original/{track.Id:N}/{assetId:N}.{Path.GetExtension(item.DisplayName).TrimStart('.').ToLowerInvariant()}";
         var playbackKey = $"playback/{track.Id:N}/{assetId:N}.m4a";
         if (!libraryPaths.TryResolve(originalKey, out var finalOriginalPath) || !libraryPaths.TryResolve(playbackKey, out var finalPlaybackPath))
-            return Error(HttpContext, StatusCodes.Status500InternalServerError, "internal_error", "Unable to resolve the publish destination.");
+            return ApiResults.Error(HttpContext, StatusCodes.Status500InternalServerError, ErrorCodes.InternalError, "Unable to resolve the publish destination.");
         Directory.CreateDirectory(Path.GetDirectoryName(finalOriginalPath)!);
         Directory.CreateDirectory(Path.GetDirectoryName(finalPlaybackPath)!);
         try
@@ -630,12 +635,12 @@ public sealed class LibraryImportController : ControllerBase
             TryDelete(transcodedPath);
             if (item.ArtworkStorageKey is not null && quarantinePaths.TryResolve(item.ArtworkStorageKey, out var artworkPath))
                 TryDelete(artworkPath);
-            return Results.Ok(new { trackId = track.Id, status = item.Status });
+            return Results.Ok(new PublishImportItemResultDto(track.Id, item.Status));
         }
         catch (Exception exception) when (exception is IOException or DbUpdateException)
         {
             foreach (var path in copiedPaths) TryDelete(path);
-            return Error(HttpContext, StatusCodes.Status500InternalServerError, "internal_error", "The item could not be published.");
+            return ApiResults.Error(HttpContext, StatusCodes.Status500InternalServerError, ErrorCodes.InternalError, "The item could not be published.");
         }
     }
 
@@ -648,7 +653,7 @@ public sealed class LibraryImportController : ControllerBase
     {
         var item = await db.LibraryImportItems.FirstOrDefaultAsync(candidate => candidate.Id == itemId, cancellationToken);
         if (item is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
         if (item.SongRequestId is null)
             return Results.NoContent();
 
@@ -671,12 +676,12 @@ public sealed class LibraryImportController : ControllerBase
         CancellationToken cancellationToken)
     {
         if (item.Status != LibraryImportItemStatuses.PendingPublication || item.PublishedTrackId is null)
-            return Conflict(HttpContext, "Only user uploads awaiting publication review can be promoted.");
+            return ApiResults.Conflict(HttpContext, "Only user uploads awaiting publication review can be promoted.");
         var track = await db.Tracks.FirstOrDefaultAsync(candidate => candidate.Id == item.PublishedTrackId.Value, cancellationToken);
         if (track is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
         if (track.PublishedAt != null)
-            return Conflict(HttpContext, "This track has already been published.");
+            return ApiResults.Conflict(HttpContext, "This track has already been published.");
 
         // 同步审核中修正过的标量元数据（艺人/流派/专辑关联的变更需在审核界面一并修正后另行处理）。
         if (!string.IsNullOrWhiteSpace(item.Title) && item.Title != track.Title)
@@ -723,7 +728,7 @@ public sealed class LibraryImportController : ControllerBase
         AdminAudit.Add(HttpContext, db, "track.published", "track", track.Id, new { importItemId = item.Id, promoted = true });
         await db.SaveChangesAsync(cancellationToken);
         await UpdateBatchStatusAsync(db, item.BatchId, cancellationToken);
-        return Results.Ok(new { trackId = track.Id, status = item.Status });
+        return Results.Ok(new PublishImportItemResultDto(track.Id, item.Status));
     }
 
     /// <summary>
@@ -768,13 +773,13 @@ public sealed class LibraryImportController : ControllerBase
     {
         var item = await db.LibraryImportItems.FirstOrDefaultAsync(candidate => candidate.Id == itemId, cancellationToken);
         if (item is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
         if (item.Status is LibraryImportItemStatuses.Published or
             LibraryImportItemStatuses.Validating or
             LibraryImportItemStatuses.ParsingMetadata or
             LibraryImportItemStatuses.Transcoding or
             LibraryImportItemStatuses.Uploaded)
-            return Conflict(HttpContext, "Published items cannot be discarded through the import endpoint.");
+            return ApiResults.Conflict(HttpContext, "Published items cannot be discarded through the import endpoint.");
         var batchId = item.BatchId;
         item.Status = LibraryImportItemStatuses.Rejected;
         item.UpdatedAtUtc = DateTime.UtcNow;
@@ -796,13 +801,13 @@ public sealed class LibraryImportController : ControllerBase
     {
         var item = await db.LibraryImportItems.FirstOrDefaultAsync(candidate => candidate.Id == itemId, cancellationToken);
         if (item is null)
-            return NotFound(HttpContext);
+            return ApiResults.NotFound(HttpContext);
         // 仅终态条目可从列表移除；处理中/待审核的条目不允许 dismiss（应先拒绝或发布）。
         if (item.Status is not (
             LibraryImportItemStatuses.Rejected or
             LibraryImportItemStatuses.Published or
             LibraryImportItemStatuses.ProcessingFailed))
-            return Conflict(HttpContext, "Only rejected, published, or failed items can be dismissed.");
+            return ApiResults.Conflict(HttpContext, "Only rejected, published, or failed items can be dismissed.");
         item.IsDeleted = true;
         item.UpdatedAtUtc = DateTime.UtcNow;
         AdminAudit.Add(HttpContext, db, "library_import_item.dismissed", "import_item", item.Id, new { item.Status });
@@ -975,14 +980,6 @@ public sealed class LibraryImportController : ControllerBase
     }
 
     private static DateTime AsUtc(DateTime value) => DateTime.SpecifyKind(value, DateTimeKind.Utc);
-    private static IResult ValidationError(HttpContext ctx, string field, string message) => Results.BadRequest(
-        new ApiErrorResponse(new ApiErrorDetail("validation_error", $"{field}: {message}", ctx.TraceIdentifier)));
-    private static IResult NotFound(HttpContext ctx) => Results.NotFound(
-        new ApiErrorResponse(new ApiErrorDetail("resource_not_found", "The requested resource was not found.", ctx.TraceIdentifier)));
-    private static IResult Conflict(HttpContext ctx, string message) => Results.Conflict(
-        new ApiErrorResponse(new ApiErrorDetail("resource_conflict", message, ctx.TraceIdentifier)));
-    private static IResult Error(HttpContext ctx, int statusCode, string code, string message) => Results.Json(
-        new ApiErrorResponse(new ApiErrorDetail(code, message, ctx.TraceIdentifier)), statusCode: statusCode);
 
     private sealed record PendingUpload(Guid Id, string DisplayName, string StorageKey, string ContentHash, long SizeBytes);
 }

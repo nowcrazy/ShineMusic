@@ -13,6 +13,9 @@ namespace ShineMusic.Api.Endpoints;
 
 /// <summary>Provides health and runtime capability information for clients. 系统端点：为客户端提供健康检查与运行时功能开关/上传约束等能力信息。</summary>
 [ApiController]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
 public sealed class SystemController : ControllerBase
 {
     // 【GET /health】存活/就绪探针（匿名）。无参数、无依赖；始终返回 200 与固定载荷 { status = "ok" }。

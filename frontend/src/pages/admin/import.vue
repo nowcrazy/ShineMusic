@@ -24,6 +24,7 @@ import {
 } from 'lucide-vue-next'
 import { isAdmin } from '@/services/session'
 import { ApiError } from '@/services/http'
+import { describeError, ErrorCodes } from '@/services/errors'
 import {
   getImportBatches,
   getPreviewUrl,
@@ -42,7 +43,7 @@ import {
 } from '@/services/admin-import'
 
 // —— 列表 / 选择状态 ——
-const batches = ref<LibraryImportBatch[]>([])
+const batches = ref<readonly LibraryImportBatch[]>([])
 const selectedItemId = ref('')
 const loading = ref(false)
 const uploading = ref(false)
@@ -447,13 +448,13 @@ async function handlePublish() {
     // 仅当全局配置允许管理员覆盖时（后端返回 override_required），才引导强制关联
     if (
       error instanceof ApiError &&
-      error.code === 'song_request_mismatch_override_required' &&
+      error.code === ErrorCodes.SongRequestMismatchOverrideRequired &&
       targetRequest.value
     ) {
       promptForceFulfill(item)
     } else {
       uni.showToast({
-        title: error instanceof ApiError ? error.message : '发布失败，请重试',
+        title: describeError(error, '发布失败，请重试'),
         icon: 'none',
       })
     }

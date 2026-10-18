@@ -11,6 +11,7 @@ import { Camera, ChevronLeft, KeyRound, Trash2, UserRound } from 'lucide-vue-nex
 import { currentUser, isAuthenticated, loadCurrentUser } from '@/services/session'
 import { changePassword, deleteAvatar, updateDisplayName, uploadAvatar } from '@/services/profile'
 import { ApiError, resolveUrl } from '@/services/http'
+import { describeError } from '@/services/errors'
 
 // —— 昵称修改 ——
 const displayName = ref('')
@@ -138,16 +139,13 @@ async function handleSavePassword() {
   }
 }
 
-/** 统一错误文案转换 */
+/** 统一错误文案转换：映射表集中在 services/errors，本页只补头像专属的状态码提示 */
 function friendlyError(error: unknown): string {
   if (error instanceof ApiError) {
-    if (error.status === 0) return '无法连接服务器，请检查网络'
     if (error.status === 413) return '头像图片过大（上限 2MB）'
     if (error.status === 415) return '仅支持 JPEG / PNG / WebP 图片'
-    if (error.code === 'validation_error') return error.message
-    return error.message
   }
-  return '操作失败，请稍后再试'
+  return describeError(error, '操作失败，请稍后再试')
 }
 
 /** 返回上一页（无上一页时回首页） */

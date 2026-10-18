@@ -15,7 +15,7 @@ import { isAdmin } from '@/services/session'
 import type { ApiLyric, ApiTrack } from '@/types/music'
 
 // —— 列表 / 选择 / 搜索过滤状态 ——
-const tracks = ref<ApiTrack[]>([])
+const tracks = ref<ApiTrack[]>([]) // 本地可变副本：后端契约是 readonly 数组，此处保存可原地更新的副本
 const selectedId = ref('')
 const query = ref('')
 const missingMetadata = ref(false) // 是否只看缺少元数据的曲目
@@ -59,7 +59,7 @@ async function loadTracks() {
       missingMetadata: missingMetadata.value,
       pageSize: 100,
     })
-    tracks.value = result.items
+    tracks.value = [...result.items]
     if (!tracks.value.some((track) => track.id === selectedId.value)) {
       selectTrack(tracks.value[0] ?? null)
     } else if (selectedTrack.value) {

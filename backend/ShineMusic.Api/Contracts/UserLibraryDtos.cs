@@ -70,6 +70,7 @@ public sealed record UpdateSongRequestRequest(string? Status, string? AdminNote,
 /// <param name="MatchedTrackId">已采纳并匹配的曲库曲目标识；未匹配时为 null。</param>
 /// <param name="CreatedAt">请求创建时间（UTC）。</param>
 /// <param name="UpdatedAt">请求最近更新时间（UTC）。</param>
+/// <param name="CreatedByMe">是否由当前查看用户本人提交。</param>
 public sealed record SongRequestDto(
     Guid Id,
     string Title,

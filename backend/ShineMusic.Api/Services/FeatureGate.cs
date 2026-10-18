@@ -58,7 +58,7 @@ internal sealed class FeatureGateActionFilter(string featureName, IOptions<Featu
         {
             // 返回 404 而非 403：对无权限/未开放功能统一伪装成资源不存在，减少接口面暴露。
             context.Result = new NotFoundObjectResult(new ApiErrorResponse(new ApiErrorDetail(
-                "resource_not_found",
+                ErrorCodes.ResourceNotFound,
                 "The requested resource was not found.",
                 context.HttpContext.TraceIdentifier)));
             return;

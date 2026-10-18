@@ -25,6 +25,11 @@ namespace ShineMusic.Api.Endpoints;
 [Route("api/v1/admin/invitations")]
 [Authorize(Roles = "admin")]
 [Tags("Admin Invitations")]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status403Forbidden)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+[ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
 public sealed class InvitationController : ControllerBase
 {
     // 【POST /api/v1/admin/invitations】创建邀请并发送邀请邮件（管理员）。
@@ -42,9 +47,9 @@ public sealed class InvitationController : ControllerBase
         CancellationToken cancellationToken)
     {
         if (!TryNormalizeEmail(request.Email, out var email, out var normalizedEmail))
-            return ValidationError(HttpContext, "email", "A valid email address is required."); // 400：邮箱缺失/格式非法
+            return ApiResults.ValidationError(HttpContext, "email", "A valid email address is required."); // 400：邮箱缺失/格式非法
         if (await userManager.FindByEmailAsync(email) is not null)
-            return Results.Conflict(new ApiErrorResponse(new ApiErrorDetail("resource_conflict", "An account already exists for this email.", HttpContext.TraceIdentifier))); // 409：邮箱已注册
+            return Results.Conflict(new ApiErrorResponse(new ApiErrorDetail(ErrorCodes.ResourceConflict, "An account already exists for this email.", HttpContext.TraceIdentifier))); // 409：邮箱已注册
 
         var now = DateTime.UtcNow;
         var existingPending = await db.Invitations.AnyAsync(invitation =>
@@ -52,7 +57,7 @@ public sealed class InvitationController : ControllerBase
             invitation.Status == InvitationStatuses.Sent && invitation.ExpiresAtUtc > now,
             cancellationToken);
         if (existingPending)
-            return Results.Conflict(new ApiErrorResponse(new ApiErrorDetail("resource_conflict", "An active invitation already exists for this email.", HttpContext.TraceIdentifier))); // 409：已有未过期的 Sent 邀请
+            return Results.Conflict(new ApiErrorResponse(new ApiErrorDetail(ErrorCodes.ResourceConflict, "An active invitation already exists for this email.", HttpContext.TraceIdentifier))); // 409：已有未过期的 Sent 邀请
 
         // 生成一次性明文令牌（仅随邮件下发），数据库只存哈希；到期时长取自 AuthOptions。
         var secret = TokenService.CreateRandomToken();
@@ -105,7 +110,7 @@ public sealed class InvitationController : ControllerBase
             else
             {
                 if (!InvitationStatuses.All.Contains(normalizedStatus))
-                    return ValidationError(HttpContext, "status", "The invitation status is not supported."); // 400：状态枚举非法
+                    return ApiResults.ValidationError(HttpContext, "status", "The invitation status is not supported."); // 400：状态枚举非法
                 query = query.Where(invitation => invitation.Status == normalizedStatus);
             }
         }
@@ -138,9 +143,9 @@ public sealed class InvitationController : ControllerBase
     {
         var invitation = await db.Invitations.FirstOrDefaultAsync(item => item.Id == invitationId, cancellationToken);
         if (invitation is null)
-            return NotFound(HttpContext); // 404
+            return ApiResults.NotFound(HttpContext); // 404
         if (invitation.Status is InvitationStatuses.Redeemed or InvitationStatuses.Revoked)
-            return Results.Conflict(new ApiErrorResponse(new ApiErrorDetail("resource_conflict", "This invitation can no longer be resent.", HttpContext.TraceIdentifier))); // 409：终态邀请不可重发
+            return Results.Conflict(new ApiErrorResponse(new ApiErrorDetail(ErrorCodes.ResourceConflict, "This invitation can no longer be resent.", HttpContext.TraceIdentifier))); // 409：终态邀请不可重发
 
         // 旧令牌立即作废：换发新随机令牌、状态回到 Created、到期时间重新起算、SentAt 清空。
         var now = DateTime.UtcNow;
@@ -165,9 +170,9 @@ public sealed class InvitationController : ControllerBase
     {
         var invitation = await db.Invitations.FirstOrDefaultAsync(item => item.Id == invitationId, cancellationToken);
         if (invitation is null)
-            return NotFound(HttpContext); // 404
+            return ApiResults.NotFound(HttpContext); // 404
         if (invitation.Status is InvitationStatuses.Redeemed or InvitationStatuses.Revoked)
-            return Results.Conflict(new ApiErrorResponse(new ApiErrorDetail("resource_conflict", "This invitation can no longer be revoked.", HttpContext.TraceIdentifier))); // 409
+            return Results.Conflict(new ApiErrorResponse(new ApiErrorDetail(ErrorCodes.ResourceConflict, "This invitation can no longer be revoked.", HttpContext.TraceIdentifier))); // 409
 
         invitation.Status = InvitationStatuses.Revoked;
         AdminAudit.Add(HttpContext, db, "invitation.revoked", "invitation", invitation.Id);
@@ -180,7 +185,7 @@ public sealed class InvitationController : ControllerBase
     /// <param name="secret">本次生成的明文邀请令牌，仅传给邮件发送器。</param>
     /// <param name="db">DI：持久化投递状态。</param>
     /// <param name="emailSender">DI：邮件发送抽象。</param>
-    /// <param name="context">DI：失败时记录日志、取 TraceIdentifier。</param>
+    /// <param name="ctx">DI：失败时记录日志、取 TraceIdentifier。</param>
     /// <param name="cancellationToken">请求取消令牌。</param>
     /// <returns>201 + InvitationDto（Sent）；503 email_delivery_failed（已落库 DeliveryFailed，允许后续重发）。</returns>
     // 投递失败时把失败状态持久化，但绝不把一次性邀请明文令牌泄露到响应中。
@@ -210,7 +215,7 @@ public sealed class InvitationController : ControllerBase
                 .CreateLogger("InvitationEmail")
                 .LogWarning(exception, "Invitation email delivery failed for invitation {InvitationId}.", invitation.Id);
             return Results.Json(
-                new ApiErrorResponse(new ApiErrorDetail("email_delivery_failed", "The invitation was created but the email could not be delivered.", ctx.TraceIdentifier)),
+                new ApiErrorResponse(new ApiErrorDetail(ErrorCodes.EmailDeliveryFailed, "The invitation was created but the email could not be delivered.", ctx.TraceIdentifier)),
                 statusCode: StatusCodes.Status503ServiceUnavailable); // 503：资源已创建但外部依赖（邮件）不可用
         }
     }
@@ -255,7 +260,7 @@ public sealed class InvitationController : ControllerBase
     private static DateTime AsUtc(DateTime value) => DateTime.SpecifyKind(value, DateTimeKind.Utc);
 
     /// <summary>解析并校验分页参数：page 默认 1 且 ≥1；pageSize 默认 20，范围 1~100。</summary>
-    /// <param name="context">DI 上下文，用于构造错误响应。</param>
+    /// <param name="ctx">DI 上下文，用于构造错误响应。</param>
     /// <param name="page">查询字符串 page。</param>
     /// <param name="pageSize">查询字符串 pageSize。</param>
     /// <param name="error">输出：校验失败时的 400 IResult。</param>
@@ -268,19 +273,13 @@ public sealed class InvitationController : ControllerBase
         size = pageSize ?? 20;
         error = null;
         if (pageNumber < 1)
-            error = ValidationError(ctx, "page", "page must be at least 1.");
+            error = ApiResults.ValidationError(ctx, "page", "page must be at least 1.");
         else if (size is < 1 or > 100)
-            error = ValidationError(ctx, "pageSize", "pageSize must be between 1 and 100.");
+            error = ApiResults.ValidationError(ctx, "pageSize", "pageSize must be between 1 and 100.");
         return error is null;
     }
 
-    /// <summary>构造字段级 400 validation_error 响应。</summary>
-    private static IResult ValidationError(HttpContext ctx, string field, string message) =>
-        Results.BadRequest(new ApiErrorResponse(new ApiErrorDetail("validation_error", $"{field}: {message}", ctx.TraceIdentifier)));
 
-    /// <summary>构造统一 404 resource_not_found 响应。</summary>
-    private static IResult NotFound(HttpContext ctx) => Results.NotFound(
-        new ApiErrorResponse(new ApiErrorDetail("resource_not_found", "The requested resource was not found.", ctx.TraceIdentifier)));
 }
 
 public sealed record CreateInvitationRequest(string? Email); // 创建邀请请求体：受邀邮箱

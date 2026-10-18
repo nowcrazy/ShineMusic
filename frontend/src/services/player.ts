@@ -22,7 +22,7 @@ interface PlayerState {
   /** 当前曲目的默认歌词；null 表示无歌词或尚未加载 */
   currentLyric: ApiLyric | null
   /** 播放队列（顺序即播放顺序） */
-  queue: Track[]
+  queue: readonly Track[]
   /** 当前曲目在队列中的下标，-1 表示空队列 */
   queueIndex: number
   /** 是否正在播放（暂停/出错/停止时为 false） */
@@ -116,7 +116,7 @@ function reportTransition(previous: Track | null, positionSec: number, nextTrack
  * @param track 要播放的曲目（audioUrl 需已可直接访问）
  * @param queue 可选的播放队列
  */
-export function playTrack(track: Track, queue?: Track[]) {
+export function playTrack(track: Track, queue?: readonly Track[]) {
   const audio = ensureContext()
   // 上报上一首的结束/跳过信号（此时 currentTime 仍为上一首的进度）
   reportTransition(state.currentTrack, state.currentTime, track.id)
