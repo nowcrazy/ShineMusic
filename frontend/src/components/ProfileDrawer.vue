@@ -1,0 +1,291 @@
+<script setup lang="ts">
+/**
+ * 头像抽屉（QQ 式左侧滑出）：点击头像后滑出的个人菜单。
+ * 内容：资料摘要（头像/昵称/邮箱/角色徽章）+ 功能入口（个人资料；主题外观——内嵌展开直接切换；
+ *       管理员：导入审核/曲目维护/邀请管理）+ 退出登录。
+ * 触发：首页顶部头像与“我的”tab 资料卡（未登录时走登录页，不打开抽屉）。
+ * 面板常驻 DOM 以支持滑入/滑出过渡，关闭时 pointer-events 置空不影响页面交互。
+ * 对应页面：pages/profile（个人资料）；退出走 services/session（清空本地收藏/歌单/曲库后重启首页）。
+ */
+import { computed, ref, watch } from 'vue'
+import { AudioLines, Bell, Check, ChevronRight, Inbox, LogOut, Mail, Palette, ShieldCheck, Upload, UserCog, X } from 'lucide-vue-next'
+import { currentUser, isAdmin, logout } from '@/services/session'
+import { resetLibrary } from '@/services/library'
+import { resetFeedback } from '@/services/feedback'
+import { resetMyLibrary } from '@/services/user-library'
+import { refreshUnreadCount, resetNotifications, unreadCount } from '@/services/notifications'
+import { applyTheme, currentTheme, THEMES, type ThemeId } from '@/services/theme'
+import { resolveUrl } from '@/services/http'
+
+// 显隐由父组件 v-model 控制
+const props = defineProps<{ modelValue: boolean }>()
+const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>()
+
+// 头像首字母：显示名首字符大写，缺省 S（无上传头像时的回退展示）
+const avatarLetter = computed(() => currentUser.value?.displayName?.slice(0, 1).toUpperCase() || 'S')
+
+// 主题区块内嵌展开状态：点击「主题外观」行切换，展开后直接在下方点选，无需跳页
+const themeExpanded = ref(false)
+
+// 退出请求进行中（防止 Modal 回调重复提交）
+const loggingOut = ref(false)
+
+/** 关闭抽屉 */
+function close() {
+  emit('update:modelValue', false)
+}
+
+// 抽屉打开时刷新未读消息数：用户每次拉出菜单都能看到最新角标，无需轮询常驻。
+watch(
+  () => props.modelValue,
+  (open) => {
+    if (open) void refreshUnreadCount()
+  },
+)
+
+/** 未读角标文本：超过 99 显示 99+ */
+const unreadLabel = computed(() => (unreadCount.value > 99 ? '99+' : String(unreadCount.value)))
+
+/** 跳转站内信页 */
+function goNotifications() {
+  close()
+  uni.navigateTo({ url: '/pages/notifications/index' })
+}
+
+/** 选中某个主题（点击即生效并持久化，全站 CSS 令牌变量即时换肤） */
+function selectTheme(id: ThemeId) {
+  if (currentTheme.value === id) return
+  applyTheme(id)
+  uni.showToast({ title: `已切换为「${THEMES.find((theme) => theme.id === id)?.name}」`, icon: 'none' })
+}
+
+/** 跳转个人资料页 */
+function goProfile() {
+  close()
+  uni.navigateTo({ url: '/pages/profile/index' })
+}
+
+/** 跳转管理员曲库导入审核页 */
+function goImportManagement() {
+  close()
+  uni.navigateTo({ url: '/pages/admin/import' })
+}
+
+/** 跳转管理员曲目维护页 */
+function goCatalogManagement() {
+  close()
+  uni.navigateTo({ url: '/pages/admin/catalog' })
+}
+
+/** 跳转管理员歌单管理页 */
+function goCollectionManagement() {
+  close()
+  uni.navigateTo({ url: '/pages/admin/collections' })
+}
+
+/** 跳转管理员邀请管理页 */
+function goInvitationManagement() {
+  close()
+  uni.navigateTo({ url: '/pages/admin/invitation' })
+}
+
+/** 跳转管理员需求管理页 */
+function goRequestManagement() {
+  close()
+  uni.navigateTo({ url: '/pages/admin/requests' })
+}
+
+/**
+ * 退出登录：二次确认后调用登出接口、清空本地收藏/歌单/曲库/反馈状态并重启到首页。
+ */
+function handleLogout() {
+  uni.showModal({
+    title: '退出登录',
+    content: '退出后收藏与歌单仍保留在账号中，下次登录可继续使用。',
+    confirmText: '退出',
+    success: async ({ confirm }) => {
+      if (!confirm || loggingOut.value) return
+      loggingOut.value = true
+      try {
+        await logout()
+        resetLibrary()
+        resetMyLibrary()
+        resetFeedback()
+        resetNotifications()
+        uni.showToast({ title: '已退出', icon: 'none' })
+        setTimeout(() => uni.reLaunch({ url: '/pages/home/index' }), 300)
+      } finally {
+        loggingOut.value = false
+      }
+    },
+  })
+}
+</script>
+
+<template>
+  <view class="drawer-root" :class="{ open: props.modelValue }">
+    <!-- 遮罩：点击关闭 -->
+    <view class="drawer-mask" @tap="close"></view>
+
+    <!-- 抽屉面板 -->
+    <view class="drawer-panel">
+      <!-- 头部：品牌 + 关闭 -->
+      <view class="drawer-head">
+        <view class="drawer-brand">
+          <view class="drawer-mark"><AudioLines :size="17" :stroke-width="2.7" /></view>
+          <text class="drawer-brand-name">shine<span>.</span></text>
+        </view>
+        <view class="drawer-close" @tap="close"><X :size="19" /></view>
+      </view>
+
+      <!-- 资料摘要 -->
+      <view class="drawer-profile">
+        <view class="drawer-avatar">
+          <image v-if="currentUser?.avatarUrl" class="drawer-avatar-img" :src="resolveUrl(currentUser.avatarUrl)" mode="aspectFill" />
+          <text v-else>{{ avatarLetter }}</text>
+        </view>
+        <view class="drawer-info">
+          <text class="drawer-user">{{ currentUser?.displayName }}</text>
+          <text class="drawer-mail">{{ currentUser?.email }}</text>
+          <view class="drawer-roles">
+            <text class="drawer-role">听众</text>
+            <text v-if="isAdmin" class="drawer-role admin"><ShieldCheck :size="12" /><text>管理员</text></text>
+          </view>
+        </view>
+      </view>
+
+      <!-- 功能入口：个人资料 + 主题外观（内嵌展开）+ 管理员功能（仅管理员） -->
+      <scroll-view class="drawer-menu-scroll" scroll-y :show-scrollbar="false">
+        <view class="drawer-menu">
+          <view class="drawer-item" @tap="goProfile">
+            <view class="drawer-icon profile-icon"><UserCog :size="19" /></view>
+            <text class="drawer-item-title">个人资料</text>
+            <ChevronRight :size="16" class="drawer-item-chevron" />
+          </view>
+
+          <!-- 消息：需求被拒绝/入库等通知，右侧显示未读角标 -->
+          <view class="drawer-item" @tap="goNotifications">
+            <view class="drawer-icon notify-icon"><Bell :size="19" /></view>
+            <text class="drawer-item-title">消息</text>
+            <text v-if="unreadCount > 0" class="unread-badge">{{ unreadLabel }}</text>
+            <ChevronRight :size="16" class="drawer-item-chevron" />
+          </view>
+
+          <!-- 主题外观：点击展开内嵌主题选择，选中即切换，不再跳转独立页面 -->
+          <view class="drawer-item" @tap="themeExpanded = !themeExpanded">
+            <view class="drawer-icon theme-icon"><Palette :size="19" /></view>
+            <text class="drawer-item-title">主题外观</text>
+            <ChevronRight :size="16" class="drawer-item-chevron" :class="{ rotated: themeExpanded }" />
+          </view>
+          <view v-if="themeExpanded" class="theme-inline">
+            <view
+              v-for="theme in THEMES"
+              :key="theme.id"
+              class="theme-chip"
+              :class="{ active: currentTheme === theme.id }"
+              @tap="selectTheme(theme.id)"
+            >
+              <view class="theme-chip-swatch" :style="{ background: theme.swatch.bg }">
+                <view class="theme-chip-dot" :style="{ background: theme.swatch.accent }"></view>
+                <view class="theme-chip-bar" :style="{ background: theme.swatch.text }"></view>
+              </view>
+              <view class="theme-chip-copy">
+                <text class="theme-chip-name">{{ theme.name }}</text>
+                <text class="theme-chip-tone">{{ theme.tone }}</text>
+              </view>
+              <view v-if="currentTheme === theme.id" class="theme-chip-check"><Check :size="13" /></view>
+            </view>
+          </view>
+
+          <view v-if="isAdmin" class="drawer-item" @tap="goRequestManagement">
+            <view class="drawer-icon admin-icon"><Inbox :size="19" /></view>
+            <text class="drawer-item-title">需求管理</text>
+            <ChevronRight :size="16" class="drawer-item-chevron" />
+          </view>
+          <view v-if="isAdmin" class="drawer-item" @tap="goCollectionManagement">
+            <view class="drawer-icon collection-icon"><AudioLines :size="19" /></view>
+            <text class="drawer-item-title">歌单管理</text>
+            <ChevronRight :size="16" class="drawer-item-chevron" />
+          </view>
+          <view v-if="isAdmin" class="drawer-item" @tap="goImportManagement">
+            <view class="drawer-icon import-icon"><Upload :size="19" /></view>
+            <text class="drawer-item-title">曲库导入审核</text>
+            <ChevronRight :size="16" class="drawer-item-chevron" />
+          </view>
+          <view v-if="isAdmin" class="drawer-item" @tap="goCatalogManagement">
+            <view class="drawer-icon admin-icon"><ShieldCheck :size="19" /></view>
+            <text class="drawer-item-title">曲目维护</text>
+            <ChevronRight :size="16" class="drawer-item-chevron" />
+          </view>
+          <view v-if="isAdmin" class="drawer-item" @tap="goInvitationManagement">
+            <view class="drawer-icon invite-icon"><Mail :size="19" /></view>
+            <text class="drawer-item-title">邀请管理</text>
+            <ChevronRight :size="16" class="drawer-item-chevron" />
+          </view>
+        </view>
+      </scroll-view>
+
+      <!-- 底部：退出登录 -->
+      <view class="drawer-foot">
+        <view class="drawer-logout" @tap="handleLogout"><LogOut :size="18" /><text>退出登录</text></view>
+      </view>
+    </view>
+  </view>
+</template>
+
+<style lang="scss" scoped>
+/* 头像抽屉（QQ 式左侧滑出 · 玻璃质感） */
+.drawer-root { position: fixed; inset: 0; z-index: 100; pointer-events: none; }
+.drawer-root.open { pointer-events: auto; }
+.drawer-mask { position: absolute; inset: 0; background: rgba(8, 10, 14, .52); opacity: 0; transition: opacity .25s ease; }
+.drawer-root.open .drawer-mask { opacity: 1; }
+.drawer-panel { position: absolute; top: 0; bottom: 0; left: 0; display: flex; width: 640rpx; flex-direction: column; padding: calc(env(safe-area-inset-top) + 30rpx) 40rpx calc(env(safe-area-inset-bottom) + 30rpx); background: var(--sm-page-bg); box-shadow: 16rpx 0 54rpx rgba(0, 0, 0, .38); transform: translateX(-103%); transition: transform .3s cubic-bezier(.32, .72, 0, 1); box-sizing: border-box; }
+.drawer-root.open .drawer-panel { transform: translateX(0); }
+.drawer-head { display: flex; align-items: center; justify-content: space-between; }
+.drawer-brand { display: flex; align-items: center; gap: 11rpx; }
+.drawer-mark { display: grid; place-items: center; width: 40rpx; height: 40rpx; border-radius: 13rpx; background: var(--sm-surface-3); border: 1rpx solid var(--sm-border-strong); color: var(--sm-accent); }
+.drawer-brand-name { font-family: 'Manrope', sans-serif; font-size: 32rpx; font-weight: 800; color: var(--sm-text); }
+.drawer-brand-name span { color: var(--sm-accent); }
+.drawer-close { display: grid; place-items: center; width: 60rpx; height: 60rpx; border-radius: 50%; background: var(--sm-surface-3); color: var(--sm-text-2); }
+.drawer-profile { display: flex; align-items: center; gap: 22rpx; margin-top: 44rpx; padding: 28rpx 26rpx; border: 1rpx solid var(--sm-border); border-radius: 22rpx; background: var(--sm-surface); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); }
+.drawer-avatar { display: grid; flex: none; place-items: center; width: 108rpx; height: 108rpx; border: 1rpx solid var(--sm-border-strong); border-radius: 50%; background: var(--sm-avatar-bg); color: var(--sm-cover-ink); font-size: 40rpx; font-weight: 800; overflow: hidden; }
+.drawer-avatar-img { width: 100%; height: 100%; }
+.drawer-info { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 8rpx; }
+.drawer-user { overflow: hidden; color: var(--sm-text); font-size: 27rpx; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
+.drawer-mail { overflow: hidden; color: var(--sm-text-2); font-size: 16rpx; text-overflow: ellipsis; white-space: nowrap; }
+.drawer-roles { display: flex; gap: 10rpx; margin-top: 4rpx; }
+.drawer-role { display: flex; align-items: center; gap: 5rpx; padding: 5rpx 14rpx; border: 1rpx solid var(--sm-border); border-radius: 30rpx; background: var(--sm-surface); color: var(--sm-text-2); font-size: 14rpx; font-weight: 700; }
+.drawer-role.admin { border-color: var(--sm-accent-soft-border); background: var(--sm-accent-soft); color: var(--sm-accent); }
+/* 菜单区可滚动（主题展开后内容变长，底部退出按钮保持吸底） */
+.drawer-menu-scroll { flex: 1; min-height: 0; margin-top: 30rpx; }
+.drawer-menu { display: flex; flex-direction: column; }
+.drawer-item { display: flex; align-items: center; gap: 18rpx; padding: 24rpx 8rpx; border-bottom: 1rpx solid var(--sm-divider); }
+.drawer-icon { display: grid; flex: none; place-items: center; width: 66rpx; height: 66rpx; border-radius: 18rpx; background: var(--sm-accent-soft); color: var(--sm-accent); }
+.drawer-icon.profile-icon { background: var(--sm-accent-soft); color: var(--sm-accent); }
+.drawer-icon.theme-icon { background: var(--sm-accent-3-soft); color: var(--sm-accent-3); }
+.drawer-icon.collection-icon { background: var(--sm-info-soft); color: var(--sm-accent-2); }
+.drawer-icon.import-icon { background: var(--sm-info-soft); color: var(--sm-accent-2); }
+.drawer-icon.admin-icon { background: var(--sm-accent-soft); color: var(--sm-accent); }
+.drawer-icon.invite-icon { background: var(--sm-accent-3-soft); color: var(--sm-accent-3); }
+.drawer-icon.notify-icon { background: var(--sm-warn-soft); color: var(--sm-warn); }
+/* 未读角标：贴在「消息」标题右侧，与标题同一行 */
+.unread-badge { flex: none; min-width: 34rpx; padding: 2rpx 10rpx; border-radius: 20rpx; background: var(--sm-danger); color: #fff; font-size: 13rpx; font-weight: 800; text-align: center; }
+.drawer-item-title { flex: 1; color: var(--sm-text); font-size: 22rpx; font-weight: 600; }
+.drawer-item-chevron { flex: none; color: var(--sm-text-3); transition: transform .2s ease; }
+.drawer-item-chevron.rotated { transform: rotate(90deg); }
+
+/* 内嵌主题选择：2 列色卡，选中态高亮描边 */
+.theme-inline { display: grid; grid-template-columns: 1fr 1fr; gap: 14rpx; padding: 6rpx 8rpx 20rpx; }
+.theme-chip { display: flex; align-items: center; gap: 12rpx; padding: 14rpx; border: 1rpx solid var(--sm-border); border-radius: 18rpx; background: var(--sm-surface); transition: border-color .2s ease; }
+.theme-chip.active { border-color: var(--sm-accent); box-shadow: 0 0 0 2rpx var(--sm-accent-soft-border); }
+.theme-chip-swatch { position: relative; display: flex; flex: none; align-items: flex-end; width: 64rpx; height: 64rpx; padding: 10rpx; border: 1rpx solid var(--sm-border); border-radius: 12rpx; overflow: hidden; }
+.theme-chip-dot { width: 14rpx; height: 14rpx; border-radius: 50%; }
+.theme-chip-bar { position: absolute; top: 10rpx; right: 10rpx; width: 22rpx; height: 6rpx; border-radius: 3rpx; opacity: .55; }
+.theme-chip-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 4rpx; }
+.theme-chip-name { overflow: hidden; color: var(--sm-text); font-size: 17rpx; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.theme-chip-tone { color: var(--sm-text-3); font-size: 12rpx; }
+.theme-chip-check { display: grid; flex: none; place-items: center; width: 34rpx; height: 34rpx; border-radius: 50%; background: var(--sm-accent); color: var(--sm-accent-ink); }
+
+.drawer-foot { padding-top: 24rpx; }
+.drawer-logout { display: flex; align-items: center; justify-content: center; gap: 12rpx; height: 92rpx; border: 1rpx solid var(--sm-danger-soft-border); border-radius: 46rpx; background: var(--sm-danger-soft); color: var(--sm-danger); font-size: 20rpx; font-weight: 700; }
+</style>

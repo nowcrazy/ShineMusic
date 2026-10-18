@@ -1,0 +1,53 @@
+{
+    "name" : "Shine Music",
+    "appid" : "__UNI__SHINEMUSIC",
+    "description" : "A music discovery and listening app",
+    "versionName" : "0.1.0",
+    "versionCode" : "10",
+    "transformPx" : false,
+    "vueVersion" : "3",
+    "app-plus" : {
+        "usingComponents" : true,
+        "nvueStyleCompiler" : "uni-app",
+        "compilerVersion" : 3,
+        "compatible" : {
+            "ignoreVersion" : true
+        },
+        "distribute" : {
+            "android" : {
+                "packagename" : "com.shinemusic.app",
+                "permissions" : [
+                    "<uses-permission android:name=\"android.permission.INTERNET\"/>",
+                    "<uses-permission android:name=\"android.permission.ACCESS_NETWORK_STATE\"/>"
+                ]
+            },
+            "ios" : {
+                "appid" : "com.shinemusic.app"
+            },
+            "sdkConfigs" : {
+                "payment" : {
+                    "alipay" : {
+                        "__platform__" : [ "ios", "android" ]
+                    },
+                    "weixin" : {
+                        "__platform__" : [ "ios", "android" ],
+                        "appid" : "",
+                        "UniversalLinks" : ""
+                    }
+                }
+            }
+        },
+        "modules" : {
+            "Barcode" : {},
+            "Bluetooth" : {},
+            "Camera" : {},
+            "Contacts" : {}
+        }
+    },
+    "app-harmony" : {
+        "bundleName" : "com.shinemusic.app",
+        "versionCode" : 10,
+        "versionName" : "0.1.0"
+    },
+    "locale" : "zh-Hans"
+}

@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ShineMusic 服务器选型对比报告</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --card:#ffffff; --ink:#1f2933; --muted:#6b7785;
+    --line:#e4e8ee; --blue:#1763d6; --blue2:#e8f0fe; --green:#0a8f5b;
+    --amber:#c87f09; --red:#c0392b; --tag:#eef2f7;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+       background:var(--bg);color:var(--ink);line-height:1.65;font-size:15px}
+  .wrap{max-width:1080px;margin:0 auto;padding:32px 22px 60px}
+  header{background:linear-gradient(135deg,#1763d6,#0a8f5b);color:#fff;border-radius:14px;
+         padding:30px 32px;box-shadow:0 8px 24px rgba(23,99,214,.18)}
+  header h1{margin:0 0 6px;font-size:26px;letter-spacing:.5px}
+  header p{margin:4px 0 0;opacity:.92;font-size:14px}
+  .meta{margin-top:14px;font-size:12.5px;opacity:.85}
+  section{background:var(--card);border:1px solid var(--line);border-radius:12px;
+          padding:22px 26px;margin-top:20px;box-shadow:0 2px 8px rgba(31,41,51,.04)}
+  h2{font-size:19px;margin:0 0 14px;padding-left:11px;border-left:4px solid var(--blue)}
+  h3{font-size:15.5px;margin:18px 0 8px;color:var(--blue)}
+  p{margin:8px 0}
+  ul,ol{margin:8px 0;padding-left:22px}
+  li{margin:5px 0}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+  th{background:var(--blue2);color:#103d8c;font-weight:600}
+  tr:nth-child(even) td{background:#fafbfc}
+  .tag{display:inline-block;background:var(--tag);border-radius:6px;padding:1px 8px;
+       font-size:12px;color:var(--muted);margin:2px 2px 0 0}
+  .pill{display:inline-block;border-radius:20px;padding:2px 10px;font-size:12px;font-weight:600}
+  .pill.ok{background:#e6f6ee;color:var(--green)}
+  .pill.mid{background:#fdf3e0;color:var(--amber)}
+  .pill.no{background:#fdeaea;color:var(--red)}
+  .note{background:#fff8e6;border:1px solid #f1e0b0;border-radius:8px;padding:10px 14px;font-size:13px;color:#7a5b10}
+  .key{background:var(--blue2);border-radius:8px;padding:12px 16px;font-size:14px;margin:10px 0}
+  .key b{color:var(--blue)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin:14px 0}
+  .box{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:#fbfcfe}
+  .box h4{margin:0 0 6px;font-size:14px;color:var(--blue)}
+  .box p{font-size:13px;margin:4px 0;color:var(--muted)}
+  .score{font-size:22px;font-weight:700;color:var(--green)}
+  .calc{font-family:"SFMono-Regular",Consolas,monospace;background:#1f2933;color:#e6edf3;
+        border-radius:8px;padding:12px 14px;font-size:13px;overflow-x:auto}
+  .reco{border:2px solid var(--green);border-radius:12px;padding:18px 22px;background:#f4fbf7}
+  .reco h2{border-color:var(--green);color:var(--green)}
+  footer{margin-top:24px;font-size:12px;color:var(--muted);text-align:center}
+  .small{font-size:12px;color:var(--muted)}
+  mark{background:#fff2a8;padding:0 3px;border-radius:3px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>ShineMusic 服务器选型对比报告</h1>
+  <p>面向「大内存 + 资源持续膨胀」场景的三年期云服务器选型分析</p>
+  <div class="meta">生成日期：2026-10-18 ｜ 项目路径：C:/Learn/ShineMusic ｜ 项目形态：.NET 后端 + 前端 + 音频/图片媒体资源</div>
+</header>
+
+<!-- 一、需求拆解 -->
+<section>
+  <h2>一、需求拆解（先对齐，再比价）</h2>
+  <div class="grid">
+    <div class="box"><h4>① 内存要大</h4><p>后端跑 .NET 服务，且很可能需要做音频处理、转码、缓存（Redis/内存缓存）。内存优化型实例（内存:CPU ≈ 8:1）比通用型更划算。</p></div>
+    <div class="box"><h4>② 资源越来越大</h4><p>data/ 里已有 m4a/mp3/flac/jpg 等媒体，且会持续上传。这是<mark>存储增长</mark>，不是内存增长——两者要用不同手段解决。</p></div>
+    <div class="box"><h4>③ 三年周期</h4><p>不能只看首购价。各家「首购 1~3 折」很香，但<mark>续费/第 2、3 年</mark>才是大头，必须按三年总成本来比。</p></div>
+    <div class="box"><h4>④ 国内访问</h4><p>面向国内用户需 ICP 备案，带宽与延迟敏感，首选国内大厂云，而非 AWS/GCP 亚太节点。</p></div>
+  </div>
+  <div class="key">
+    <b>核心结论：</b>「内存要大」→ 选<b>内存优化型实例</b>；「资源越来越大」→ 用<b>对象存储（OSS/COS/OBS）</b>承接媒体，
+    让存储与计算<b>解耦</b>独立扩容。这样三年里你只需横向加存储、必要时纵向升实例规格，不会被整机升配绑架。
+  </div>
+</section>
+
+<!-- 二、架构建议 -->
+<section>
+  <h2>二、推荐架构（决定成本上限的关键）</h2>
+  <h3>把「算」和「存」分开</h3>
+  <ul>
+    <li><b>计算层：</b>1 台内存优化型云服务器（ECS/CVM/ECS），装 Linux + .NET 运行时 + 应用 + 本地缓存。系统盘 100~200G ESSD 只放系统与应用，<b>不放媒体</b>。</li>
+    <li><b>存储层：</b>对象存储桶（OSS/COS/OBS）专门存音频/图片。无限扩容、按量付费、11 个 9 可靠性，且能通过 CDN 加速分发。</li>
+    <li><b>数据层：</b>若用数据库，小项目可用本机 PostgreSQL/MySQL；量起来后迁到各家托管数据库（RDS），避免和媒体抢磁盘。</li>
+  </ul>
+  <div class="note">⚠️ 反例：如果把媒体都塞进云服务器云盘，存储从 200G 涨到 2T，你得不停给整机升配买更大云盘，单价远高于对象存储，且迁移麻烦、有上限。</div>
+</section>
+
+<!-- 三、厂商对比总表 -->
+<section>
+  <h2>三、候选厂商横向对比</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>厂商</th><th>内存优化型实例族</th><th>对象存储（标准 ¥/GB/月）</th>
+        <th>备案/合规</th><th>优势</th><th>劣势</th><th>综合推荐</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><b>阿里云</b><br><span class="small">ECS</span></td>
+        <td>内存型 r7 / r8i<br>（内存:CPU=8:1）</td>
+        <td>OSS：0.12（本地冗余）<br>0.15（同城冗余）</td>
+        <td>支持，流程成熟</td>
+        <td>生态最全、文档好、OSS 最稳；媒体处理/CDN 一体化</td>
+        <td>标准存储单价略高；大规格刊例价偏高</td>
+        <td><span class="pill ok">首选</span></td>
+      </tr>
+      <tr>
+        <td><b>腾讯云</b><br><span class="small">CVM</span></td>
+        <td>内存型 M5 / MA3<br>（内存:CPU=8:1）</td>
+        <td>COS：0.099</td>
+        <td>支持，流程成熟</td>
+        <td>对象存储单价最低；新用户折扣衔接顺；音视频（VOD）生态强，契合音乐项目</td>
+        <td>内存型刊例价与阿里接近；部分机型库存少</td>
+        <td><span class="pill ok">首选并列</span></td>
+      </tr>
+      <tr>
+        <td><b>华为云</b><br><span class="small">ECS</span></td>
+        <td>内存优化型 r7 / r8<br>（内存:CPU=8:1）</td>
+        <td>OBS：0.099</td>
+        <td>支持，政企合规强</td>
+        <td>对象存储价低；政企/等保场景最稳；新用户常送试用</td>
+        <td>开发者生态/文档弱于阿里腾讯；社区资源少</td>
+        <td><span class="pill mid">备选</span></td>
+      </tr>
+      <tr>
+        <td><b>火山引擎</b><br><span class="small">字节</span></td>
+        <td>内存型 r/m 系列</td>
+        <td>TOS：≈0.099</td>
+        <td>支持</td>
+        <td>价格常更激进；音视频（veImageX/直播）能力强</td>
+        <td>生态较新、企业案例少；长期稳定性待观察</td>
+        <td><span class="pill mid">备选/压价用</span></td>
+      </tr>
+      <tr>
+        <td><b>UCloud / 京东云</b></td>
+        <td>内存型族</td>
+        <td>≈0.10~0.12</td>
+        <td>支持</td>
+        <td>可作为比价压价筹码；部分配置便宜</td>
+        <td>规模与稳定性弱于头部三家</td>
+        <td><span class="pill no">仅比价</span></td>
+      </tr>
+      <tr>
+        <td><b>AWS / Azure</b></td>
+        <td>R 系列 / E 系列</td>
+        <td>S3 ≈$0.023/GB</td>
+        <td>国内需单独合规</td>
+        <td>全球覆盖、生态最强</td>
+        <td>国内延迟高、需跨境合规、价格与运维成本高</td>
+        <td><span class="pill no">不推荐(国内)</span></td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="small">说明：内网互通、同厂商「计算+存储」组合通常比跨厂商更省流量费，所以优先在一家内闭环。</p>
+</section>
+
+<!-- 四、内存型实例价格参考 -->
+<section>
+  <h2>四、内存型实例规格 & 价格参考（估算）</h2>
+  <p class="small">以下为「内存优化型」按包年估算（含约 40G 系统盘 + 基础带宽的刊例折算，仅供量级参考，<b>实际以官网活动价/计算器为准</b>）。价格随首购折扣、地域、操作系统浮动较大。</p>
+  <table>
+    <thead>
+      <tr><th>规格（vCPU/内存）</th><th>阿里云 r7 估算</th><th>腾讯云 M5 估算</th><th>华为云 r7 估算</th><th>备注</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>4 核 / 32 GB</td><td>≈ ¥5,400/年</td><td>≈ ¥4,800/年</td><td>≈ ¥5,000/年</td><td>起步够用，缓存小</td></tr>
+      <tr><td><b>8 核 / 64 GB</b> ⭐</td><td>≈ ¥10,800/年</td><td>≈ ¥9,500/年</td><td>≈ ¥10,000/年</td><td><b>推荐基线：内存大、能跑转码+缓存</b></td></tr>
+      <tr><td>16 核 / 128 GB</td><td>≈ ¥21,600/年</td><td>≈ ¥19,000/年</td><td>≈ ¥20,000/年</td><td>资源很重或并发高时再上</td></tr>
+    </tbody>
+  </table>
+  <div class="note">⭐ 推荐基线 <b>8 核 64 GB</b>：满足「内存要大」且留足升级空间。若预算紧，先用 4 核 32 GB，半年内不够再纵向升配（内存型同族升配通常不停机/短暂停机）。</div>
+  <p class="small">三年包年通常有折扣：腾讯云「3 年低至 3.9 折起」、阿里/华为常 5~6 折。下面测算同时给「刊例 3 年」和「包 3 年优惠」两档。</p>
+</section>
+
+<!-- 五、对象存储价格 -->
+<section>
+  <h2>五、对象存储单价对比（承接「越来越大的资源」）</h2>
+  <table>
+    <thead><tr><th>厂商</th><th>标准存储 ¥/GB/月</th><th>低频 ¥/GB/月</th><th>归档 ¥/GB/月</th><th>预留/资源包优惠</th></tr></thead>
+    <tbody>
+      <tr><td>阿里云 OSS</td><td>0.12</td><td>0.08</td><td>0.03</td><td>500GB 预留空间低至 ¥119/年（≈0.02/GB/月）</td></tr>
+      <tr><td>腾讯云 COS</td><td>0.099</td><td>0.08</td><td>≈0.03</td><td>按量+资源包，新用户前 10GB 免费</td></tr>
+      <tr><td>华为云 OBS</td><td>0.099</td><td>0.08</td><td>0.033</td><td>按量+资源包</td></tr>
+    </tbody>
+  </table>
+  <div class="key"><b>冷热分层是省钱关键：</b>热门歌曲放<mark>标准</mark>，老歌/备份放<mark>低频/归档</mark>。随资源增长，把不常访问的自动沉降到低频层，存储费能砍掉一半以上。</div>
+</section>
+
+<!-- 六、三年成本测算 -->
+<section>
+  <h2>六、三年总成本测算（含资源增长模型）</h2>
+  <h3>增长假设（可替换为你的真实数据）</h3>
+  <ul>
+    <li>起始媒体：<b>100 GB</b>（data/ 现有资源）</li>
+    <li>月新增：<b>50 GB/月</b>（上传歌曲、图片等）</li>
+    <li>三年末累计：100 + 50×36 ≈ <b>1,900 GB（≈1.9 TB）</b></li>
+    <li>三年平均存量 ≈ <b>1,000 GB（1 TB）</b>（线性增长的平均值）</li>
+  </ul>
+
+  <h3>A. 对象存储 3 年费用（按标准存储均价 0.10 ¥/GB/月，1 TB 平均存量）</h3>
+  <div class="calc">1,000 GB × 0.10 元/GB/月 × 12 月 × 3 年 ≈ <b>¥3,600</b>
+若用预留空间包 + 冷热分层，可压到 ≈ <b>¥2,000~2,500</b></div>
+
+  <h3>B. 计算实例 3 年费用（8 核 64 GB 内存型）</h3>
+  <table>
+    <thead><tr><th>厂商</th><th>刊例 3 年（≈年价×3）</th><th>包 3 年优惠参考（5~6 折估）</th></tr></thead>
+    <tbody>
+      <tr><td>阿里云 r7 8C64G</td><td>≈ ¥32,400</td><td>≈ ¥16,000~19,000</td></tr>
+      <tr><td>腾讯云 M5 8C64G</td><td>≈ ¥28,500</td><td>≈ ¥14,000~17,000</td></tr>
+      <tr><td>华为云 r7 8C64G</td><td>≈ ¥30,000</td><td>≈ ¥15,000~18,000</td></tr>
+    </tbody>
+  </table>
+
+  <h3>C. 三年总拥有成本（TCO）合计</h3>
+  <table>
+    <thead><tr><th>厂商</th><th>实例(包3年优惠) + 存储(标准)</th><th>实例(包3年优惠) + 存储(分层优化)</th></tr></thead>
+    <tbody>
+      <tr><td>阿里云</td><td>≈ ¥19,600~22,600</td><td>≈ ¥18,000~21,500</td></tr>
+      <tr><td><b>腾讯云</b></td><td><b>≈ ¥17,600~20,600</b></td><td><b>≈ ¥16,000~19,500</b></td></tr>
+      <tr><td>华为云</td><td>≈ ¥18,600~21,600</td><td>≈ ¥17,000~20,500</td></tr>
+    </tbody>
+  </table>
+  <p class="small">未含：公网带宽（建议 5~10 Mbps 固定或按量，另算约 ¥800~2,000/年）、CDN（媒体分发，按流量）、数据库托管（若用 RDS 另算）。这些三家量级相近。</p>
+</section>
+
+<!-- 七、增长应对策略 -->
+<section>
+  <h2>七、「资源越来越大」的三年应对路线</h2>
+  <ol>
+    <li><b>第 0 年（现在）：</b>买 8 核 64 GB 内存型（包 3 年锁定折扣）+ 对象存储按量起步。媒体全进对象存储，绝不放大盘。</li>
+    <li><b>第 1 年：</b>存量到 ~700 GB。买对象存储<b>预留空间/资源包</b>（如阿里 500GB/年包）摊薄单价；开启<b>生命周期规则</b>把 90 天未访问的沉降到低频。</li>
+    <li><b>第 2 年：</b>存量到 ~1.3 TB。若 CPU/内存吃紧，纵向升到 16 核 128 GB（同族升配，成本低）；存储继续按量+包组合。</li>
+    <li><b>第 3 年：</b>存量近 1.9 TB。若流量上来，加 CDN 加速媒体分发，源站压力转移；评估是否拆分存储桶/多区域。</li>
+  </ol>
+  <div class="note">关键点：存储增长由<b>对象存储弹性承接</b>，计算增长由<b>纵向升配</b>承接，二者互不影响——这正是比「整机不断升配」省心省钱的原因。</div>
+</section>
+
+<!-- 八、推荐结论 -->
+<section class="reco">
+  <h2>八、最终推荐</h2>
+  <p><b>主推：腾讯云</b>（CVM 内存型 M5 8 核 64 GB + COS 对象存储）</p>
+  <ul>
+    <li>对象存储单价最低（0.099）、标准/低频/归档分层清晰；</li>
+    <li>音视频生态（VOD、媒体处理）天然契合音乐项目；</li>
+    <li>三年包年折扣力度大，综合 TCO 最低（≈ ¥1.6~2.1 万 / 3 年）。</li>
+  </ul>
+  <p><b>并列首选：阿里云</b>（ECS 内存型 r7 + OSS）</p>
+  <ul>
+    <li>生态/文档/稳定性最佳，OSS 最成熟，媒体处理与 CDN 一体；</li>
+    <li>若你已在用阿里其他服务（域名、备案），闭环更顺；标准存储单价略高但可用预留空间包抵消。</li>
+  </ul>
+  <p><b>备选：华为云</b>（价格接近、政企合规强）；<b>火山引擎</b>可作为压价筹码（同配置常更便宜，但生态较新）。</p>
+  <p class="small">不推荐 AWS/Azure 做国内主站（延迟、合规、成本）。若未来有出海需求，再叠加。</p>
+  <p class="small"><b>开发阶段替代：</b>若仅自测 / Demo / 小圈子自用，可先用「本地电脑 + 外网穿透（Cloudflare Tunnel / frp）」零月租跑起来，媒体同步进对象存储做备份；待流量与资源增长后，平滑迁移到上面任一云方案（详见第十一节）。</p>
+</section>
+
+<!-- 九、决策清单 -->
+<section>
+  <h2>九、决策清单（照着勾）</h2>
+  <ol>
+    <li>☐ 确定厂商（腾讯云 / 阿里云 二选一闭环，华为云备选）</li>
+    <li>☐ 实例：内存优化型 <b>8 核 64 GB</b>（预算紧则先 4 核 32 GB，半年内升配）</li>
+    <li>☐ 计费：<b>包 3 年</b>锁定折扣，别只买 1 年（续费贵）</li>
+    <li>☐ 系统盘：ESSD 100~200 GB，<b>只放系统+应用</b></li>
+    <li>☐ 对象存储：建桶专存媒体，开启<b>版本/防盗链/CDN</b></li>
+    <li>☐ 生命周期：配置 90 天未访问自动沉降低频/归档</li>
+    <li>☐ 买对象存储<b>预留空间/资源包</b>摊薄单价</li>
+    <li>☐ 带宽：5~10 Mbps 起步，或按量 + CDN 分发媒体</li>
+    <li>☐ 备案：域名 + ICP 备案（厂商控制台一站式）</li>
+    <li>☐ 监控：设置存储容量/费用告警，避免增长失控</li>
+  </ol>
+</section>
+
+<!-- 十、常见坑 -->
+<section>
+  <h2>十、避坑提醒</h2>
+  <ul>
+    <li><b>首购低价陷阱：</b>1~3 折仅首年，第 2、3 年恢复刊例价。务必按 3 年总成本比，或直接包 3 年。</li>
+    <li><b>带宽另算：</b>上面实例价多不含/仅含小带宽，媒体站点出口流量是大头，用 CDN 分流更划算。</li>
+    <li><b>不要把媒体放大盘：</b>云盘单价远高于对象存储且有上限，增长全靠对象存储。</li>
+    <li><b>预留空间包有门槛：</b>阿里 OSS 预留空间包需提前买、指定地域，买小了不抵、买大了浪费，按增长曲线估算。</li>
+    <li><b>跨厂商流量费：</b>计算与存储在同厂商内网互通免费，跨厂商走公网要钱。优先一家闭环。</li>
+  </ul>
+</section>
+
+<!-- 十一、补充方案：本地自建 + 外网穿透 -->
+<section>
+  <h2>十一、补充方案：本地自建 + 外网穿透（替代云服务器的选项）</h2>
+  <h3>做法</h3>
+  <ul>
+    <li>在你电脑上跑后端（.NET on Linux / WSL 或 Windows 直接跑）+ 媒体存本机磁盘。</li>
+    <li>用内网穿透工具把本地服务暴露到公网：<b>Cloudflare Tunnel</b>（免费、无需公网 IP、自带 HTTPS，最省心）、<b>frp</b>（自建中继，可控）、<b>ngrok</b>、<b>花生壳 / 路由侠</b>（国内傻瓜式）、<b>Tailscale / ZeroTier</b>（组网式）。</li>
+    <li>域名：用穿透商提供的子域名，或自备域名 + DDNS / 穿透面板绑定。</li>
+  </ul>
+
+  <h3>对比云服务器（针对你的两个硬需求）</h3>
+  <table>
+    <thead><tr><th>维度</th><th>本地 + 外网穿透</th><th>云服务器</th></tr></thead>
+    <tbody>
+      <tr><td><b>大内存（你的需求①）</b></td><td><span class="pill ok">✅ 白嫖</span> 用电脑现有 32/64GB 内存，零成本</td><td><span class="pill mid">付费</span> 需买内存优化型机型</td></tr>
+      <tr><td><b>资源越来越大（需求②）</b></td><td><span class="pill no">⚠️ 硬伤</span> 靠本机磁盘，需<b>自备备份</b>，无 11 个 9 冗余，磁盘坏=丢数据</td><td><span class="pill ok">✅ 强</span> 对象存储无限扩容 + 自动多副本</td></tr>
+      <tr><td><b>上行带宽</b></td><td><span class="pill no">❌ 致命</span> 家庭上行仅 30~100 Mbps，媒体并发一多即饱和</td><td><span class="pill ok">✅</span> 独享带宽 + CDN 分发</td></tr>
+      <tr><td><b>稳定性 / 在线</b></td><td><span class="pill mid">⚠️</span> 电脑不能关机/睡眠/断电，否则宕机</td><td><span class="pill ok">✅</span> SLA 99.9%+，7×24</td></tr>
+      <tr><td><b>备案 / 合规</b></td><td><span class="pill mid">⚠️</span> 正式域名服务国内需备案；穿透子域名属灰色地带</td><td><span class="pill ok">✅</span> 一站式备案</td></tr>
+      <tr><td><b>三年成本</b></td><td><span class="pill ok">💰 极低</span> 零月租，仅电费 ≈¥200~400/年 + 可能穿透服务费</td><td><span class="pill mid">¥1.6~2.1万</span> / 3 年</td></tr>
+      <tr><td><b>安全</b></td><td><span class="pill no">⚠️</span> 暴露家庭网络，需自行加固</td><td><span class="pill ok">✅</span> 厂商安全基座</td></tr>
+      <tr><td><b>扩展性</b></td><td><span class="pill no">❌</span> 难横向扩容</td><td><span class="pill ok">✅</span> 弹性升配</td></tr>
+    </tbody>
+  </table>
+
+  <h3>结论与适用边界</h3>
+  <ul>
+    <li><span class="pill ok">适合</span> 开发 / 测试、个人 Demo、极低流量或纯私用（自己 / 小圈子听歌）。</li>
+    <li><span class="pill no">不适合</span> 你明确说「资源会越来越大」且要对外提供服务——家庭<b>上行带宽</b>和<b>本地磁盘无备份</b>正是本地方案两大硬伤，与增长需求直接冲突。</li>
+    <li><span class="pill mid">折中路线</span> 先用「本地 + 穿透」做开发联调省钱；等流量 / 资源起来再迁云。因架构一致（若媒体已放对象存储则更顺），迁移成本低。</li>
+  </ul>
+  <div class="note">提示：若选本地方案，媒体务必也同步到对象存储（OSS/COS/OBS）做备份与分发，别只放本机硬盘——这样将来迁云时数据无需搬动。</div>
+</section>
+
+<footer>
+  本报告价格为 2026-10 公开资料整理的估算量级，实际以各云厂商官网计费器 / 活动页为准。
+  架构与选型方法适用于「大内存 + 存储持续增长」类项目，可按真实增长曲线替换第六节假设重算。
+  新增「本地自建 + 外网穿透」方案对比（见第十一节），用于开发/测试/私用场景，长期对外服务仍推荐云服务器。
+</footer>
+
+</div>
+</body>
+</html>

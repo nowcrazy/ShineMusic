@@ -1,0 +1,25 @@
+﻿{
+  "$schema": "https://json.schemastore.org/launchsettings.json",
+  "profiles": {
+    "ShineMusic.Api (本机 5143)": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": false,
+      "applicationUrl": "http://localhost:5143",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "Auth__SigningKey": "ShineMusicDevLocalSigningKey_0123456789ABCDEF"
+      }
+    },
+    "ShineMusic.Api-LAN (真机 5180)": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": false,
+      "applicationUrl": "http://0.0.0.0:5180",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "Auth__SigningKey": "ShineMusicDevLocalSigningKey_0123456789ABCDEF"
+      }
+    }
+  }
+}

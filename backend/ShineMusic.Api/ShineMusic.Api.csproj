@@ -1,0 +1,27 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>138c4529-d20e-4cfe-a5ee-cf646790df91</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.12" />
+    <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" Version="10.0.12" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.12">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.12" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="10.3.0" />
+    <PackageReference Include="TagLibSharp" Version="2.3.0" />
+    <!-- MailKit/MimeKit 4.18.1：修复 STARTTLS 响应注入（CVE-2026-41319，≥4.16.0 修复） -->
+    <PackageReference Include="MailKit" Version="4.18.1" />
+    <PackageReference Include="MimeKit" Version="4.18.1" />
+    <!-- 钉住 Pkcs 到已修复版本（CVE-2026-84008 / CVE-2026-70162，10.0.13 修复；MimeKit 仅要求 >=10.0.0，默认会解析到受影响的 10.0.0） -->
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
+  </ItemGroup>
+
+</Project>

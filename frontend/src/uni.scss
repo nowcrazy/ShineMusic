@@ -1,0 +1,32 @@
+// =============================================================================
+// Shine Music 全局基础样式
+// uni.scss 会被 uni-app 自动注入到每个组件的 <style lang="scss"> 中，
+// 因此此处只定义全局元素重置（避免 CSS 规则被重复编译进每个组件）。
+//
+// 主题相关：
+// - 主题令牌（CSS 变量 --sm-*）与各主题取值统一定义在 App.vue 的全局 <style> 中；
+// - 页面样式一律引用 var(--sm-*)，不再使用 SCSS 颜色变量，
+//   以便运行时通过 <html data-sm-theme> 切换主题；
+// - 主题服务见 src/services/theme.ts（切换 / 持久化 / 主题清单）。
+// =============================================================================
+
+page,
+view,
+text,
+button,
+input,
+textarea {
+  box-sizing: border-box;
+}
+
+button {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  line-height: inherit;
+}
+
+button::after {
+  border: 0;
+}

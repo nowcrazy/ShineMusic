@@ -1,0 +1,93 @@
+{
+  "pages": [
+    {
+      "path": "pages/home/index",
+      "style": {
+        "navigationStyle": "custom",
+        "enablePullDownRefresh": false
+      }
+    },
+    {
+      "path": "pages/catalog/collection",
+      "style": { "navigationBarTitleText": "精选专题" }
+    },
+    {
+      "path": "pages/catalog/album",
+      "style": { "navigationBarTitleText": "专辑" }
+    },
+    {
+      "path": "pages/catalog/artist",
+      "style": { "navigationBarTitleText": "艺人" }
+    },
+    {
+      "path": "pages/catalog/tracks",
+      "style": { "navigationBarTitleText": "曲目" }
+    },
+    {
+      "path": "pages/recommend/daily",
+      "style": { "navigationBarTitleText": "每日推荐", "enablePullDownRefresh": true }
+    },
+    {
+      "path": "pages/playlist/detail",
+      "style": { "navigationBarTitleText": "歌单" }
+    },
+    {
+      "path": "pages/playlist/pick-track",
+      "style": { "navigationBarTitleText": "添加歌曲" }
+    },
+    {
+      "path": "pages/requests/index",
+      "style": { "navigationBarTitleText": "歌曲需求" }
+    },
+    {
+      "path": "pages/notifications/index",
+      "style": { "navigationBarTitleText": "消息" }
+    },
+    {
+      "path": "pages/library/upload",
+      "style": { "navigationBarTitleText": "上传本地音频" }
+    },
+    {
+      "path": "pages/settings/theme",
+      "style": { "navigationBarTitleText": "主题外观" }
+    },
+    {
+      "path": "pages/profile/index",
+      "style": { "navigationBarTitleText": "个人资料" }
+    },
+    {
+      "path": "pages/admin/collections",
+      "style": { "navigationBarTitleText": "歌单管理" }
+    },
+    {
+      "path": "pages/admin/catalog",
+      "style": { "navigationBarTitleText": "曲目维护" }
+    },
+    {
+      "path": "pages/admin/import",
+      "style": { "navigationBarTitleText": "曲库导入审核" }
+    },
+    {
+      "path": "pages/admin/requests",
+      "style": { "navigationBarTitleText": "需求管理" }
+    },
+    {
+      "path": "pages/admin/invitation",
+      "style": { "navigationBarTitleText": "邀请管理" }
+    },
+    {
+      "path": "pages/auth/login",
+      "style": { "navigationBarTitleText": "登录" }
+    },
+    {
+      "path": "pages/auth/register",
+      "style": { "navigationBarTitleText": "邀请注册" }
+    }
+  ],
+  "globalStyle": {
+    "backgroundColor": "#10131a",
+    "navigationBarBackgroundColor": "#10131a",
+    "navigationBarTextStyle": "white",
+    "navigationBarTitleText": "Shine Music"
+  }
+}
