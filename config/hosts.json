@@ -1,15 +1,16 @@
 {
   "local": {
     "label": "#Local · 本地开发 / 局域网（yarn dev:h5、真机调试）",
-    "lanIp": "192.168.31.145",
+    "lanIp": "192.168.3.27",
     "webPort": 5173,
-    "apiPort": 5143,
+    "apiPort": 5180,
     "appApiPort": 5180,
     "apiHost": "localhost"
   },
   "server": {
-    "label": "#Server · 生产部署（yarn build:h5、上线）",
-    "webOrigin": "https://music.your-domain.com",
-    "apiOrigin": "https://music.your-domain.com"
+    "label": "#Server · 生产部署：Tailscale Funnel 公网地址（永久固定），改完重新 build:app 打 APK",
+    "webOrigin": "https://node.tail78b610.ts.net",
+    "apiOrigin": "",
+    "appApiOrigin": "https://node.tail78b610.ts.net"
   }
 }

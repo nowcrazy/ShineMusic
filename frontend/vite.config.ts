@@ -24,6 +24,8 @@ interface HostsConfig {
   server?: {
     webOrigin?: string
     apiOrigin?: string
+    /** APK 发布包内置的公网稳定地址（DDNS 域名/服务器 IP），未配置时回退局域网真机调试地址 */
+    appApiOrigin?: string
   }
 }
 
@@ -86,11 +88,12 @@ export default defineConfig(({ mode }) => {
 
   // 客户端 API 基础地址（http.ts 通过 __SM_API_BASE__ 读取）：
   //   dev        → 空串，走相对路径 + devServer 代理
-  //   app        → 真机可访问的完整地址
+  //   app        → APK 发布包内置地址：优先 server.appApiOrigin（公网稳定地址），未配置时回退局域网真机调试地址；
+  //                用户还可在 App 设置里运行时覆盖（http.ts 的 setApiBaseOverride）
   //   production → 同域留空（Nginx 反代）；前后端不同域时用 server.apiOrigin
   const apiBase =
     mode === 'app'
-      ? `http://${lanIp}:${appApiPort}`
+      ? server.appApiOrigin || `http://${lanIp}:${appApiPort}`
       : mode === 'production'
         ? server.apiOrigin && server.apiOrigin !== server.webOrigin
           ? server.apiOrigin

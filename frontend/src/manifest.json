@@ -1,6 +1,6 @@
 {
     "name" : "Shine Music",
-    "appid" : "__UNI__SHINEMUSIC",
+    "appid" : "__UNI__DC5E049",
     "description" : "A music discovery and listening app",
     "versionName" : "0.1.0",
     "versionCode" : "10",
@@ -16,13 +16,15 @@
         "distribute" : {
             "android" : {
                 "packagename" : "com.shinemusic.app",
+                "usesCleartextTraffic" : true,
                 "permissions" : [
                     "<uses-permission android:name=\"android.permission.INTERNET\"/>",
                     "<uses-permission android:name=\"android.permission.ACCESS_NETWORK_STATE\"/>"
                 ]
             },
             "ios" : {
-                "appid" : "com.shinemusic.app"
+                "appid" : "com.shinemusic.app",
+                "dSYMs" : false
             },
             "sdkConfigs" : {
                 "payment" : {
@@ -35,6 +37,9 @@
                         "UniversalLinks" : ""
                     }
                 }
+            },
+            "splashscreen" : {
+                "iosStyle" : "common"
             }
         },
         "modules" : {

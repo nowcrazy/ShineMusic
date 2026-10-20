@@ -18,12 +18,55 @@ import { getAccessToken, getRefreshToken } from './tokens'
 /** 后端 API 统一版本前缀，所有业务路径均以此开头，与后端路由 /api/v1 对齐 */
 export const API_PREFIX = '/api/v1'
 /**
- * 后端基础地址：由 vite.config.ts 从仓库根目录 config/hosts.json 统一注入 __SM_API_BASE__；
+ * 后端基础地址（构建期内置）：由 vite.config.ts 从仓库根目录 config/hosts.json 统一注入 __SM_API_BASE__；
  * 为空串时 H5 走相对路径 + devServer 代理。
  * VITE_API_BASE_URL 仅作为兜底（特殊场景手动覆盖用），日常不要再改它。
+ * 实际请求地址取 currentApiBase()：用户在设置页自定义的地址优先于构建期内置值。
  */
 export const API_BASE_URL: string =
   typeof __SM_API_BASE__ !== 'undefined' ? __SM_API_BASE__ : (import.meta.env.VITE_API_BASE_URL ?? '')
+
+/** 用户自定义服务器地址的本地存储键（设置页写入；删除该键即恢复内置地址） */
+export const SERVER_BASE_STORAGE_KEY = 'sm-server-base'
+
+/** 规范化服务器地址：去空白与尾部斜杠，未带协议时补 http:// */
+function normalizeServerBase(raw: string): string {
+  const trimmed = raw.trim().replace(/\/+$/, '')
+  return !trimmed || /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`
+}
+
+/** 运行时覆盖地址：设置页保存后立即生效，无需重启 App */
+let overrideBase = ''
+try {
+  const saved = uni.getStorageSync(SERVER_BASE_STORAGE_KEY)
+  if (typeof saved === 'string' && saved.trim()) overrideBase = normalizeServerBase(saved)
+} catch {
+  // 本地存储不可用时静默降级，走构建期内置地址
+}
+
+/** 当前生效的服务器地址：用户自定义 > 构建期内置 */
+export function currentApiBase(): string {
+  return overrideBase || API_BASE_URL
+}
+
+/** 读取用户自定义地址（设置页回显用），未自定义时为空串 */
+export function getApiBaseOverride(): string {
+  return overrideBase
+}
+
+/**
+ * 保存用户自定义服务器地址（设置页调用）：立即生效并持久化到本地存储。
+ * @param url 形如 http://域名或IP:端口；传空串清除自定义、恢复内置地址
+ */
+export function setApiBaseOverride(url: string) {
+  overrideBase = normalizeServerBase(url)
+  try {
+    if (overrideBase) uni.setStorageSync(SERVER_BASE_STORAGE_KEY, overrideBase)
+    else uni.removeStorageSync(SERVER_BASE_STORAGE_KEY)
+  } catch {
+    // 持久化失败不阻断：本次会话内已生效
+  }
+}
 /** 单次请求超时（毫秒）：避免弱网/后端无响应时请求长时间挂起 */
 const REQUEST_TIMEOUT_MS = 15000
 
@@ -59,14 +102,15 @@ interface RequestOptions {
 /**
  * 把后端相对路径解析为可请求的完整 URL。
  * - 已是 http(s) 绝对地址的原样返回（封面等可能由后端给出绝对地址）；
- * - 配置了 API_BASE_URL 时拼接为绝对地址（自动去掉末尾斜杠避免双斜杠）；
+ * - 有生效地址（用户自定义或构建期内置）时拼接为绝对地址（自动去掉末尾斜杠避免双斜杠）；
  * - 未配置时 H5 直接返回相对路径走 Vite 代理；非 H5 环境无法解析，告警后仍返回相对路径。
  * @param path 后端返回的相对路径或任意 http(s) URL
  * @returns 解析后的请求地址
  */
 export function resolveUrl(path: string): string {
   if (/^https?:\/\//i.test(path)) return path
-  if (API_BASE_URL) return `${API_BASE_URL.replace(/\/$/, '')}${path}`
+  const base = currentApiBase()
+  if (base) return `${base.replace(/\/$/, '')}${path}`
   // #ifdef H5
   return path
   // #endif
