@@ -44,3 +44,5 @@ desktop.ini
 
 # ---------- AI 助手的本地工作记录 ----------
 /.workbuddy-ai/
+/.trae
+/docs

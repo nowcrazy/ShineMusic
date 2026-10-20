@@ -625,12 +625,16 @@ onLaunch(() => {
  * ========================================================================== */
 html,
 body {
-  background-color: var(--sm-bg);
+  /* 页面底色用 --sm-page-bg（各主题的完整页面背景，自定义主题下为壁纸+遮罩），
+     而非纯色 --sm-bg：纯色会盖住自定义图片主题的壁纸，导致换肤无感。
+     注意必须用 background 简写：--sm-page-bg 在预设主题下是多层渐变，
+     background-color 装不下渐变，整条声明会失效变透明。 */
+  background: var(--sm-page-bg);
 }
 
 page {
   min-height: 100%;
-  background: var(--sm-bg);
+  background: var(--sm-page-bg);
   color: var(--sm-text);
   font-family: 'Avenir Next', Avenir, 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }

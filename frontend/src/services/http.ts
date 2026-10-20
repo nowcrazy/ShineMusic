@@ -119,6 +119,16 @@ export function setRefreshHandler(handler: () => Promise<boolean>) {
 }
 
 /**
+ * 主动触发一次令牌刷新（单飞去重由 session 端的 handler 保证）。
+ * 供绕过 uni.request 的请求路径（如文件上传、blob 拉取）在收到 401 时复用刷新机制。
+ * @returns 是否刷新成功（未注册处理器或无 refresh token 时为 false）
+ */
+export async function refreshAccessToken(): Promise<boolean> {
+  if (!refreshHandler || !getRefreshToken()) return false
+  return refreshHandler()
+}
+
+/**
  * 核心请求函数：发送 HTTP 请求并处理 401 自动刷新重试与错误归一化。
  *
  * 处理流程：

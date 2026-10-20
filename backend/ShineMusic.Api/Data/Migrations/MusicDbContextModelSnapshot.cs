@@ -1021,6 +1021,59 @@ namespace ShineMusic.Api.Data.Migrations
                     b.ToTable("TrackArtist");
                 });
 
+            modelBuilder.Entity("ShineMusic.Api.Data.TrackComment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Content")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("ParentId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("TrackId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ParentId");
+
+                    b.HasIndex("TrackId", "CreatedAtUtc");
+
+                    b.ToTable("TrackComments");
+                });
+
+            modelBuilder.Entity("ShineMusic.Api.Data.TrackCommentLike", b =>
+                {
+                    b.Property<Guid>("CommentId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("CommentId", "UserId");
+
+                    b.HasIndex("UserId", "CreatedAtUtc");
+
+                    b.ToTable("TrackCommentLikes");
+                });
+
             modelBuilder.Entity("ShineMusic.Api.Data.TrackGenre", b =>
                 {
                     b.Property<Guid>("TrackId")
@@ -1034,6 +1087,26 @@ namespace ShineMusic.Api.Data.Migrations
                     b.HasIndex("GenreId");
 
                     b.ToTable("TrackGenre");
+                });
+
+            modelBuilder.Entity("ShineMusic.Api.Data.UserFollow", b =>
+                {
+                    b.Property<Guid>("FollowerId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("FolloweeId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("FollowerId", "FolloweeId");
+
+                    b.HasIndex("FolloweeId", "CreatedAtUtc");
+
+                    b.HasIndex("FollowerId", "CreatedAtUtc");
+
+                    b.ToTable("UserFollows");
                 });
 
             modelBuilder.Entity("ShineMusic.Api.Data.UserLibraryItem", b =>
@@ -1163,6 +1236,42 @@ namespace ShineMusic.Api.Data.Migrations
                     b.HasKey("PlaylistId", "TrackId");
 
                     b.ToTable("UserPlaylistTracks");
+                });
+
+            modelBuilder.Entity("ShineMusic.Api.Data.UserThemeProfile", b =>
+                {
+                    b.Property<Guid>("UserId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Accent")
+                        .HasMaxLength(7)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Accent2")
+                        .HasMaxLength(7)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Accent3")
+                        .HasMaxLength(7)
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<float>("MaskOpacity")
+                        .HasColumnType("REAL");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("WallpaperExtension")
+                        .HasMaxLength(8)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("UserId");
+
+                    b.ToTable("UserThemeProfiles");
                 });
 
             modelBuilder.Entity("ShineMusic.Api.Data.UserTrackFeedback", b =>
@@ -1397,6 +1506,29 @@ namespace ShineMusic.Api.Data.Migrations
                     b.Navigation("Artist");
 
                     b.Navigation("Track");
+                });
+
+            modelBuilder.Entity("ShineMusic.Api.Data.TrackComment", b =>
+                {
+                    b.HasOne("ShineMusic.Api.Data.TrackComment", null)
+                        .WithMany()
+                        .HasForeignKey("ParentId")
+                        .OnDelete(DeleteBehavior.Cascade);
+
+                    b.HasOne("ShineMusic.Api.Data.Track", null)
+                        .WithMany()
+                        .HasForeignKey("TrackId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("ShineMusic.Api.Data.TrackCommentLike", b =>
+                {
+                    b.HasOne("ShineMusic.Api.Data.TrackComment", null)
+                        .WithMany()
+                        .HasForeignKey("CommentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("ShineMusic.Api.Data.TrackGenre", b =>

@@ -17,8 +17,8 @@ import { getTrackDefaultLyric } from './catalog'
 import { reportPlayEvent } from './feedback'
 import { EQ_PRESETS, findEqPreset, type EqBand } from './eq-presets'
 
-/** 循环模式：order 顺序播完停止 / all 列表循环 / one 单曲循环 */
-export type RepeatMode = 'order' | 'all' | 'one'
+/** 播放模式：order 顺序播完停止 / shuffle 随机播放 / one 单曲循环 */
+export type PlayMode = 'order' | 'shuffle' | 'one'
 
 /** 音效预设本地持久化 key */
 const EQ_STORAGE_KEY = 'sm_eq_preset'
@@ -41,10 +41,8 @@ interface PlayerState {
   duration: number
   /** 音频是否发生错误（地址失效/解码失败等），供 UI 展示错误态 */
   audioError: boolean
-  /** 随机播放开关（开启后自然播完/下一首时随机选曲） */
-  shuffle: boolean
-  /** 循环模式：all=列表循环（历史默认行为）、one=单曲循环、order=顺序播完停止 */
-  repeatMode: RepeatMode
+  /** 播放模式：order=顺序播完停止、shuffle=随机播放、one=单曲循环 */
+  playMode: PlayMode
   /** 当前音效预设 id（默认 flat=原声） */
   eqPreset: string
   /** 当前运行环境是否支持 EQ（H5 且有 Web Audio）；false 时 UI 应隐藏音效入口 */
@@ -71,8 +69,7 @@ const state = reactive<PlayerState>({
   currentTime: 0,
   duration: 0,
   audioError: false,
-  shuffle: false,
-  repeatMode: 'all',
+  playMode: 'order',
   eqPreset: loadInitialEqPreset(),
   eqSupported: isWebAudioSupported(),
 })
@@ -258,26 +255,25 @@ function randomOtherIndex(current: number, length: number): number {
 }
 
 /**
- * 自然播完的回调：根据循环模式 + 随机开关决定后续动作。
- * - 单曲循环：seek 回 0 重播当前曲，不动队列与歌词；
- * - 随机播放：随机切到另一首；
- * - 顺序播放到最后一首：停止（isPlaying=false，指针停在末尾）；
- * - 其余（列表循环 / 顺序未到末尾）：顺序下一首。
+ * 自然播完的回调：根据播放模式决定后续动作。
+ * - 单曲循环（one）：seek 回 0 重播当前曲；
+ * - 随机播放（shuffle）：随机切到另一首；
+ * - 顺序播放（order）：到最后一首则停止，否则顺序下一首。
  */
 function handleEnded() {
   if (!state.queue.length || !state.currentTrack) return
-  if (state.repeatMode === 'one') {
+  if (state.playMode === 'one') {
     engine?.seek(0)
     engine?.play()
     state.currentTime = 0
     return
   }
-  if (state.shuffle && state.queue.length > 1) {
+  if (state.playMode === 'shuffle' && state.queue.length > 1) {
     playTrack(state.queue[randomOtherIndex(state.queueIndex, state.queue.length)], state.queue)
     return
   }
-  const isLast = state.queueIndex === state.queue.length - 1
-  if (state.repeatMode === 'order' && isLast) {
+  // order：顺序播放到最后一首则停止，否则顺序下一首
+  if (state.queueIndex === state.queue.length - 1) {
     state.isPlaying = false
     return
   }
@@ -383,7 +379,7 @@ export function togglePlayback() {
 /** 切换到队列下一首（随机播放时随机选曲；其余按顺序，末尾循环回首部）；空队列时无操作。 */
 export function nextTrack() {
   if (!state.queue.length) return
-  if (state.shuffle && state.queue.length > 1) {
+  if (state.playMode === 'shuffle' && state.queue.length > 1) {
     playTrack(state.queue[randomOtherIndex(state.queueIndex, state.queue.length)], state.queue)
     return
   }
@@ -395,16 +391,17 @@ export function previousTrack() {
   playByOffset(-1)
 }
 
-/** 切换随机播放开关（开/关）。 */
-export function toggleShuffle() {
-  state.shuffle = !state.shuffle
+/** 从当前播放队列的指定下标开始播放（播放列表面板点击条目切歌）。越界或空队列时静默忽略。 */
+export function playFromQueue(index: number) {
+  const track = state.queue[index]
+  if (track) playTrack(track, state.queue)
 }
 
-/** 循环切换播放模式：单曲循环 → 列表循环 → 顺序播放。 */
-export function cycleRepeatMode() {
-  const order: RepeatMode[] = ['one', 'all', 'order']
-  const next = (order.indexOf(state.repeatMode) + 1) % order.length
-  state.repeatMode = order[next]
+/** 循环切换播放模式：顺序播放 → 随机播放 → 单曲循环。 */
+export function cyclePlayMode() {
+  const order: PlayMode[] = ['order', 'shuffle', 'one']
+  const next = (order.indexOf(state.playMode) + 1) % order.length
+  state.playMode = order[next]
 }
 
 /**
@@ -452,8 +449,8 @@ export function usePlayer() {
     togglePlayback,
     nextTrack,
     previousTrack,
-    toggleShuffle,
-    cycleRepeatMode,
+    playFromQueue,
+    cyclePlayMode,
     setEqPreset,
     seek,
     stopPlayback,

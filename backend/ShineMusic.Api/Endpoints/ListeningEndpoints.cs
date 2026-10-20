@@ -127,6 +127,63 @@ public sealed class ListeningController : ControllerBase
         return Results.NoContent();
     }
 
+    [HttpGet("history", Name = "GetMyListeningHistory")]
+    public async Task<IResult> GetHistory(
+        MusicDbContext db,
+        int? page,
+        int? pageSize,
+        CancellationToken cancellationToken)
+    {
+        if (!HttpContext.User.TryGetUserId(out var userId))
+            return Results.Unauthorized();
+        if (!TryGetPaging(page, pageSize, out var pagingError, out var pageNumber, out var size))
+            return pagingError!;
+
+        // 按曲目聚合成一条历史：取最近一次收听时间 + 累计播放次数。
+        var grouped = db.ListeningEvents.AsNoTracking()
+            .Where(evt => evt.UserId == userId)
+            .GroupBy(evt => evt.TrackId)
+            .Select(group => new
+            {
+                TrackId = group.Key,
+                LastPlayed = group.Max(evt => evt.OccurredAtUtc),
+                Count = group.Count()
+            });
+
+        var total = await grouped.CountAsync(cancellationToken);
+        var pageRows = await grouped
+            .OrderByDescending(row => row.LastPlayed)
+            .Skip((pageNumber - 1) * size).Take(size)
+            .ToListAsync(cancellationToken);
+
+        var trackIds = pageRows.Select(row => row.TrackId).ToList();
+        var trackMap = await CatalogController.AccessibleTracksWithDetails(db, userId)
+            .Where(track => trackIds.Contains(track.Id))
+            .ToDictionaryAsync(track => track.Id, cancellationToken);
+
+        var items = pageRows
+            .Where(row => trackMap.ContainsKey(row.TrackId))
+            .Select(row => new ListeningHistoryItemDto(
+                CatalogController.ToDto(trackMap[row.TrackId]),
+                row.LastPlayed,
+                row.Count))
+            .ToArray();
+
+        return Results.Ok(new PageResult<ListeningHistoryItemDto>(items, pageNumber, size, total));
+    }
+
+    private bool TryGetPaging(int? page, int? pageSize, out IResult? error, out int pageNumber, out int size)
+    {
+        pageNumber = page ?? 1;
+        size = pageSize ?? 20;
+        error = null;
+        if (pageNumber < 1)
+            error = ApiResults.ValidationError(HttpContext, "page", "page must be at least 1.");
+        else if (size < 1 || size > 100)
+            error = ApiResults.ValidationError(HttpContext, "pageSize", "pageSize must be between 1 and 100.");
+        return error is null;
+    }
+
     /// <summary>当前用户可访问的曲目：已公开曲目 + 本人上传的私有曲目。</summary>
     private static IQueryable<Track> AccessibleTracks(MusicDbContext db, Guid userId) =>
         db.Tracks.AsNoTracking()

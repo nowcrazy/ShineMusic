@@ -343,6 +343,16 @@ function swallow() {
 function artistLine(item: ApiSongRequest) {
   return item.albumTitle ? `${item.artistName} · ${item.albumTitle}` : item.artistName
 }
+
+/**
+ * 投票数展示：千/万以上缩写（1.2k / 3.4w）。
+ * 长数字在窄投票栏里会逐位换行竖排，缩写既美观也彻底避免溢出。
+ */
+function formatCount(n: number): string {
+  if (n >= 10000) return `${(n / 10000).toFixed(n % 10000 === 0 ? 0 : 1)}w`
+  if (n >= 1000) return `${(n / 1000).toFixed(n % 1000 === 0 ? 0 : 1)}k`
+  return String(n)
+}
 </script>
 
 <template>
@@ -383,17 +393,18 @@ function artistLine(item: ApiSongRequest) {
     <view v-else class="request-list">
       <view v-for="item in items" :key="item.id" class="request-card">
         <view class="vote-column" :class="{ voted: item.myVote }" @tap="handleVote(item)">
-          <ChevronUp :size="22" :stroke-width="item.myVote ? 3 : 2" />
-          <text class="vote-count">{{ item.voteCount }}</text>
+          <ChevronUp :size="20" :stroke-width="item.myVote ? 3 : 2" />
+          <text class="vote-count">{{ formatCount(item.voteCount) }}</text>
         </view>
         <view class="request-copy">
-          <text class="request-title">{{ item.title }}</text>
-          <text class="request-artist">{{ artistLine(item) }}</text>
-          <view class="request-meta">
+          <view class="title-row">
+            <text class="request-title">{{ item.title }}</text>
             <text class="status-badge" :class="`status-${statusMeta(item.status).tone}`">
               {{ statusMeta(item.status).label }}
             </text>
-            <text class="request-date">{{ formatDate(item.createdAt) }}</text>
+          </view>
+          <view class="request-meta">
+            <text class="request-artist">{{ artistLine(item) }} · {{ formatDate(item.createdAt) }}</text>
             <!-- 处理进度：展开查看时间线（提交 → 计划 → 处理中 → 已入库） -->
             <view class="timeline-toggle" @tap.stop="toggleTimeline(item)">
               <Clock3 :size="13" />
@@ -491,22 +502,24 @@ function artistLine(item: ApiSongRequest) {
 .tab-chip.active { border-color: transparent; background: var(--sm-accent); color: var(--sm-accent-ink); font-weight: 700; }
 .state-text { padding: 90rpx 20rpx; color: var(--sm-text-2); font-size: 19rpx; text-align: center; }
 .request-list { margin-top: 26rpx; display: flex; flex-direction: column; gap: 16rpx; }
-.request-card { display: flex; align-items: stretch; gap: 20rpx; padding: 24rpx 24rpx; border: 1rpx solid var(--sm-border); border-radius: 20rpx; background: var(--sm-surface); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); }
-.vote-column { display: flex; flex: none; flex-direction: column; align-items: center; justify-content: center; width: 86rpx; border-radius: 16rpx; background: var(--sm-divider); color: var(--sm-text-2); }
-.vote-column.voted { background: var(--sm-accent-soft); color: var(--sm-accent); }
-.vote-count { margin-top: 2rpx; font-size: 20rpx; font-weight: 800; }
-.request-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 8rpx; }
-.request-title { color: var(--sm-text); font-size: 22rpx; font-weight: 700; }
-.request-artist { color: var(--sm-text-2); font-size: 17rpx; }
-.request-meta { display: flex; align-items: center; gap: 14rpx; margin-top: 6rpx; }
-.status-badge { padding: 4rpx 14rpx; border-radius: 20rpx; font-size: 14rpx; font-weight: 700; }
+.request-card { display: flex; align-items: center; gap: 20rpx; padding: 24rpx; border: 1rpx solid var(--sm-border); border-radius: var(--sm-radius-card); background: var(--sm-surface); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); }
+/* 投票栏：紧凑胶囊，高度随内容自适应并垂直居中（不随卡片拉伸成长条）；
+   min-width 自适应数字宽度（配合缩写格式，永远单行不竖排），最大宽度封顶 */
+.vote-column { display: flex; flex: none; flex-direction: column; align-items: center; justify-content: center; min-width: 92rpx; max-width: 150rpx; padding: 14rpx 12rpx; border: 1rpx solid transparent; border-radius: 20rpx; background: var(--sm-divider); box-sizing: border-box; color: var(--sm-text-2); transition: transform .15s ease; }
+.vote-column:active { transform: scale(.94); }
+.vote-column.voted { background: var(--sm-accent-soft); border-color: var(--sm-accent-soft-border); color: var(--sm-accent); }
+.vote-count { margin-top: 2rpx; font-size: 26rpx; font-weight: 800; line-height: 1.15; white-space: nowrap; }
+.request-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 10rpx; }
+.title-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6rpx 12rpx; }
+.request-title { flex: 1; min-width: 0; color: var(--sm-text); font-size: 26rpx; font-weight: 700; line-height: 1.4; }
+.request-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8rpx 12rpx; }
+.status-badge { flex: none; padding: 4rpx 14rpx; border-radius: 20rpx; font-size: 14rpx; font-weight: 700; }
 .status-open { background: var(--sm-accent-soft); color: var(--sm-accent); }
 .status-planned { background: var(--sm-info-soft); color: var(--sm-accent-2); }
 .status-in_progress, .status-progress { background: var(--sm-warn-soft); color: var(--sm-warn); }
 .status-fulfilled { background: var(--sm-accent-soft); color: var(--sm-accent-2); }
 .status-declined { background: var(--sm-danger-soft); color: var(--sm-danger); }
 .status-withdrawn { background: var(--sm-divider); color: var(--sm-text-3); }
-.request-date { color: var(--sm-text-3); font-size: 14rpx; }
 /* 处理进度入口：小号文字按钮，点击展开时间线 */
 .timeline-toggle { display: inline-flex; align-items: center; gap: 5rpx; margin-left: auto; padding: 4rpx 12rpx; border-radius: 20rpx; background: var(--sm-surface-3); color: var(--sm-text-2); font-size: 13rpx; font-weight: 700; }
 /* 时间线：左侧竖线 + 圆点，右侧事件文案 */

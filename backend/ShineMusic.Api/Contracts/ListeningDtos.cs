@@ -20,6 +20,14 @@ public sealed record FeedbackRequest(string Kind);
 public sealed record UserFeedbackDto(Guid TrackId, string Kind, DateTime UpdatedAtUtc);
 
 /// <summary>
+/// 播放历史中的一条（某曲目最近一次收听 + 累计播放次数）。
+/// </summary>
+/// <param name="Track">曲目展示信息。</param>
+/// <param name="LastPlayedAtUtc">最近一次收听时间（UTC）。</param>
+/// <param name="PlayCount">累计播放次数。</param>
+public sealed record ListeningHistoryItemDto(TrackDto Track, DateTime LastPlayedAtUtc, int PlayCount);
+
+/// <summary>
 /// 每日推荐结果（GET /api/v1/recommendations/daily）。
 /// </summary>
 /// <param name="Date">推荐日期（yyyy-MM-dd，服务器本地日期）。</param>

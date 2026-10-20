@@ -117,12 +117,24 @@ export interface ApiCollectionSummary {
   trackCount: number
 }
 
+/** 来源：`backend/ShineMusic.Api/Contracts/SocialDtos.cs` */
+export interface ApiCommentLikeResult {
+  likeCount: number
+  likedByMe: boolean
+}
+
 /** 来源：`backend/ShineMusic.Api/Endpoints/CollectionManagementEndpoints.cs` */
 export interface ApiCreateCollection {
   title: string
   description?: string | null
   trackIds: readonly string[]
   artworkId?: string | null
+}
+
+/** 来源：`backend/ShineMusic.Api/Contracts/SocialDtos.cs` */
+export interface ApiCreateComment {
+  content: string
+  parentId?: string | null
 }
 
 /** 来源：`backend/ShineMusic.Api/Endpoints/InvitationEndpoints.cs` */
@@ -174,6 +186,13 @@ export interface ApiFeedback {
   kind: string
 }
 
+/** 来源：`backend/ShineMusic.Api/Contracts/SocialDtos.cs` */
+export interface ApiFollowStatus {
+  isFollowing: boolean
+  followersCount: number
+  followingCount: number
+}
+
 /** 来源：`backend/ShineMusic.Api/Contracts/LibraryImportDtos.cs` */
 export interface ApiImportMetadata {
   title?: string | null
@@ -210,9 +229,15 @@ export interface ApiImportTranscode {
 }
 
 /** 来源：`backend/ShineMusic.Api/Endpoints/InvitationEndpoints.cs` */
+export interface ApiInvitationCode {
+  code: string
+  invitation: ApiInvitation
+}
+
+/** 来源：`backend/ShineMusic.Api/Endpoints/InvitationEndpoints.cs` */
 export interface ApiInvitation {
   id: string
-  email: string
+  email?: string | null
   status: string
   createdAt: string
   expiresAt: string
@@ -223,7 +248,7 @@ export interface ApiInvitation {
 /** 来源：`backend/ShineMusic.Api/Endpoints/AuthEndpoints.cs` */
 export interface ApiInvitationValidation {
   email: string
-  channel: string // email | code
+  channel: string
   expiresAt: string
 }
 
@@ -253,6 +278,13 @@ export interface ApiLibraryImportItem {
 export interface ApiLibraryImportItemWithUploader {
   item: ApiLibraryImportItem
   uploadedByUserId?: string | null
+}
+
+/** 来源：`backend/ShineMusic.Api/Contracts/ListeningDtos.cs` */
+export interface ApiListeningHistoryItem {
+  track: ApiTrack
+  lastPlayedAtUtc: string
+  playCount: number
 }
 
 /** 来源：`backend/ShineMusic.Api/Endpoints/AuthEndpoints.cs` */
@@ -366,6 +398,7 @@ export interface ApiRegister {
   invitationToken?: string | null
   password: string
   displayName: string
+  email?: string | null
 }
 
 /** 来源：`backend/ShineMusic.Api/Contracts/UserUploadDtos.cs` */
@@ -472,6 +505,20 @@ export interface ApiSystemCapabilities {
   minimumPasswordStrength: number
 }
 
+/** 来源：`backend/ShineMusic.Api/Contracts/SocialDtos.cs` */
+export interface ApiTrackComment {
+  id: string
+  trackId: string
+  userId: string
+  userName: string
+  parentId?: string | null
+  content: string
+  createdAtUtc: string
+  replies?: readonly ApiTrackComment[] | null
+  likeCount: number
+  likedByMe: boolean
+}
+
 /** 来源：`backend/ShineMusic.Api/Contracts/StorageDtos.cs` */
 export interface ApiTrackDeleteResult {
   trackId: string
@@ -576,6 +623,15 @@ export interface ApiUpdateSongRequest {
   matchedTrackId?: string | null
 }
 
+/** 来源：`backend/ShineMusic.Api/Contracts/ProfileDtos.cs` */
+export interface ApiUpdateUserTheme {
+  accent?: string | null
+  accent2?: string | null
+  accent3?: string | null
+  maskOpacity: number
+  enabled: boolean
+}
+
 /** 来源：`backend/ShineMusic.Api/Contracts/UserUploadDtos.cs` */
 export interface ApiUploadPrecheckFile {
   fileName: string
@@ -618,6 +674,22 @@ export interface ApiUserLibraryItem {
   artworkUrl?: string | null
   isPublic: boolean
   addedAtUtc: string
+}
+
+/** 来源：`backend/ShineMusic.Api/Contracts/SocialDtos.cs` */
+export interface ApiUserSummary {
+  id: string
+  displayName: string
+}
+
+/** 来源：`backend/ShineMusic.Api/Contracts/ProfileDtos.cs` */
+export interface ApiUserTheme {
+  accent?: string | null
+  accent2?: string | null
+  accent3?: string | null
+  maskOpacity: number
+  enabled: boolean
+  wallpaperUrl?: string | null
 }
 
 /** 来源：`backend/ShineMusic.Api/Contracts/UserUploadDtos.cs` */

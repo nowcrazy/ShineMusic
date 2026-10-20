@@ -5,7 +5,7 @@
  * 方向 A 改动：封面放大到 96rpx、行高加大到 130rpx、卡片化（背景+圆角+无硬分隔线）
  */
 import { computed } from 'vue'
-import { Heart, Play } from 'lucide-vue-next'
+import { Heart, MessageCircle, Play } from 'lucide-vue-next'
 import type { Track } from '@/types/music'
 import { playTrack } from '@/services/player'
 import { favoriteIds, toggleFavorite } from '@/services/library'
@@ -31,6 +31,10 @@ const notInterested = computed(() => feedbackMap.value.get(props.track.id) === '
 
 function handlePlay() {
   playTrack(props.track, props.queue)
+}
+
+function handleComment() {
+  uni.navigateTo({ url: `/pages/track/detail?id=${props.track.id}` })
 }
 
 async function handleLike() {
@@ -79,6 +83,7 @@ function handleLongPress() {
         <Heart :size="18" :fill="favoriteIds.has(track.id) ? 'currentColor' : 'none'" />
       </view>
       <text class="tr-duration">{{ formatTime(track.duration) }}</text>
+      <view class="tr-comment" @tap.stop="handleComment"><MessageCircle :size="17" /></view>
       <view class="tr-play"><Play :size="15" fill="currentColor" /></view>
     </view>
   </view>
@@ -118,5 +123,6 @@ function handleLongPress() {
 .tr-like { display: grid; place-items: center; width: 44rpx; height: 44rpx; color: var(--sm-text-3); border-radius: 50%; }
 .tr-like.liked { color: var(--sm-danger); }
 .tr-duration { width: 64rpx; color: var(--sm-text-2); font-family: 'DM Sans', sans-serif; font-size: 18rpx; text-align: right; }
+.tr-comment { display: grid; place-items: center; width: 44rpx; height: 44rpx; color: var(--sm-text-3); border-radius: 50%; }
 .tr-play { display: grid; place-items: center; width: 44rpx; height: 44rpx; color: var(--sm-text-2); border-radius: 50%; }
 </style>

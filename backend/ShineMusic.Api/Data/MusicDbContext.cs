@@ -47,6 +47,14 @@ public sealed class MusicDbContext(DbContextOptions<MusicDbContext> options)
 	public DbSet<UserTrackFeedback> UserTrackFeedbacks => Set<UserTrackFeedback>();
 	public DbSet<DailyRecommendationItem> DailyRecommendationItems => Set<DailyRecommendationItem>();
 
+	// ===== 社交互动相关 DbSet =====
+	public DbSet<TrackComment> TrackComments => Set<TrackComment>();
+	public DbSet<UserFollow> UserFollows => Set<UserFollow>();
+	public DbSet<TrackCommentLike> TrackCommentLikes => Set<TrackCommentLike>();
+
+	// ===== 用户自定义图片主题 =====
+	public DbSet<UserThemeProfile> UserThemeProfiles => Set<UserThemeProfile>();
+
 	/// <summary>
 	/// 模型创建钩子：先应用 Identity 的基础表配置，再叠加业务表的索引、约束、关系与值转换配置。
 	/// </summary>
@@ -136,6 +144,15 @@ public sealed class MusicDbContext(DbContextOptions<MusicDbContext> options)
 		modelBuilder.Entity<UserNotification>().Property(notification => notification.ResourceType).HasMaxLength(64);
 		modelBuilder.Entity<UserNotification>().Property(notification => notification.ResourceId).HasMaxLength(100);
 
+		// ----- 用户自定义图片主题 -----
+		// 用户 Id 即主键：每用户至多一条配置（与 ApplicationUser 一对一，壁纸文件在 themes/ 目录）。
+		modelBuilder.Entity<UserThemeProfile>().HasKey(profile => profile.UserId);
+		// 颜色字段限长 7（#RRGGBB），壁纸扩展名限长 8（含前导点）。
+		modelBuilder.Entity<UserThemeProfile>().Property(profile => profile.Accent).HasMaxLength(7);
+		modelBuilder.Entity<UserThemeProfile>().Property(profile => profile.Accent2).HasMaxLength(7);
+		modelBuilder.Entity<UserThemeProfile>().Property(profile => profile.Accent3).HasMaxLength(7);
+		modelBuilder.Entity<UserThemeProfile>().Property(profile => profile.WallpaperExtension).HasMaxLength(8);
+
 		// ----- 管理员审计 -----
 		// (写入时间, 操作人) 复合索引：审计日志按时间线/操作人检索的主路径。
 		modelBuilder.Entity<AdminAuditEntry>().HasIndex(entry => new { entry.CreatedAtUtc, entry.ActorUserId });
@@ -213,6 +230,35 @@ public sealed class MusicDbContext(DbContextOptions<MusicDbContext> options)
 		modelBuilder.Entity<DailyRecommendationItem>().HasIndex(item => new { item.UserId, item.DateKey, item.TrackId }).IsUnique();
 		// (用户, 日期, 排名) 索引：按当日排名顺序取回推荐列表。
 		modelBuilder.Entity<DailyRecommendationItem>().HasIndex(item => new { item.UserId, item.DateKey, item.Rank });
+
+		// ----- 曲目评论 -----
+		// (曲目, 发表时间) 复合索引：拉取某曲目评论按时间排序。
+		modelBuilder.Entity<TrackComment>().HasIndex(comment => new { comment.TrackId, comment.CreatedAtUtc });
+		// 父评论索引：按父评论聚合回复（删除父评论时级联清理其回复）。
+		modelBuilder.Entity<TrackComment>().HasIndex(comment => comment.ParentId);
+		// 评论正文限长 500。
+		modelBuilder.Entity<TrackComment>().Property(comment => comment.Content).HasMaxLength(500);
+		// 评论 → 曲目：多对一，删除曲目时级联删除其全部评论。
+		modelBuilder.Entity<TrackComment>().HasOne<Track>().WithMany().HasForeignKey(comment => comment.TrackId).OnDelete(DeleteBehavior.Cascade);
+		// 评论 → 父评论：自引用多对一，删除父评论时级联删除其回复。
+		modelBuilder.Entity<TrackComment>().HasOne<TrackComment>().WithMany().HasForeignKey(comment => comment.ParentId).OnDelete(DeleteBehavior.Cascade);
+
+		// ----- 用户关注 -----
+		// (关注者, 被关注者) 复合主键：防止重复关注。
+		modelBuilder.Entity<UserFollow>().HasKey(follow => new { follow.FollowerId, follow.FolloweeId });
+		// (关注者, 关注时间) 复合索引：我的关注列表按时间倒序。
+		modelBuilder.Entity<UserFollow>().HasIndex(follow => new { follow.FollowerId, follow.CreatedAtUtc });
+		// (被关注者, 关注时间) 复合索引：粉丝列表按时间倒序。
+		modelBuilder.Entity<UserFollow>().HasIndex(follow => new { follow.FolloweeId, follow.CreatedAtUtc });
+
+		// ----- 评论点赞 -----
+		// (评论, 用户) 复合主键：防止同一用户对同一条评论重复点赞。
+		modelBuilder.Entity<TrackCommentLike>().HasKey(like => new { like.CommentId, like.UserId });
+		// (用户, 点赞时间) 复合索引：我的点赞历史按时间倒序。
+		modelBuilder.Entity<TrackCommentLike>().HasIndex(like => new { like.UserId, like.CreatedAtUtc });
+		// 点赞 → 评论：多对一，删除评论时级联清理其全部点赞。
+		modelBuilder.Entity<TrackCommentLike>()
+			.HasOne<TrackComment>().WithMany().HasForeignKey(like => like.CommentId).OnDelete(DeleteBehavior.Cascade);
 
 		// ----- 多对多关联表复合主键 -----
 		// 关联表本身无独立 Id，使用双方外键构成复合主键，天然防止重复关联。

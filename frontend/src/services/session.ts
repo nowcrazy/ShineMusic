@@ -16,6 +16,7 @@
 import { computed, reactive } from 'vue'
 import type { ApiAuthTokens, ApiInvitationValidation, ApiMe } from '@/types/music'
 import { http, setRefreshHandler } from './http'
+import { syncRemoteTheme } from './user-theme'
 import { clearTokens, getRefreshToken, hasSession, restoreTokens, saveTokens } from './tokens'
 
 interface SessionState {
@@ -120,6 +121,8 @@ export async function login(email: string, password: string) {
   )
   saveTokens(tokens.accessToken, tokens.refreshToken)
   await loadCurrentUser()
+  // 登录成功后同步自定义图片主题（远端启用则应用；失败静默）。
+  void syncRemoteTheme()
 }
 
 /**
@@ -165,6 +168,8 @@ export async function restoreSession() {
   }
   try {
     await loadCurrentUser()
+    // 会话恢复成功后同步自定义图片主题（远端启用则应用；失败静默）。
+    void syncRemoteTheme()
   } catch {
     clearTokens()
     state.user = null

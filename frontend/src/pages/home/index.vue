@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /**
- * 首页：应用主框架页，内含“为你 / 发现 / 曲库 / 我的”四个自定义 tab（非 tabBar 页面，底部为自绘 tabbar）。
+ * 首页：应用主框架页，内含“为你 / 发现 / 曲库 / 我的”四个自定义 tab（非 tabBar 页面，底部为自绘 tabbar，
+ * 中间为凸起的「消息」按钮，带未读角标，点击进入消息中心）。
  * 进入参数：无 onLoad query。
  * - 为你：首页 Feed（精选专题大卡、专题横滑、风格筛选、最近加入曲目）；
  * - 发现：风格浏览 + 关键词搜索（防抖）；
@@ -14,12 +15,15 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
 import {
   AudioLines,
+  Bell,
   ChevronRight,
   Heart,
+  History,
   Inbox,
   Library,
   ListMusic,
   Music2,
+  Palette,
   Play,
   Plus,
   Search,
@@ -27,11 +31,14 @@ import {
   Trash2,
   Upload,
   User,
+  UserCog,
+  UserRound,
 } from 'lucide-vue-next'
 import TrackRow from '@/components/TrackRow.vue'
 import PlayerBar from '@/components/PlayerBar.vue'
 import CoverArt from '@/components/CoverArt.vue'
 import ProfileDrawer from '@/components/ProfileDrawer.vue'
+import QuickPanel from '@/components/QuickPanel.vue'
 import { getGenres, getHomeFeed, searchTracks } from '@/services/catalog'
 import { resolveUrl } from '@/services/http'
 import { getDailyRecommendations } from '@/services/recommend'
@@ -50,12 +57,30 @@ import {
 } from '@/services/user-library'
 import { currentUser, isAuthenticated } from '@/services/session'
 import { useCapabilities } from '@/services/capabilities'
+import { refreshUnreadCount, unreadCount } from '@/services/notifications'
 import { formatTime } from '@/utils/format'
 import type { ApiCollectionSummary, ApiPlaylistSummary, ApiUserLibraryItem, Track } from '@/types/music'
 
 // 当前激活的 tab 与固定 tab 列表（tab 切换核心状态）
 const activeTab = ref('为你')
 const tabs = ['为你', '发现', '曲库', '我的'] as const
+
+// —— 底部凸起按钮：未读角标（99+ 封顶）；已登录点击弹出快捷面板，未登录先引导登录 ——
+const unreadLabel = computed(() => (unreadCount.value > 99 ? '99+' : String(unreadCount.value)))
+const panelVisible = ref(false)
+
+function onFabTap() {
+  if (!isAuthenticated.value) {
+    uni.navigateTo({ url: '/pages/auth/login' })
+    return
+  }
+  panelVisible.value = true
+}
+
+/** 通用页内跳转（「我的」页功能入口用） */
+function goPage(url: string) {
+  uni.navigateTo({ url })
+}
 
 // —— “为你”Feed 数据：精选曲目、最近加入、专题列表、头图专题、风格、错误态 ——
 const featured = ref<Track | null>(null)
@@ -385,6 +410,7 @@ async function loadLibrary() {
 onShow(() => {
   if (activeTab.value === '我的') void loadLibrary()
   if (activeTab.value === '曲库' && isAuthenticated.value) void loadMyLibrary(true)
+  void refreshUnreadCount() // 从消息页返回/登录返回时刷新角标；未登录时内部静默失败
 })
 
 // 首次挂载：并行拉取首页 Feed 与风格；已登录时预加载收藏数据
@@ -837,6 +863,55 @@ function coverOf(collection: ApiCollectionSummary) {
               <ChevronRight :size="18" class="profile-chevron" />
             </view>
 
+            <!-- 快捷入口：圆形图标行（消息带未读角标） -->
+            <view class="quick-circles">
+              <view class="quick-circle" @tap="goPage('/pages/notifications/index')">
+                <view class="qc-icon qc-notify"><Bell :size="20" /></view>
+                <text v-if="unreadCount > 0" class="qc-badge">{{ unreadLabel }}</text>
+                <text class="qc-label">消息</text>
+              </view>
+              <view class="quick-circle" @tap="goPage('/pages/library/favorites')">
+                <view class="qc-icon qc-favorite"><Heart :size="20" /></view>
+                <text class="qc-label">我的收藏</text>
+              </view>
+              <view class="quick-circle" @tap="goPage('/pages/history/index')">
+                <view class="qc-icon qc-history"><History :size="20" /></view>
+                <text class="qc-label">播放历史</text>
+              </view>
+              <view class="quick-circle" @tap="goPage('/pages/social/follow')">
+                <view class="qc-icon qc-follow"><UserRound :size="20" /></view>
+                <text class="qc-label">关注粉丝</text>
+              </view>
+            </view>
+
+            <!-- 分组入口：音乐库 / 设置 -->
+            <view class="entry-group">
+              <text class="entry-group-title">音乐库</text>
+              <view class="entry-row" @tap="goPage('/pages/library/upload')">
+                <view class="entry-icon ei-upload"><Upload :size="18" /></view>
+                <text class="entry-name">上传本地音频</text>
+                <ChevronRight :size="16" class="profile-chevron" />
+              </view>
+              <view class="entry-row" @tap="goRequests">
+                <view class="entry-icon ei-request"><Inbox :size="18" /></view>
+                <text class="entry-name">歌曲需求池</text>
+                <ChevronRight :size="16" class="profile-chevron" />
+              </view>
+            </view>
+            <view class="entry-group">
+              <text class="entry-group-title">设置</text>
+              <view class="entry-row" @tap="goPage('/pages/settings/theme')">
+                <view class="entry-icon ei-theme"><Palette :size="18" /></view>
+                <text class="entry-name">主题外观</text>
+                <ChevronRight :size="16" class="profile-chevron" />
+              </view>
+              <view class="entry-row" @tap="goPage('/pages/profile/index')">
+                <view class="entry-icon ei-profile"><UserCog :size="18" /></view>
+                <text class="entry-name">个人资料</text>
+                <ChevronRight :size="16" class="profile-chevron" />
+              </view>
+            </view>
+
             <view v-if="capabilities.capabilities.userCollections" class="library-block">
               <view class="section-heading">
                 <view><text class="section-kicker">MY PLAYLISTS</text><text class="section-title">我的歌单</text></view>
@@ -904,8 +979,8 @@ function coverOf(collection: ApiCollectionSummary) {
             </view>
           </template>
 
-          <!-- 歌曲需求池入口横幅（受功能开关控制） -->
-          <view v-if="capabilities.capabilities.songRequests" class="request-banner" @tap="goRequests">
+          <!-- 歌曲需求池入口横幅：已登录用户在上方「音乐库」分组里已有入口，此处仅保留给未登录用户 -->
+          <view v-if="capabilities.capabilities.songRequests && !isAuthenticated" class="request-banner" @tap="goRequests">
             <view class="request-icon"><Inbox :size="19" /></view>
             <view class="upload-copy">
               <text class="upload-title">想听的歌，告诉我们</text>
@@ -925,18 +1000,34 @@ function coverOf(collection: ApiCollectionSummary) {
     <!-- 头像抽屉：点击头像滑出的个人菜单（QQ 式） -->
     <ProfileDrawer v-model="drawerVisible" />
 
-    <!-- 底部自定义 tabbar：为你 / 发现 / 曲库 / 我的 -->
+    <!-- 快捷面板：点击 tabbar 中间凸起按钮弹出 -->
+    <QuickPanel v-model="panelVisible" />
+
+    <!-- 底部自定义 tabbar：为你 / 发现 / [消息凸起按钮] / 曲库 / 我的 -->
     <view class="tabbar">
       <view
-        v-for="tab in tabs"
+        v-for="tab in tabs.slice(0, 2)"
         :key="tab"
         class="tab-item"
         :class="{ active: activeTab === tab }"
         @tap="setTab(tab)"
       >
         <Sparkles v-if="tab === '为你'" :size="19" />
-        <Search v-else-if="tab === '发现'" :size="19" />
-        <Library v-else-if="tab === '曲库'" :size="19" />
+        <Search v-else :size="19" />
+        <text>{{ tab }}</text>
+      </view>
+      <view class="tab-fab" @tap="onFabTap">
+        <Bell :size="22" />
+        <text v-if="unreadCount > 0" class="tab-fab-badge">{{ unreadLabel }}</text>
+      </view>
+      <view
+        v-for="tab in tabs.slice(2)"
+        :key="tab"
+        class="tab-item"
+        :class="{ active: activeTab === tab }"
+        @tap="setTab(tab)"
+      >
+        <Library v-if="tab === '曲库'" :size="19" />
         <User v-else :size="19" />
         <text>{{ tab }}</text>
       </view>
@@ -968,8 +1059,8 @@ function coverOf(collection: ApiCollectionSummary) {
 </template>
 
 <style lang="scss">
-/* 首页（方向 B · 玻璃质感）：深色底 + 彩色光晕 + 毛玻璃卡片 */
-.app-shell { position: relative; width: 100%; min-height: 100vh; background: var(--sm-bg); overflow: hidden; }
+/* 首页（方向 B · 玻璃质感）：完整页面背景（自定义主题下为壁纸）+ 彩色光晕 + 毛玻璃卡片 */
+.app-shell { position: relative; width: 100%; min-height: 100vh; background: var(--sm-page-bg); overflow: hidden; }
 .page-scroll { position: relative; z-index: 1; height: 100vh; }
 .topbar { display: flex; align-items: center; justify-content: space-between; padding: calc(env(safe-area-inset-top) + 30rpx) 44rpx 0; }
 .brand-lockup { display: flex; align-items: center; gap: 11rpx; }
@@ -1119,9 +1210,35 @@ function coverOf(collection: ApiCollectionSummary) {
 .upload-subtitle { color: var(--sm-text-2); font-size: 16rpx; }
 /* 平台适配：固定底栏用 env(safe-area-inset-bottom) 避开 iPhone 底部安全区 */
 .tabbar { position: fixed; z-index: 3; right: 0; bottom: 0; left: 0; display: flex; justify-content: space-around; padding: 17rpx 35rpx calc(env(safe-area-inset-bottom) + 20rpx); border-top: 1rpx solid var(--sm-surface-3); background: var(--sm-tabbar-bg); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); }
-.tab-item { display: flex; min-width: 105rpx; flex-direction: column; align-items: center; gap: 6rpx; color: var(--sm-text-3); font-size: 16rpx; }
-.tab-item.active { color: var(--sm-text); font-weight: 700; }
-.tab-item.active :deep(svg) { color: var(--sm-accent); }
+.tab-item { display: flex; min-width: 105rpx; flex-direction: column; align-items: center; gap: 6rpx; padding: 10rpx 0; border-radius: 40rpx; color: var(--sm-text-3); font-size: 16rpx; transition: background .2s ease, color .2s ease; }
+.tab-item.active { color: var(--sm-text); font-weight: 700; background: var(--sm-accent-soft); }
+.tab-item :deep(svg) { transition: transform .18s ease; }
+.tab-item.active :deep(svg) { color: var(--sm-accent); transform: translateY(-2rpx) scale(1.1); }
+/* 中间凸起「消息」按钮：上浮出底栏顶边，未读角标贴右上角（描边用底栏底色做「嵌」进去的效果） */
+.tab-fab { position: relative; align-self: flex-start; display: grid; place-items: center; width: 96rpx; height: 96rpx; margin-top: -35rpx; border: 1rpx solid var(--sm-border-strong); border-radius: 50%; background: var(--sm-accent-grad); color: var(--sm-accent-ink); box-shadow: 0 10rpx 26rpx var(--sm-accent-glow); box-sizing: border-box; }
+.tab-fab-badge { position: absolute; top: -8rpx; right: -10rpx; min-width: 32rpx; padding: 0 8rpx; border: 2rpx solid var(--sm-tabbar-bg); border-radius: 20rpx; background: var(--sm-danger); color: #ffffff; font-size: 16rpx; font-weight: 800; line-height: 30rpx; text-align: center; box-sizing: border-box; }
+/* 我的页：圆形快捷入口行（消息带未读角标） */
+.quick-circles { display: flex; justify-content: space-between; margin: 4rpx 0 30rpx; padding: 26rpx 34rpx; border: 1rpx solid var(--sm-border); border-radius: var(--sm-radius-card); background: var(--sm-surface); -webkit-backdrop-filter: blur(var(--sm-blur)); backdrop-filter: blur(var(--sm-blur)); }
+.quick-circle { position: relative; display: flex; flex-direction: column; align-items: center; gap: 10rpx; }
+.qc-icon { display: grid; place-items: center; width: 84rpx; height: 84rpx; border-radius: 50%; transition: transform .15s ease; }
+.quick-circle:active .qc-icon { transform: scale(.92); }
+.qc-notify { background: var(--sm-warn-soft); color: var(--sm-warn); }
+.qc-favorite { background: var(--sm-danger-soft); color: var(--sm-danger); }
+.qc-history { background: var(--sm-info-soft); color: var(--sm-accent-2); }
+.qc-follow { background: var(--sm-accent-3-soft); color: var(--sm-accent-3); }
+.qc-badge { position: absolute; top: -10rpx; right: -6rpx; min-width: 30rpx; padding: 0 8rpx; border: 2rpx solid var(--sm-bg); border-radius: 20rpx; background: var(--sm-danger); color: #ffffff; font-size: 15rpx; font-weight: 800; line-height: 28rpx; text-align: center; box-sizing: border-box; }
+.qc-label { color: var(--sm-text-2); font-size: 17rpx; }
+/* 我的页：分组入口列表（音乐库 / 设置） */
+.entry-group { margin-bottom: 30rpx; border: 1rpx solid var(--sm-border); border-radius: var(--sm-radius-card); background: var(--sm-surface); -webkit-backdrop-filter: blur(var(--sm-blur)); backdrop-filter: blur(var(--sm-blur)); overflow: hidden; }
+.entry-group-title { display: block; padding: 20rpx 26rpx 4rpx; color: var(--sm-text-3); font-size: 17rpx; font-weight: 800; letter-spacing: .12em; }
+.entry-row { display: flex; align-items: center; gap: 20rpx; padding: 22rpx 26rpx; border-top: 1rpx solid var(--sm-divider); transition: background .15s ease; }
+.entry-row:active { background: var(--sm-surface-2); }
+.entry-icon { display: grid; flex: none; place-items: center; width: 62rpx; height: 62rpx; border-radius: 18rpx; }
+.ei-upload { background: var(--sm-accent-soft); color: var(--sm-accent); }
+.ei-request { background: var(--sm-info-soft); color: var(--sm-accent-2); }
+.ei-theme { background: var(--sm-accent-3-soft); color: var(--sm-accent-3); }
+.ei-profile { background: var(--sm-warn-soft); color: var(--sm-warn); }
+.entry-name { flex: 1; color: var(--sm-text); font-size: 21rpx; font-weight: 600; }
 @media (min-width: 700px) {
   .app-shell { max-width: 720px; min-height: 100vh; margin: 0 auto; border-right: 1rpx solid var(--sm-divider); border-left: 1rpx solid var(--sm-divider); }
   .tabbar { right: max(0px, calc((100vw - 720px) / 2)); left: max(0px, calc((100vw - 720px) / 2)); }

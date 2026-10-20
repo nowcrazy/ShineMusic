@@ -44,6 +44,22 @@
       "style": { "navigationBarTitleText": "消息" }
     },
     {
+      "path": "pages/track/detail",
+      "style": { "navigationBarTitleText": "曲目详情" }
+    },
+    {
+      "path": "pages/history/index",
+      "style": { "navigationBarTitleText": "播放历史" }
+    },
+    {
+      "path": "pages/library/favorites",
+      "style": { "navigationBarTitleText": "我的收藏" }
+    },
+    {
+      "path": "pages/social/follow",
+      "style": { "navigationBarTitleText": "关注与粉丝" }
+    },
+    {
       "path": "pages/library/upload",
       "style": { "navigationBarTitleText": "上传本地音频" }
     },

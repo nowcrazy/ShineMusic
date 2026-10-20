@@ -373,6 +373,15 @@ public sealed class CatalogController : ControllerBase
         .Include(track => track.Artwork)
         .Include(track => track.MediaAssets.Where(asset => asset.IsPublished));
 
+    /// <summary>当前用户可访问（公开 + 本人私有上传）的曲目，附带转为 <see cref="TrackDto"/> 所需的全部导航。</summary>
+    internal static IQueryable<Track> AccessibleTracksWithDetails(MusicDbContext db, Guid userId) => db.Tracks.AsNoTracking()
+        .Where(track => track.PublishedAt != null || track.OwnerUserId == userId)
+        .Include(track => track.TrackArtists).ThenInclude(link => link.Artist)
+        .Include(track => track.TrackGenres).ThenInclude(link => link.Genre)
+        .Include(track => track.Album)
+        .Include(track => track.Artwork)
+        .Include(track => track.MediaAssets.Where(asset => asset.IsPublished));
+
     internal static TrackDto ToDto(Track track)
     {
         var primaryAsset = track.MediaAssets.FirstOrDefault(asset => asset.IsPrimary) ?? track.MediaAssets.FirstOrDefault();

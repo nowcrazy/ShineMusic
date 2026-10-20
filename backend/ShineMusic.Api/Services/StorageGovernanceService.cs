@@ -218,8 +218,9 @@ public sealed class StorageGovernanceService
         foreach (var path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
         {
             var key = Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/');
-            if (key.StartsWith(UserAvatarFiles.DirectoryKey, StringComparison.OrdinalIgnoreCase))
-                continue; // 用户头像目录：不参与曲库存储对账
+            if (key.StartsWith(UserAvatarFiles.DirectoryKey, StringComparison.OrdinalIgnoreCase) ||
+                key.StartsWith(UserThemeFiles.DirectoryKey, StringComparison.OrdinalIgnoreCase))
+                continue; // 用户头像/主题壁纸目录：不参与曲库存储对账
             long size;
             try
             {

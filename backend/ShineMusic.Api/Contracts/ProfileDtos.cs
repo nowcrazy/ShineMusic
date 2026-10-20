@@ -33,3 +33,24 @@ public sealed record ChangePasswordRequest(string CurrentPassword, string NewPas
 
 /// <summary>头像上传/更换的响应，对应 POST /api/v1/me/avatar。</summary>
 public sealed record AvatarUrlDto(string? AvatarUrl);
+
+/// <summary>
+/// 用户自定义图片主题配置，对应 GET/PUT /api/v1/me/theme 与 POST /api/v1/me/theme/wallpaper 的响应。
+/// 颜色为前端取色后的 #RRGGBB；从未配置过时各颜色字段为 null。
+/// </summary>
+/// <param name="Accent">主强调色（#RRGGBB）；未配置为 null。</param>
+/// <param name="Accent2">次强调色（#RRGGBB）；可空。</param>
+/// <param name="Accent3">第三强调色（#RRGGBB）；可空。</param>
+/// <param name="MaskOpacity">壁纸暗色遮罩不透明度（0-0.85）。</param>
+/// <param name="Enabled">是否启用自定义主题（多端同步的开关事实源）。</param>
+/// <param name="WallpaperUrl">壁纸读取地址（带版本参数）；未上传为 null。地址需携带登录态请求取回。</param>
+public sealed record UserThemeDto(
+    string? Accent,
+    string? Accent2,
+    string? Accent3,
+    float MaskOpacity,
+    bool Enabled,
+    string? WallpaperUrl);
+
+/// <summary>自定义主题配置更新请求体，对应 PUT /api/v1/me/theme；颜色传 null 表示清除该槽位。</summary>
+public sealed record UpdateUserThemeRequest(string? Accent, string? Accent2, string? Accent3, float MaskOpacity, bool Enabled);

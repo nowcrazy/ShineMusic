@@ -294,6 +294,30 @@ public static class NotificationKinds
     public const string System = "system";
 }
 
+/// <summary>
+/// 用户自定义图片主题配置：每用户至多一条（UserId 即主键，与 ApplicationUser 一对一），
+/// 与 themes/{userId}.{ext} 壁纸文件配套；颜色为前端从壁纸取色后的 #RRGGBB 色板。
+/// </summary>
+public sealed class UserThemeProfile
+{
+    /// <summary>所属用户 Id（主键，一对一）。</summary>
+    public Guid UserId { get; set; }
+    /// <summary>壁纸文件扩展名（.jpg/.png/.webp）；null 表示尚未上传壁纸。</summary>
+    public string? WallpaperExtension { get; set; }
+    /// <summary>主强调色（#RRGGBB）；尚未取色时为 null。</summary>
+    public string? Accent { get; set; }
+    /// <summary>次强调色（#RRGGBB），可空。</summary>
+    public string? Accent2 { get; set; }
+    /// <summary>第三强调色（#RRGGBB），可空。</summary>
+    public string? Accent3 { get; set; }
+    /// <summary>壁纸上的暗色遮罩不透明度（0-0.85），控制壁纸上的文字可读性。</summary>
+    public float MaskOpacity { get; set; } = 0.45f;
+    /// <summary>是否启用自定义主题；关闭后回退预设主题但保留配置（多端同步的开关事实源）。</summary>
+    public bool Enabled { get; set; }
+    /// <summary>最近更新时间（UTC）。</summary>
+    public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
+}
+
 /// <summary>管理员操作审计条目：所有高权限管理动作均追加一条不可变留痕记录。</summary>
 public sealed class AdminAuditEntry
 {

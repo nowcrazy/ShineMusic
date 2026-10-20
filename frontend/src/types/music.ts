@@ -23,11 +23,16 @@ import type {
   ApiAlbumSummary,
   ApiAudio,
   ApiAuthToken,
+  ApiCreateComment,
   ApiCurrentUser,
+  ApiFollowStatus,
+  ApiListeningHistoryItem,
   ApiMusicHome,
   ApiPageResult,
   ApiSystemCapabilities,
   ApiTrack,
+  ApiTrackComment,
+  ApiUserSummary,
   ApiUpdateAdminTrack,
   ApiUploadPrecheckFile,
   ApiUploadPrecheckRequest,
@@ -110,6 +115,25 @@ export type {
   ApiDailyRecommendation,
   ApiUnreadNotificationCount,
 } from './api.generated'
+
+// ============================================================================
+// 一之补充、社交/收听契约类型（自动生成，此处命名收口）
+// ============================================================================
+
+/** 曲目评论（含嵌套回复）。 */
+export type ApiComment = ApiTrackComment
+
+/** 发表评论/回复的请求体。 */
+export type { ApiCreateComment }
+
+/** 评论作者/关注列表里的用户公开摘要。 */
+export type ApiUserBrief = ApiUserSummary
+
+/** 关注关系状态快照（是否已关注 + 粉丝/关注数）。 */
+export type ApiFollowState = ApiFollowStatus
+
+/** 播放历史单条（曲目 + 最近收听 + 累计次数）。 */
+export type ApiHistoryItem = ApiListeningHistoryItem
 
 // ============================================================================
 // 二、纯前端类型（后端没有对应 DTO）

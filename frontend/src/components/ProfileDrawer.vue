@@ -1,19 +1,20 @@
 <script setup lang="ts">
 /**
  * 头像抽屉（QQ 式左侧滑出）：点击头像后滑出的个人菜单。
- * 内容：资料摘要（头像/昵称/邮箱/角色徽章）+ 功能入口（个人资料；主题外观——内嵌展开直接切换；
- *       管理员：导入审核/曲目维护/邀请管理）+ 退出登录。
+ * 内容：资料摘要（头像/昵称/邮箱/角色徽章）+「账号」组（个人资料；主题外观——内嵌展开直接切换）
+ *       +「管理员」组（导入审核/曲目维护/歌单管理/需求管理/邀请管理，仅管理员）+ 退出登录。
+ * 高频功能（消息/播放历史/收藏/关注）已移至首页 tabbar 快捷面板与「我的」页功能入口，此处不再重复。
  * 触发：首页顶部头像与“我的”tab 资料卡（未登录时走登录页，不打开抽屉）。
  * 面板常驻 DOM 以支持滑入/滑出过渡，关闭时 pointer-events 置空不影响页面交互。
  * 对应页面：pages/profile（个人资料）；退出走 services/session（清空本地收藏/歌单/曲库后重启首页）。
  */
-import { computed, ref, watch } from 'vue'
-import { AudioLines, Bell, Check, ChevronRight, Inbox, LogOut, Mail, Palette, ShieldCheck, Upload, UserCog, X } from 'lucide-vue-next'
+import { computed, ref } from 'vue'
+import { AudioLines, Check, ChevronRight, Inbox, LogOut, Mail, Palette, ShieldCheck, Upload, UserCog, X } from 'lucide-vue-next'
 import { currentUser, isAdmin, logout } from '@/services/session'
 import { resetLibrary } from '@/services/library'
 import { resetFeedback } from '@/services/feedback'
+import { resetNotifications } from '@/services/notifications'
 import { resetMyLibrary } from '@/services/user-library'
-import { refreshUnreadCount, resetNotifications, unreadCount } from '@/services/notifications'
 import { applyTheme, currentTheme, THEMES, type ThemeId } from '@/services/theme'
 import { resolveUrl } from '@/services/http'
 
@@ -33,23 +34,6 @@ const loggingOut = ref(false)
 /** 关闭抽屉 */
 function close() {
   emit('update:modelValue', false)
-}
-
-// 抽屉打开时刷新未读消息数：用户每次拉出菜单都能看到最新角标，无需轮询常驻。
-watch(
-  () => props.modelValue,
-  (open) => {
-    if (open) void refreshUnreadCount()
-  },
-)
-
-/** 未读角标文本：超过 99 显示 99+ */
-const unreadLabel = computed(() => (unreadCount.value > 99 ? '99+' : String(unreadCount.value)))
-
-/** 跳转站内信页 */
-function goNotifications() {
-  close()
-  uni.navigateTo({ url: '/pages/notifications/index' })
 }
 
 /** 选中某个主题（点击即生效并持久化，全站 CSS 令牌变量即时换肤） */
@@ -154,20 +138,13 @@ function handleLogout() {
         </view>
       </view>
 
-      <!-- 功能入口：个人资料 + 主题外观（内嵌展开）+ 管理员功能（仅管理员） -->
+      <!-- 功能入口：「账号」组（个人资料 + 主题外观内嵌展开）+「管理员」组（仅管理员） -->
       <scroll-view class="drawer-menu-scroll" scroll-y :show-scrollbar="false">
         <view class="drawer-menu">
+          <text class="drawer-group">账号</text>
           <view class="drawer-item" @tap="goProfile">
             <view class="drawer-icon profile-icon"><UserCog :size="19" /></view>
             <text class="drawer-item-title">个人资料</text>
-            <ChevronRight :size="16" class="drawer-item-chevron" />
-          </view>
-
-          <!-- 消息：需求被拒绝/入库等通知，右侧显示未读角标 -->
-          <view class="drawer-item" @tap="goNotifications">
-            <view class="drawer-icon notify-icon"><Bell :size="19" /></view>
-            <text class="drawer-item-title">消息</text>
-            <text v-if="unreadCount > 0" class="unread-badge">{{ unreadLabel }}</text>
             <ChevronRight :size="16" class="drawer-item-chevron" />
           </view>
 
@@ -197,31 +174,34 @@ function handleLogout() {
             </view>
           </view>
 
-          <view v-if="isAdmin" class="drawer-item" @tap="goRequestManagement">
+          <template v-if="isAdmin">
+            <text class="drawer-group">管理员</text>
+            <view class="drawer-item" @tap="goRequestManagement">
             <view class="drawer-icon admin-icon"><Inbox :size="19" /></view>
             <text class="drawer-item-title">需求管理</text>
             <ChevronRight :size="16" class="drawer-item-chevron" />
           </view>
-          <view v-if="isAdmin" class="drawer-item" @tap="goCollectionManagement">
+          <view class="drawer-item" @tap="goCollectionManagement">
             <view class="drawer-icon collection-icon"><AudioLines :size="19" /></view>
             <text class="drawer-item-title">歌单管理</text>
             <ChevronRight :size="16" class="drawer-item-chevron" />
           </view>
-          <view v-if="isAdmin" class="drawer-item" @tap="goImportManagement">
+          <view class="drawer-item" @tap="goImportManagement">
             <view class="drawer-icon import-icon"><Upload :size="19" /></view>
             <text class="drawer-item-title">曲库导入审核</text>
             <ChevronRight :size="16" class="drawer-item-chevron" />
           </view>
-          <view v-if="isAdmin" class="drawer-item" @tap="goCatalogManagement">
+          <view class="drawer-item" @tap="goCatalogManagement">
             <view class="drawer-icon admin-icon"><ShieldCheck :size="19" /></view>
             <text class="drawer-item-title">曲目维护</text>
             <ChevronRight :size="16" class="drawer-item-chevron" />
           </view>
-          <view v-if="isAdmin" class="drawer-item" @tap="goInvitationManagement">
+          <view class="drawer-item" @tap="goInvitationManagement">
             <view class="drawer-icon invite-icon"><Mail :size="19" /></view>
             <text class="drawer-item-title">邀请管理</text>
             <ChevronRight :size="16" class="drawer-item-chevron" />
           </view>
+          </template>
         </view>
       </scroll-view>
 
@@ -267,9 +247,8 @@ function handleLogout() {
 .drawer-icon.import-icon { background: var(--sm-info-soft); color: var(--sm-accent-2); }
 .drawer-icon.admin-icon { background: var(--sm-accent-soft); color: var(--sm-accent); }
 .drawer-icon.invite-icon { background: var(--sm-accent-3-soft); color: var(--sm-accent-3); }
-.drawer-icon.notify-icon { background: var(--sm-warn-soft); color: var(--sm-warn); }
-/* 未读角标：贴在「消息」标题右侧，与标题同一行 */
-.unread-badge { flex: none; min-width: 34rpx; padding: 2rpx 10rpx; border-radius: 20rpx; background: var(--sm-danger); color: #fff; font-size: 13rpx; font-weight: 800; text-align: center; }
+/* 分组标题：「账号」/「管理员」 */
+.drawer-group { padding: 10rpx 8rpx 4rpx; color: var(--sm-text-3); font-size: 18rpx; font-weight: 800; letter-spacing: .12em; }
 .drawer-item-title { flex: 1; color: var(--sm-text); font-size: 22rpx; font-weight: 600; }
 .drawer-item-chevron { flex: none; color: var(--sm-text-3); transition: transform .2s ease; }
 .drawer-item-chevron.rotated { transform: rotate(90deg); }

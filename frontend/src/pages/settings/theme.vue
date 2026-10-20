@@ -1,20 +1,268 @@
 <script setup lang="ts">
 /**
- * 主题外观设置页：展示全部内置主题并支持即时切换。
+ * 主题外观设置页：预设主题切换 + 自定义图片主题。
  *
- * 切换原理：applyTheme() 会把 <html data-sm-theme> 改写为目标主题 id，
- * 所有页面样式均引用 CSS 令牌变量，因此本页点击后全站立即换肤，无需跳转或刷新。
- * 当前选中主题来自 services/theme 的响应式 currentTheme。
- * 新增主题只需在 services/theme.ts 的 THEMES 中追加一项，并在 App.vue 补齐令牌。
+ * 预设主题：applyTheme() 改写 <html data-sm-theme>，全站即时换肤（原理见 services/theme）。
+ * 自定义图片主题：
+ * - 登录后上传壁纸（≤8MB），前端 canvas 取色生成三色色板，
+ *   配合暗色遮罩滑杆即时预览；上传成功后配置同步到服务端（多端一致）；
+ * - 色板支持点选换主色；滑杆拖动实时预览、松手落库；
+ * - 启用/停用开关同步服务端 enabled（账号同步的事实源）；删除会清空服务端配置。
  */
-import { Check, Palette } from 'lucide-vue-next'
-import { applyTheme, currentTheme, THEMES, type ThemeId } from '@/services/theme'
+import { computed, onMounted, ref } from 'vue'
+import { Check, ImagePlus, LogIn, Palette, RefreshCw, Trash2 } from 'lucide-vue-next'
+import {
+  applyCustomTheme,
+  applyTheme,
+  currentCustomConfig,
+  currentTheme,
+  currentWallpaperUrl,
+  DEFAULT_THEME,
+  THEMES,
+  type CustomThemeConfig,
+  type ThemeId,
+} from '@/services/theme'
+import { extractPalette } from '@/services/color-extract'
+// #ifdef H5
+import WallpaperCropper from '@/components/WallpaperCropper.vue'
+// #endif
+import {
+  deleteMyTheme,
+  fetchMyTheme,
+  fetchWallpaperObjectUrl,
+  updateThemeConfig,
+  uploadWallpaper,
+} from '@/services/user-theme'
+import { isAuthenticated, requireLogin } from '@/services/session'
 
-/** 选中某个主题（点击即生效并持久化） */
-function selectTheme(id: ThemeId) {
+/** 取色中（选图后到色板生成为止） */
+const extracting = ref(false)
+/** 上传/落库中 */
+const saving = ref(false)
+/** 本次会话选中的本地壁纸临时路径（预览用，优先级最高） */
+const localWallpaperPath = ref<string | null>(null)
+/** 服务端已保存壁纸的预览（远端拉取；custom 停用时也能在编辑卡里看到已存图） */
+const remoteWallpaperPreview = ref<string | null>(null)
+
+/**
+ * 编辑卡缩略图展示源：刚选的本地临时图 > 当前生效壁纸 > 服务端已存壁纸。
+ * 前两者都是模块级状态，离开页面再回来不会丢失。
+ */
+const wallpaperPreview = computed(
+  () => localWallpaperPath.value || currentWallpaperUrl.value || remoteWallpaperPreview.value,
+)
+
+/** 是否已配置过自定义主题 */
+const hasCustom = computed(() => currentCustomConfig.value !== null)
+/** 自定义主题当前是否处于启用态（即 data-sm-theme='custom'） */
+const isCustomActive = computed(() => currentTheme.value === 'custom')
+/** 遮罩滑杆展示值（0-85） */
+const maskPercent = computed(() =>
+  Math.round((currentCustomConfig.value?.maskOpacity ?? 0.45) * 100),
+)
+/** 色板圆点：主色/次色/第三色（null 时以主色旋转兜底的展示色代替） */
+const paletteDots = computed(() => {
+  const config = currentCustomConfig.value
+  if (!config) return []
+  return [config.accent, config.accent2, config.accent3].filter(
+    (color): color is string => Boolean(color),
+  )
+})
+
+// 进入页面时拉取一次远端配置：本机首次使用时能直接看到其他设备创建的自定义主题；
+// 同时拉取服务端壁纸作为缩略图兜底（停用状态下编辑卡也能看到已保存的图）。
+onMounted(() => {
+  if (!isAuthenticated.value) return
+  fetchMyTheme()
+    .then(async (remote) => {
+      if (remote.wallpaperUrl && !wallpaperPreview.value) {
+        remoteWallpaperPreview.value = await fetchWallpaperObjectUrl()
+      }
+      if (!remote.enabled) return
+      const config: CustomThemeConfig = {
+        accent: remote.accent ?? null,
+        accent2: remote.accent2 ?? null,
+        accent3: remote.accent3 ?? null,
+        maskOpacity: remote.maskOpacity,
+        enabled: true,
+      }
+      // 已处于 custom 时不动（避免打断编辑中的状态、避免重复拉取壁纸）；
+      // 否则以远端壁纸一起应用（整页背景与缩略图同步就位）。
+      if (!isCustomActive.value) applyCustomTheme(config, remoteWallpaperPreview.value)
+    })
+    .catch(() => undefined)
+})
+
+/** 选中预设主题（点击即生效并持久化；若远端自定义主题启用中则一并停用，避免下次登录被同步拉回） */
+async function selectTheme(id: ThemeId) {
   if (currentTheme.value === id) return
   applyTheme(id)
-  uni.showToast({ title: `已切换为「${THEMES.find((t) => t.id === id)?.name}」`, icon: 'none' })
+  if (id !== 'custom' && hasCustom.value && currentCustomConfig.value?.enabled) {
+    try {
+      const remote = await updateThemeConfig({ ...currentCustomConfig.value, enabled: false })
+      currentCustomConfig.value = { ...currentCustomConfig.value, enabled: remote.enabled }
+    } catch {
+      // 停用失败不阻断本地切换：下次登录同步时远端状态仍会生效
+    }
+  }
+  uni.showToast({ title: `已切换为「${THEMES.find((theme) => theme.id === id)?.name}」`, icon: 'none' })
+}
+
+/** 裁剪编辑器打开时的原图路径（null = 关闭） */
+const croppingPath = ref<string | null>(null)
+
+/** 选择壁纸图片（未登录先引导登录；H5 端先进入裁剪编辑器） */
+function chooseWallpaper() {
+  if (!requireLogin()) return
+  uni.chooseImage({
+    count: 1,
+    sizeType: ['compressed'],
+    success: ({ tempFilePaths }) => {
+      const path = tempFilePaths?.[0]
+      // 先进入裁剪编辑器：横竖屏都按所见即所得确认显示区域，确认后才走生成管线
+      if (path) croppingPath.value = path
+    },
+  })
+}
+
+/** 裁剪完成：拿到按可见区域导出（已压缩）的壁纸源，进入取色 → 预览 → 上传管线 */
+function onCropConfirmed(url: string) {
+  croppingPath.value = null
+  void onImagePicked(url)
+}
+
+/** 取消裁剪：放弃本次选图 */
+function onCropCancelled() {
+  croppingPath.value = null
+}
+
+/** 裁剪确认后：本地取色 → 即时预览 → 上传壁纸 → 回填色板落库 */
+async function onImagePicked(path: string) {
+  extracting.value = true
+  const palette = await extractPalette(path)
+  localWallpaperPath.value = path
+  const previous = currentCustomConfig.value
+  const config: CustomThemeConfig = {
+    accent: palette.accent,
+    accent2: palette.accent2,
+    accent3: palette.accent3,
+    maskOpacity: previous?.maskOpacity ?? 0.45,
+    enabled: true,
+  }
+  // 先本地生效（秒级预览）：把本地临时路径直接作为壁纸源注入整页背景，
+  // 上传失败也不影响本次会话的体验；上传成功后服务端存档，跨会话由远程同步接管。
+  applyCustomTheme(config, path)
+  extracting.value = false
+
+  saving.value = true
+  try {
+    await uploadWallpaper(path)
+    await updateThemeConfig(config)
+    uni.showToast({ title: '自定义主题已生成', icon: 'none' })
+  } catch (error) {
+    uni.showToast({
+      title: error instanceof Error ? error.message : '保存失败，请稍后重试',
+      icon: 'none',
+    })
+  } finally {
+    saving.value = false
+  }
+}
+
+/** 点选色板圆点：被点的颜色成为主色，其余按原顺序后移 */
+async function pickAccent(color: string) {
+  const config = currentCustomConfig.value
+  if (!config || config.accent === color) return
+  const rest = [config.accent, config.accent2, config.accent3]
+    .filter((item): item is string => Boolean(item) && item !== color)
+  const next: CustomThemeConfig = {
+    ...config,
+    accent: color,
+    accent2: rest[0] ?? null,
+    accent3: rest[1] ?? null,
+  }
+  applyCustomTheme(next)
+  try {
+    await updateThemeConfig(next)
+  } catch {
+    // 落库失败仅影响多端同步，本地预览不受影响
+  }
+}
+
+/** 滑杆拖动中：实时预览（轻量节流，约 80ms 一次） */
+let lastPreviewAt = 0
+function onMaskChanging(event: { detail: { value: number } }) {
+  const now = Date.now()
+  if (now - lastPreviewAt < 80) return
+  lastPreviewAt = now
+  previewMask(event.detail.value)
+}
+
+/** 滑杆松手：最终预览 + 落库 */
+async function onMaskChange(event: { detail: { value: number } }) {
+  previewMask(event.detail.value)
+  const config = currentCustomConfig.value
+  if (!config) return
+  try {
+    await updateThemeConfig(config)
+  } catch {
+    // 落库失败仅影响多端同步
+  }
+}
+
+/** 以指定遮罩百分比刷新本地预览 */
+function previewMask(percent: number) {
+  const config = currentCustomConfig.value
+  if (!config) return
+  applyCustomTheme({ ...config, maskOpacity: Math.min(0.85, Math.max(0, percent / 100)) })
+}
+
+/** 启用/停用自定义主题（启用状态同步服务端，作为多端同步的开关） */
+async function toggleCustom() {
+  const config = currentCustomConfig.value
+  if (!config) return
+  if (isCustomActive.value) {
+    // 停用：回到默认预设，但保留配置数据
+    applyTheme(DEFAULT_THEME)
+    try {
+      await updateThemeConfig({ ...config, enabled: false })
+    } catch {
+      // 忽略落库失败
+    }
+    return
+  }
+  // 启用：需要已有壁纸（服务端强校验），否则提示先上传
+  applyCustomTheme({ ...config, enabled: true })
+  try {
+    await updateThemeConfig({ ...config, enabled: true })
+  } catch (error) {
+    uni.showToast({
+      title: error instanceof Error ? error.message : '启用失败，请先上传壁纸',
+      icon: 'none',
+    })
+  }
+}
+
+/** 删除自定义主题（服务端壁纸 + 配置一并清除，需二次确认） */
+function removeCustom() {
+  uni.showModal({
+    title: '删除自定义主题',
+    content: '壁纸与配色将被清除，回到预设主题。该操作不可恢复。',
+    confirmText: '删除',
+    confirmColor: '#d05a40',
+    success: async ({ confirm }) => {
+      if (!confirm) return
+      try {
+        await deleteMyTheme()
+      } catch {
+        // 删除失败也先清理本地，避免界面停留在失效状态
+      }
+      localWallpaperPath.value = null
+      remoteWallpaperPreview.value = null
+      applyTheme(DEFAULT_THEME)
+      uni.showToast({ title: '已删除自定义主题', icon: 'none' })
+    },
+  })
 }
 </script>
 
@@ -25,8 +273,112 @@ function selectTheme(id: ThemeId) {
       <view class="heading-icon"><Palette :size="20" /></view>
       <view class="heading-copy">
         <text class="heading-title">主题外观</text>
-        <text class="heading-subtitle">选择喜欢的界面风格，即时生效并自动记住</text>
+        <text class="heading-subtitle">选择喜欢的界面风格，或用一张图片生成专属主题</text>
       </view>
+    </view>
+
+    <!-- ===== 自定义图片主题 ===== -->
+    <view class="section-title-row">
+      <text class="section-title">自定义图片主题</text>
+      <text v-if="hasCustom" class="section-badge" :class="{ on: isCustomActive }">
+        {{ isCustomActive ? '启用中' : '已停用' }}
+      </text>
+    </view>
+
+    <!-- 未登录：引导 -->
+    <view v-if="!isAuthenticated" class="custom-card login-hint">
+      <view class="hint-icon"><LogIn :size="22" /></view>
+      <view class="hint-copy">
+        <text class="hint-title">登录后上传图片，生成专属主题</text>
+        <text class="hint-desc">自动取色染遍全局界面，多设备登录同步生效</text>
+      </view>
+      <view class="hint-button" @tap="chooseWallpaper">去登录</view>
+    </view>
+
+    <!-- 未配置：上传区 -->
+    <view
+      v-else-if="!hasCustom"
+      class="custom-card upload-area"
+      :class="{ busy: extracting || saving }"
+      @tap="chooseWallpaper"
+    >
+      <view class="upload-icon"><ImagePlus :size="26" /></view>
+      <text class="upload-title">{{ extracting ? '正在取色…' : saving ? '正在保存…' : '上传一张图片' }}</text>
+      <text class="upload-desc">支持 JPG / PNG / WebP，≤8MB · 自动提取主题色</text>
+    </view>
+
+    <!-- 已配置：预览 + 调色 -->
+    <view v-else class="custom-card editor">
+      <!-- 预览条：本地临时图 > 当前生效壁纸 > 服务端已存壁纸，都没有时以色板渐变示意 -->
+      <view class="custom-preview" :style="wallpaperPreview ? '' : { background: `linear-gradient(135deg, ${paletteDots[0] || '#333'}, ${paletteDots[1] || '#666'})` }">
+        <image
+          v-if="wallpaperPreview"
+          class="preview-image"
+          :src="wallpaperPreview"
+          mode="aspectFill"
+        />
+        <view class="preview-shade" :style="{ opacity: maskPercent / 100 }"></view>
+        <text class="preview-label">壁纸预览</text>
+      </view>
+
+      <!-- 色板：点选换主色 -->
+      <view class="palette-row">
+        <text class="palette-label">主题色</text>
+        <view class="palette-dots">
+          <view
+            v-for="(color, index) in paletteDots"
+            :key="`${color}-${index}`"
+            class="palette-dot"
+            :class="{ main: index === 0 }"
+            :style="{ background: color }"
+            @tap="pickAccent(color)"
+          >
+            <Check v-if="index === 0" :size="12" color="#fff" />
+          </view>
+        </view>
+        <text class="palette-hint">点选换主色</text>
+      </view>
+
+      <!-- 遮罩深浅滑杆 -->
+      <view class="mask-row">
+        <view class="mask-head">
+          <text class="palette-label">遮罩深浅</text>
+          <text class="mask-value">{{ maskPercent }}%</text>
+        </view>
+        <slider
+          class="mask-slider"
+          :min="0"
+          :max="85"
+          :step="1"
+          :value="maskPercent"
+          activeColor="var(--sm-accent)"
+          backgroundColor="var(--sm-border)"
+          block-size="20"
+          @changing="onMaskChanging"
+          @change="onMaskChange"
+        />
+        <text class="mask-hint">越深文字越清晰，越浅壁纸越透亮</text>
+      </view>
+
+      <!-- 操作行 -->
+      <view class="custom-actions">
+        <view class="action-button primary" @tap="toggleCustom">
+          {{ isCustomActive ? '停用' : '启用' }}
+        </view>
+        <view class="action-button" :class="{ disabled: extracting || saving }" @tap="chooseWallpaper">
+          <RefreshCw :size="13" />
+          <text>更换图片</text>
+        </view>
+        <view class="action-button danger" @tap="removeCustom">
+          <Trash2 :size="13" />
+          <text>删除</text>
+        </view>
+      </view>
+    </view>
+
+    <!-- ===== 预设主题 ===== -->
+    <view class="section-title-row">
+      <text class="section-title">预设主题</text>
     </view>
 
     <!-- 主题卡片列表 -->
@@ -66,16 +418,22 @@ function selectTheme(id: ThemeId) {
       </view>
     </view>
 
-    <view class="theme-note">
-      <text>后续新增主题会直接出现在这里，无需其它设置。</text>
-    </view>
-
     <view class="bottom-space"></view>
   </scroll-view>
+
+  <!-- 壁纸裁剪编辑器（仅 H5）：固定取景框 + 拖动/缩放，所见即所得 -->
+  <!-- #ifdef H5 -->
+  <WallpaperCropper
+    v-if="croppingPath"
+    :src="croppingPath"
+    @confirm="onCropConfirmed"
+    @cancel="onCropCancelled"
+  />
+  <!-- #endif -->
 </template>
 
 <style lang="scss" scoped>
-/* 主题外观设置页：自身也全部使用主题令牌，保证四种主题下都协调 */
+/* 主题外观设置页：自身也全部使用主题令牌，保证各主题下都协调 */
 .theme-page { height: 100vh; padding: 30rpx 34rpx 0; box-sizing: border-box; background: var(--sm-page-bg); }
 
 .page-heading { display: flex; align-items: center; gap: 16rpx; padding: 10rpx 0 28rpx; }
@@ -84,6 +442,63 @@ function selectTheme(id: ThemeId) {
 .heading-title { color: var(--sm-text); font-size: 29rpx; font-weight: 800; }
 .heading-subtitle { color: var(--sm-text-3); font-size: 17rpx; }
 
+/* 分区标题 */
+.section-title-row { display: flex; align-items: center; gap: 12rpx; padding: 8rpx 0 18rpx; }
+.section-title { color: var(--sm-text-2); font-size: 20rpx; font-weight: 700; letter-spacing: 2rpx; }
+.section-badge { padding: 3rpx 14rpx; border: 1rpx solid var(--sm-border); border-radius: 20rpx; color: var(--sm-text-3); font-size: 13rpx; }
+.section-badge.on { border-color: transparent; background: var(--sm-accent-soft); color: var(--sm-accent); }
+
+/* ===== 自定义主题卡片 ===== */
+.custom-card { margin-bottom: 30rpx; padding: 26rpx; border: 1rpx solid var(--sm-border); border-radius: var(--sm-radius-card); background: var(--sm-surface); -webkit-backdrop-filter: blur(var(--sm-blur)); backdrop-filter: blur(var(--sm-blur)); box-shadow: var(--sm-shadow-sm); }
+
+/* 未登录引导 */
+.login-hint { display: flex; align-items: center; gap: 20rpx; }
+.hint-icon { display: grid; flex: none; place-items: center; width: 84rpx; height: 84rpx; border-radius: 24rpx; background: var(--sm-accent-soft); border: 1rpx solid var(--sm-border); color: var(--sm-accent); }
+.hint-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 8rpx; }
+.hint-title { color: var(--sm-text); font-size: 23rpx; font-weight: 700; }
+.hint-desc { color: var(--sm-text-3); font-size: 16rpx; line-height: 1.5; }
+.hint-button { flex: none; padding: 14rpx 30rpx; border-radius: var(--sm-radius-pill); background: var(--sm-accent); color: var(--sm-accent-ink); font-size: 19rpx; font-weight: 700; }
+
+/* 上传区 */
+.upload-area { display: flex; flex-direction: column; align-items: center; gap: 12rpx; padding: 60rpx 26rpx; border: 2rpx dashed var(--sm-border-strong); background: var(--sm-surface-2); }
+.upload-area.busy { opacity: .7; }
+.upload-icon { display: grid; place-items: center; width: 96rpx; height: 96rpx; border-radius: 50%; background: var(--sm-accent-soft); color: var(--sm-accent); }
+.upload-title { color: var(--sm-text); font-size: 24rpx; font-weight: 700; }
+.upload-desc { color: var(--sm-text-3); font-size: 16rpx; }
+
+/* 编辑器 */
+.editor { display: flex; flex-direction: column; gap: 24rpx; }
+
+/* 壁纸预览 */
+.custom-preview { position: relative; height: 220rpx; border-radius: 18rpx; overflow: hidden; border: 1rpx solid var(--sm-border); }
+.preview-image { position: absolute; inset: 0; width: 100%; height: 100%; }
+.preview-shade { position: absolute; inset: 0; background: #090b0f; transition: opacity .15s ease; }
+.preview-label { position: absolute; top: 14rpx; left: 16rpx; padding: 4rpx 14rpx; border-radius: 20rpx; background: rgba(0, 0, 0, .45); color: rgba(255, 255, 255, .9); font-size: 14rpx; }
+
+/* 色板 */
+.palette-row { display: flex; align-items: center; gap: 16rpx; }
+.palette-label { flex: none; color: var(--sm-text-2); font-size: 18rpx; font-weight: 600; }
+.palette-dots { display: flex; align-items: center; gap: 14rpx; }
+.palette-dot { display: grid; place-items: center; width: 52rpx; height: 52rpx; border-radius: 50%; border: 2rpx solid rgba(255, 255, 255, .25); transition: transform .12s ease; }
+.palette-dot:active { transform: scale(.92); }
+.palette-dot.main { border-color: rgba(255, 255, 255, .85); box-shadow: 0 0 0 4rpx var(--sm-accent-soft); }
+.palette-hint { flex: 1; text-align: right; color: var(--sm-text-3); font-size: 14rpx; }
+
+/* 遮罩滑杆 */
+.mask-row { display: flex; flex-direction: column; gap: 10rpx; }
+.mask-head { display: flex; align-items: center; justify-content: space-between; }
+.mask-value { color: var(--sm-accent); font-size: 18rpx; font-weight: 800; }
+.mask-slider { margin: 0; }
+.mask-hint { color: var(--sm-text-3); font-size: 14rpx; }
+
+/* 操作行 */
+.custom-actions { display: flex; gap: 14rpx; }
+.action-button { display: flex; flex: 1; align-items: center; justify-content: center; gap: 8rpx; padding: 18rpx 0; border: 1rpx solid var(--sm-border-strong); border-radius: var(--sm-radius-field); color: var(--sm-text-2); font-size: 18rpx; font-weight: 600; transition: opacity .12s ease; }
+.action-button.disabled { opacity: .55; }
+.action-button.primary { border-color: transparent; background: var(--sm-accent); color: var(--sm-accent-ink); }
+.action-button.danger { border-color: var(--sm-danger-soft-border); background: var(--sm-danger-soft); color: var(--sm-danger); }
+
+/* ===== 预设主题列表 ===== */
 .theme-list { display: flex; flex-direction: column; gap: 18rpx; }
 
 .theme-card {
@@ -145,8 +560,6 @@ function selectTheme(id: ThemeId) {
 /* 选中标记 */
 .theme-check { display: grid; flex: none; place-items: center; width: 44rpx; height: 44rpx; border: 1rpx solid var(--sm-border-strong); border-radius: 50%; color: var(--sm-accent-ink); }
 .theme-check.checked { border-color: transparent; background: var(--sm-accent); }
-
-.theme-note { margin-top: 30rpx; padding: 22rpx 24rpx; border: 1rpx dashed var(--sm-border-strong); border-radius: var(--sm-radius-card); color: var(--sm-text-3); font-size: 16rpx; line-height: 1.6; text-align: center; }
 
 .bottom-space { height: 60rpx; }
 </style>

@@ -17,10 +17,12 @@ import {
   Ban,
   ChevronDown,
   Heart,
+  ListOrdered,
+  ListMusic,
   ListPlus,
+  MessageSquare,
   Pause,
   Play,
-  Repeat,
   Repeat1,
   Shuffle,
   SlidersHorizontal,
@@ -28,7 +30,7 @@ import {
   SkipForward,
   X,
 } from 'lucide-vue-next'
-import { cycleRepeatMode, nextTrack, previousTrack, seek, togglePlayback, toggleShuffle, usePlayer } from '@/services/player'
+import { cyclePlayMode, nextTrack, playFromQueue, previousTrack, seek, togglePlayback, usePlayer } from '@/services/player'
 import { EQ_PRESETS } from '@/services/eq-presets'
 import { addPlaylistTrack, favoriteIds, getPlaylists, toggleFavorite } from '@/services/library'
 import { setFeedback } from '@/services/feedback'
@@ -41,13 +43,14 @@ const { t } = useI18n()
 const expanded = ref(false) // 全屏播放器是否展开
 const lyricMode = ref(false) // 是否处于沉浸歌词模式（隐藏封面、歌词铺满）
 const eqPanelVisible = ref(false) // 音效预设选择弹层是否可见
+const queuePanelVisible = ref(false) // 播放队列面板是否可见
 
 /** 当前音效预设的本地化名称（音效按钮文案） */
 const eqPresetName = computed(() => t(`player.eqPresets.${state.eqPreset}`))
 
-/** 是否位于有自定义 tabbar 的页面（首页）：影响底部偏移量 */
+/** 是否位于有自定义 tabbar 的页面（首页）：影响底部偏移量（132rpx 预留首页 tabbar 中间凸起按钮的高度） */
 const props = withDefaults(defineProps<{ withTabbar?: boolean }>(), { withTabbar: false })
-const bottomOffset = computed(() => `calc(env(safe-area-inset-bottom) + ${props.withTabbar ? 105 : 24}rpx)`)
+const bottomOffset = computed(() => `calc(env(safe-area-inset-bottom) + ${props.withTabbar ? 132 : 24}rpx)`)
 
 // 播放进度百分比（0-100），无总时长时按 0 处理
 const progress = computed(() => {
@@ -313,6 +316,12 @@ function pickEqPreset(id: string) {
   eqPanelVisible.value = false
 }
 
+/** 播放队列面板点击某曲：从该下标开始播放并关闭面板 */
+function playAt(index: number) {
+  playFromQueue(index)
+  queuePanelVisible.value = false
+}
+
 /** 收藏 / 取消收藏当前曲目 */
 async function handleLike() {
   if (!state.currentTrack) return
@@ -325,6 +334,13 @@ async function handleLike() {
   } catch {
     uni.showToast({ title: '操作失败，请稍后再试', icon: 'none' })
   }
+}
+
+/** 打开当前曲目的评论页（评论区支持未登录浏览、登录后评论）。
+ *  注意：不收起播放器，navigateTo 后原页面组件保留，返回时全屏播放器仍在展开状态。 */
+function openComments() {
+  if (!state.currentTrack) return
+  uni.navigateTo({ url: `/pages/track/detail?id=${state.currentTrack.id}` })
 }
 
 /** 标记当前曲目“不感兴趣”，随后切到下一首 */
@@ -549,34 +565,61 @@ function onSeekMove(event: TouchEvent) {
         <view class="seek-times"><text>{{ elapsedLabel }}</text><text>{{ durationLabel }}</text></view>
       </view>
 
-      <!-- 播放控制：随机 / 加歌单 / 上一首 / 播放暂停 / 下一首 / 循环模式 / 收藏 -->
+      <!-- 播放控制：播放模式（单按钮三态）/ 加歌单 / 上一首 / 播放暂停 / 下一首 / 收藏 -->
       <view class="player-controls">
-        <view class="control-secondary" :class="{ active: state.shuffle }" @tap="toggleShuffle"><Shuffle :size="21" /></view>
-        <view class="control-secondary" @tap="addToPlaylist"><ListPlus :size="22" /></view>
+        <view class="control-secondary" :class="{ active: state.playMode !== 'order' }" @tap="cyclePlayMode">
+          <ListOrdered v-if="state.playMode === 'order'" :size="22" />
+          <Shuffle v-else-if="state.playMode === 'shuffle'" :size="22" />
+          <Repeat1 v-else :size="22" />
+        </view>
+        <view class="control-secondary" @tap="queuePanelVisible = true"><ListMusic :size="22" /></view>
         <view class="control-skip" @tap="previousTrack"><SkipBack :size="24" fill="currentColor" /></view>
         <view class="control-play" @tap="togglePlayback">
           <Pause v-if="state.isPlaying" :size="27" fill="currentColor" />
           <Play v-else :size="27" fill="currentColor" />
         </view>
         <view class="control-skip" @tap="nextTrack"><SkipForward :size="24" fill="currentColor" /></view>
-        <view class="control-secondary" :class="{ active: state.repeatMode !== 'order' }" @tap="cycleRepeatMode">
-          <Repeat1 v-if="state.repeatMode === 'one'" :size="21" />
-          <Repeat v-else :size="21" />
-        </view>
         <view class="control-secondary" :class="{ liked }" @tap="handleLike">
           <Heart :size="21" :fill="liked ? 'currentColor' : 'none'" />
         </view>
       </view>
 
-      <!-- 音效 + 不感兴趣：音效仅 H5（Web Audio）可用时展示 -->
+      <!-- 评论 / 音效 / 不感兴趣：音效仅 H5（Web Audio）可用时展示 -->
       <view class="player-extra">
+        <view class="extra-button extra-button--primary" @tap="openComments"><MessageSquare :size="17" /><text>评论</text></view>
+        <view class="extra-button" @tap="addToPlaylist"><ListPlus :size="17" /><text>加歌单</text></view>
         <view v-if="state.eqSupported" class="extra-button" :class="{ active: state.eqPreset !== 'flat' }" @tap="eqPanelVisible = true">
-          <SlidersHorizontal :size="15" /><text>{{ t('player.eq') }} · {{ eqPresetName }}</text>
+          <SlidersHorizontal :size="17" /><text>{{ t('player.eq') }} · {{ eqPresetName }}</text>
         </view>
-        <view class="extra-button" @tap="markNotInterested"><Ban :size="15" /><text>不感兴趣</text></view>
+        <view class="extra-button" @tap="markNotInterested"><Ban :size="17" /><text>不感兴趣</text></view>
       </view>
 
       <view v-if="state.audioError" class="audio-notice">暂时无法播放该曲目，请稍后再试</view>
+    </view>
+
+    <!-- 播放队列面板（底部抽屉） -->
+    <view v-if="queuePanelVisible" class="eq-sheet-mask" @tap="queuePanelVisible = false">
+      <view class="eq-sheet queue-sheet" @tap.stop>
+        <view class="eq-sheet-head">
+          <text class="eq-sheet-title">播放队列（{{ state.queue.length }}）</text>
+          <view class="eq-sheet-close" @tap="queuePanelVisible = false"><X :size="20" /></view>
+        </view>
+        <scroll-view scroll-y class="queue-scroll">
+          <view
+            v-for="(track, index) in state.queue"
+            :key="track.id"
+            class="queue-item"
+            :class="{ current: index === state.queueIndex }"
+            @tap="playAt(index)"
+          >
+            <text class="queue-index">{{ index === state.queueIndex ? '▶' : index + 1 }}</text>
+            <view class="queue-copy">
+              <text class="queue-title">{{ track.title }}</text>
+              <text class="queue-artist">{{ track.artist }}</text>
+            </view>
+          </view>
+        </scroll-view>
+      </view>
     </view>
 
     <!-- 音效预设选择弹层（底部抽屉） -->
@@ -602,7 +645,7 @@ function onSeekMove(event: TouchEvent) {
 
 <style lang="scss" scoped>
 /* 播放器：迷你条毛玻璃 + 全屏动态背景 + 黑胶旋转 + 律动频谱 + 沉浸歌词 */
-.now-playing { position: fixed; z-index: 4; right: 20rpx; bottom: calc(env(safe-area-inset-bottom) + 105rpx); left: 20rpx; display: flex; align-items: center; height: 104rpx; gap: 17rpx; padding: 13rpx 18rpx; border: 1rpx solid var(--sm-border-strong); border-radius: 20rpx; background: var(--sm-surface-3); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); box-shadow: 0 12rpx 34rpx var(--sm-art-shadow); }
+.now-playing { position: fixed; z-index: 4; right: 20rpx; bottom: calc(env(safe-area-inset-bottom) + 132rpx); left: 20rpx; display: flex; align-items: center; height: 104rpx; gap: 17rpx; padding: 13rpx 18rpx; border: 1rpx solid var(--sm-border-strong); border-radius: 20rpx; background: var(--sm-surface-3); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); box-shadow: 0 12rpx 34rpx var(--sm-art-shadow); }
 .now-progress { position: absolute; top: 0; right: 20rpx; left: 20rpx; height: 3rpx; overflow: hidden; border-radius: 2rpx; background: var(--sm-border); }
 .now-progress view { height: 100%; background: var(--sm-accent-grad); }
 .now-cover { flex: none; width: 70rpx; height: 70rpx; border-radius: 13rpx; overflow: hidden; background: var(--sm-surface-3); }
@@ -673,12 +716,14 @@ function onSeekMove(event: TouchEvent) {
 /* 控制区 */
 .player-controls { display: flex; flex: none; align-items: center; justify-content: space-between; margin-top: 24rpx; }
 .control-secondary, .control-skip { display: grid; place-items: center; width: 52rpx; height: 60rpx; color: var(--sm-text-2); }
-.control-secondary.active { color: var(--sm-accent); }
+.control-secondary { border-radius: 18rpx; transition: color .18s ease, background .18s ease, box-shadow .18s ease; }
+.control-secondary.active { color: var(--sm-accent); background: var(--sm-accent-soft); box-shadow: 0 0 0 2rpx var(--sm-accent-soft-border); }
 .control-skip { color: var(--sm-text); }
 .control-play { display: grid; place-items: center; width: 88rpx; height: 88rpx; border-radius: 50%; background: var(--sm-hero-ink-bg); color: var(--sm-hero-ink); box-shadow: 0 10rpx 30rpx var(--sm-accent-glow); }
-.player-extra { display: flex; flex: none; flex-wrap: wrap; justify-content: center; gap: 14rpx; margin-top: 20rpx; }
-.extra-button { display: flex; align-items: center; gap: 8rpx; padding: 12rpx 26rpx; border: 1rpx solid var(--sm-border); border-radius: var(--sm-radius-pill); color: var(--sm-text-2); font-size: 17rpx; }
+.player-extra { display: flex; flex: none; flex-wrap: wrap; justify-content: center; gap: 16rpx; margin-top: 22rpx; }
+.extra-button { display: flex; align-items: center; gap: 9rpx; padding: 15rpx 30rpx; border: 1rpx solid var(--sm-border-strong); border-radius: var(--sm-radius-pill); background: var(--sm-surface-2); color: var(--sm-text); font-size: 19rpx; font-weight: 700; box-shadow: 0 6rpx 16rpx var(--sm-shadow-sm); }
 .extra-button.active { border-color: var(--sm-accent); color: var(--sm-accent); background: var(--sm-accent-soft); }
+.extra-button--primary { border-color: var(--sm-accent-soft-border); color: var(--sm-accent); background: var(--sm-accent-soft); }
 .extra-button:active { opacity: .6; }
 .audio-notice { margin-top: 12rpx; color: var(--sm-danger); font-size: 16rpx; text-align: center; }
 
@@ -692,6 +737,19 @@ function onSeekMove(event: TouchEvent) {
 .eq-chip { display: grid; place-items: center; padding: 22rpx 0; border: 1rpx solid var(--sm-border); border-radius: 16rpx; background: var(--sm-surface); color: var(--sm-text-2); font-size: 18rpx; font-weight: 600; transition: border-color .18s ease, color .18s ease, background .18s ease; }
 .eq-chip.active { border-color: var(--sm-accent); color: var(--sm-accent); background: var(--sm-accent-soft); box-shadow: 0 0 0 2rpx var(--sm-accent-soft-border); }
 .eq-chip:active { opacity: .7; }
+
+/* 播放队列面板 */
+.queue-sheet { max-height: 72vh; }
+.queue-scroll { max-height: 60vh; }
+.queue-item { display: flex; align-items: center; gap: 20rpx; padding: 24rpx 16rpx; border-radius: 16rpx; }
+.queue-item + .queue-item { border-top: 1rpx solid var(--sm-divider); }
+.queue-item.current { background: var(--sm-accent-soft); }
+.queue-index { flex: none; width: 44rpx; text-align: center; color: var(--sm-text-3); font-size: 19rpx; font-weight: 700; }
+.queue-item.current .queue-index { color: var(--sm-accent); }
+.queue-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 4rpx; }
+.queue-title { overflow: hidden; color: var(--sm-text); font-size: 21rpx; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.queue-item.current .queue-title { color: var(--sm-accent); }
+.queue-artist { color: var(--sm-text-2); font-size: 17rpx; }
 
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes slide-up { from { transform: translateY(100%); } to { transform: translateY(0); } }

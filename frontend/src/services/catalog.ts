@@ -137,6 +137,18 @@ export async function getTracks(query: TrackQuery = {}): Promise<ApiPageResult<T
 }
 
 /**
+ * 获取单曲详情（映射为前端 Track）。
+ * - 请求：GET /api/v1/tracks/{trackId}（匿名；私有曲目后端按可见性返回 404）
+ * @param trackId 曲目 ID
+ * @returns 映射后的 Track
+ * @throws 曲目不存在（404）或网络错误时抛出 ApiError
+ */
+export async function getTrack(trackId: string): Promise<Track> {
+  const track = await http.get<ApiTrack>(`${API_PREFIX}/tracks/${trackId}`, false)
+  return mapTrack(track)
+}
+
+/**
  * 获取全部流派标签。
  * - 请求：GET /api/v1/genres?pageSize=100（匿名）
  * @returns 流派名字符串数组（取分页 items）
