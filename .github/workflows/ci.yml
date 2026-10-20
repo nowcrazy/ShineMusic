@@ -47,22 +47,24 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache: yarn
+          cache-dependency-path: frontend/yarn.lock
 
+      # --frozen-lockfile：yarn.lock 与 package.json 不一致时直接失败，
+      # 防止依赖漂移悄悄溜进构建。
       - name: 安装依赖
-        run: npm ci
+        run: yarn install --frozen-lockfile
 
       # 契约漂移检测：重新跑一遍生成器，与仓库中的 api.generated.ts 比对。
       # 后端改了 DTO 却没重新生成/提交前端契约时，这里失败。
       - name: 检查契约是否与后端一致
-        run: npm run check:contracts
+        run: yarn check:contracts
 
       - name: 类型检查（vue-tsc --noEmit）
-        run: npm run typecheck
+        run: yarn typecheck
 
       - name: 构建 H5
-        run: npm run build:h5
+        run: yarn build:h5
 
       - name: 上传构建产物
         if: always()

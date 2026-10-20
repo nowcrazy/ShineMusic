@@ -12,7 +12,7 @@
  *     3. 定义联合类型（如 SongRequestStatus）——后端以 string 承载的封闭集合。
  *
  * 因此：**不要在 services/ 或 pages/ 里新增契约接口**。新增一律先在后端 Contracts/ 加 record，
- * 再跑 `npm run gen:contracts`，最后在这里补一行别名。
+ * 再跑 `yarn gen:contracts`，最后在这里补一行别名。
  */
 import type {
   ApiArtistSummary,

@@ -1,6 +1,6 @@
 {
   "local": {
-    "label": "#Local · 本地开发 / 局域网（npm run dev、真机调试）",
+    "label": "#Local · 本地开发 / 局域网（yarn dev:h5、真机调试）",
     "lanIp": "192.168.31.145",
     "webPort": 5173,
     "apiPort": 5143,
@@ -8,7 +8,7 @@
     "apiHost": "localhost"
   },
   "server": {
-    "label": "#Server · 生产部署（npm run build、上线）",
+    "label": "#Server · 生产部署（yarn build:h5、上线）",
     "webOrigin": "https://music.your-domain.com",
     "apiOrigin": "https://music.your-domain.com"
   }

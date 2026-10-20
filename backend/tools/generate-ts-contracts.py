@@ -65,7 +65,7 @@ HEADER = r'''/**
  *
  * 修改契约的流程：
  *   1. 改后端 Contracts/ 下的 record；
- *   2. 跑 `npm run gen:contracts` 重新生成本文件；
+ *   2. 跑 `yarn gen:contracts` 重新生成本文件；
  *   3. `git diff` 里同步出现的前端变化就是「本次契约变更的影响面」。
  *
  * 若后端的改动没有反映到这里，说明命令没跑；直接手改本文件会在下次生成时被覆盖。
