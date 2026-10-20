@@ -12,6 +12,8 @@ import { currentUser, isAuthenticated, loadCurrentUser } from '@/services/sessio
 import { changePassword, deleteAvatar, updateDisplayName, uploadAvatar } from '@/services/profile'
 import { ApiError, resolveUrl } from '@/services/http'
 import { describeError } from '@/services/errors'
+import { estimatePasswordStrength, passwordStrengthFill } from '@/utils/password-strength'
+import { useCapabilities } from '@/services/capabilities'
 
 // —— 昵称修改 ——
 const displayName = ref('')
@@ -28,6 +30,15 @@ const newPassword = ref('')
 const confirmPassword = ref('')
 const savingPassword = ref(false)
 const passwordMessage = ref('')
+
+// 密码强度：实时强度条 + 门槛判定，门槛取系统能力下发的 minimumPasswordStrength
+const capabilities = useCapabilities()
+const minimumPasswordStrength = computed(() => capabilities.capabilities.minimumPasswordStrength)
+const passwordStrengthLevel = computed(() => estimatePasswordStrength(newPassword.value))
+const passwordStrengthWidth = computed(() => `${passwordStrengthFill(newPassword.value)}%`)
+const STRENGTH_LABELS = ['很弱', '较弱', '一般', '较强', '很强']
+const STRENGTH_COLORS = ['#e05a3f', '#e08a3f', '#e0c23f', '#8fc93f', '#3fc96a']
+const passwordStrengthColor = computed(() => STRENGTH_COLORS[passwordStrengthLevel.value] ?? STRENGTH_COLORS[0])
 
 /** 头像首字母回退（无上传头像时展示） */
 const avatarLetter = computed(() => currentUser.value?.displayName?.slice(0, 1).toUpperCase() || 'S')
@@ -124,6 +135,10 @@ async function handleSavePassword() {
     passwordMessage.value = '新密码至少 8 个字符'
     return
   }
+  if (passwordStrengthLevel.value < minimumPasswordStrength.value) {
+    passwordMessage.value = `密码强度不足，需达到「${STRENGTH_LABELS[minimumPasswordStrength.value]}」以上`
+    return
+  }
   savingPassword.value = true
   passwordMessage.value = ''
   try {
@@ -215,6 +230,12 @@ function goBack() {
         <text class="section-title"><KeyRound :size="17" /> 修改密码</text>
         <input v-model="currentPassword" class="field-input" password placeholder="当前密码" />
         <input v-model="newPassword" class="field-input" password placeholder="新密码（至少 8 位）" />
+        <view class="strength-row">
+          <view class="strength-track">
+            <view class="strength-fill" :style="{ width: passwordStrengthWidth, background: passwordStrengthColor }"></view>
+          </view>
+          <text class="strength-label">{{ STRENGTH_LABELS[passwordStrengthLevel] }}</text>
+        </view>
         <input v-model="confirmPassword" class="field-input" password placeholder="确认新密码" />
         <view class="save-row">
           <text v-if="passwordMessage" class="field-message">{{ passwordMessage }}</text>
@@ -253,6 +274,10 @@ function goBack() {
 /* 表单 */
 .field-input { height: 92rpx; padding: 0 24rpx; margin-bottom: 18rpx; border: 1rpx solid var(--sm-border); border-radius: 18rpx; background: var(--sm-surface-2); color: var(--sm-text); font-size: 21rpx; }
 .field-input::placeholder { color: var(--sm-text-3); }
+.strength-row { display: flex; align-items: center; gap: 16rpx; margin-bottom: 18rpx; }
+.strength-track { flex: 1; height: 10rpx; border-radius: 5rpx; background: var(--sm-surface-3); overflow: hidden; }
+.strength-fill { height: 100%; border-radius: 5rpx; transition: width .2s ease, background .2s ease; }
+.strength-label { flex: none; width: 64rpx; color: var(--sm-text-2); font-size: 16rpx; text-align: right; }
 .readonly-field { height: 92rpx; line-height: 92rpx; padding: 0 24rpx; border: 1rpx dashed var(--sm-border-strong); border-radius: 18rpx; color: var(--sm-text-2); font-size: 21rpx; }
 .save-row { display: flex; align-items: center; justify-content: space-between; gap: 20rpx; margin-top: 8rpx; }
 .field-message { flex: 1; color: var(--sm-danger); font-size: 16rpx; line-height: 1.5; }

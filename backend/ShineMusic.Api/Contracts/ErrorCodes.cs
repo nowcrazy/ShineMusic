@@ -47,6 +47,8 @@ public static class ErrorCodes
     public const string PasswordResetInvalid = "password_reset_invalid";
     /// <summary>注册时需要邀请令牌。</summary>
     public const string InvitationRequired = "invitation_required";
+    /// <summary>新密码强度未达到系统配置的最低门槛（见系统能力 minimumPasswordStrength）。</summary>
+    public const string PasswordTooWeak = "password_too_weak";
 
     // ===== 邀请（Invitations） =====
     /// <summary>邀请令牌不存在、格式错误，或与请求邮箱不匹配。</summary>

@@ -36,6 +36,7 @@ const state = reactive<{
     userUploads: false,
     allowedFormats: [],
     maxUploadSizeBytes: null,
+    minimumPasswordStrength: 2,
   },
 })
 

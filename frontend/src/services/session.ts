@@ -99,6 +99,7 @@ export async function registerWithInvitation(input: {
   invitationToken: string
   password: string
   displayName: string
+  email?: string // 仅 CDK/注册码邀请时必填（后端按 issued 状态要求自填邮箱）
 }) {
   // 注册成功不直接返回凭证，注册页用返回的邮箱调用 login 完成登录。
   return http.post<RegisteredUser>('/api/v1/auth/register', input, false)

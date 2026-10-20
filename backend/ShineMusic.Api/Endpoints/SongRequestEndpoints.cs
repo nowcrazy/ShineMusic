@@ -274,8 +274,9 @@ public sealed class SongRequestController : ControllerBase
     }
 
     /// <summary>
-    /// 管理员重新开启一条已拒绝的需求：declined → open，清空当前处理备注（拒绝原因保留在时间线中），
-    /// 写审计并通知提交人。用于「当时缺音源，现在找到了」这类回补场景。
+    /// 管理员重新开启一条已结束的需求：declined/withdrawn → open，清空当前处理备注
+    /// （拒绝/撤回原因保留在时间线中），写审计并通知提交人。
+    /// 用于「当时缺音源，现在找到了」「误撤回后恢复」这类回补场景。
     /// </summary>
     [HttpPost("admin/song-requests/{requestId:guid}/reopen", Name = "ReopenSongRequest")]
     [Authorize(Roles = "admin")]
@@ -294,17 +295,18 @@ public sealed class SongRequestController : ControllerBase
         var request = await db.SongRequests.FirstOrDefaultAsync(item => item.Id == requestId, cancellationToken);
         if (request is null)
             return ApiResults.NotFound(HttpContext);
-        // 只有被拒绝的需求可以重新开启；已入库/已撤回属于不可逆结果。
-        if (request.Status != SongRequestStatuses.Declined)
+        // 已拒绝/已撤回的需求可以重新开启；已入库属于不可逆结果。
+        if (request.Status is not (SongRequestStatuses.Declined or SongRequestStatuses.Withdrawn))
             return Results.Conflict(new ApiErrorResponse(new ApiErrorDetail(ErrorCodes.ResourceConflict,
-                "Only declined requests can be reopened.", HttpContext.TraceIdentifier)));
+                "Only declined or withdrawn requests can be reopened.", HttpContext.TraceIdentifier)));
 
         var reason = reopen.Reason.Trim();
+        var previousStatus = request.Status;
         var previousNote = request.AdminNote;
         request.Status = SongRequestStatuses.Open;
         request.AdminNote = null;
         request.UpdatedAtUtc = DateTime.UtcNow;
-        SongRequestEvents.Add(db, request, SongRequestEventKinds.Reopened, SongRequestStatuses.Declined, SongRequestStatuses.Open,
+        SongRequestEvents.Add(db, request, SongRequestEventKinds.Reopened, previousStatus, SongRequestStatuses.Open,
             adminUserId, SongRequestActorKinds.Admin, reason);
         AdminAudit.Add(HttpContext, db, "song_request.reopened", "song_request", request.Id, new { reason, previousNote });
         NotificationWriter.Push(db, request.CreatedByUserId, NotificationKinds.SongRequestReopened,
@@ -475,8 +477,9 @@ public sealed class SongRequestController : ControllerBase
         request.UpdatedAtUtc = DateTime.UtcNow;
         if (status != previousStatus)
         {
-            // declined → open 属于「重新开启」，事件类型不能退化成「提交」。
-            var eventKind = status == SongRequestStatuses.Open && previousStatus == SongRequestStatuses.Declined
+            // declined/withdrawn → open 属于「重新开启」，事件类型不能退化成「提交」。
+            var eventKind = status == SongRequestStatuses.Open &&
+                (previousStatus is SongRequestStatuses.Declined or SongRequestStatuses.Withdrawn)
                 ? SongRequestEventKinds.Reopened
                 : SongRequestEvents.KindForStatus(status);
             SongRequestEvents.Add(db, request, eventKind, previousStatus, status,
@@ -508,7 +511,7 @@ public sealed class SongRequestController : ControllerBase
                     "现在可以在曲库里找到并播放了。",
                     NotificationWriter.RequestsPageUrl, "song_request", request.Id.ToString());
                 break;
-            case SongRequestStatuses.Open when previousStatus == SongRequestStatuses.Declined:
+            case SongRequestStatuses.Open when previousStatus == SongRequestStatuses.Declined || previousStatus == SongRequestStatuses.Withdrawn:
                 NotificationWriter.Push(db, request.CreatedByUserId, NotificationKinds.SongRequestReopened,
                     $"需求《{request.Title}》已重新开启",
                     "管理员重新受理了这条需求。",

@@ -144,6 +144,12 @@ builder.Services
     .Validate(options => options.InvitationExpiryHours is >= 1 and <= 720, "Auth:InvitationExpiryHours must be between 1 and 720.")
     .ValidateOnStart();
 builder.Services.Configure<InvitationEmailOptions>(builder.Configuration.GetSection(InvitationEmailOptions.SectionName));
+// 密码强度门槛（仅用于用户主动「修改密码」环节，不作用于 --create-admin 首位管理员创建）。
+builder.Services
+    .AddOptions<PasswordPolicyOptions>()
+    .BindConfiguration(PasswordPolicyOptions.SectionName)
+    .Validate(options => options.MinimumStrength is >= 0 and <= 4, "PasswordPolicy:MinimumStrength must be between 0 and 4.")
+    .ValidateOnStart();
 // 邀请邮件里的注册链接：appsettings 未显式配置时，由 config/hosts.json 按环境推导，
 // 避免同一个 IP 在多个文件里重复维护。
 builder.Services.PostConfigure<InvitationEmailOptions>(options =>

@@ -23,12 +23,16 @@ const invitation = ref<ApiInvitationValidation | null>(null)
 
 // —— 第二步（账号设置）表单状态 ——
 const displayName = ref('')
+const email = ref('')
 const password = ref('')
 const confirmPassword = ref('')
 const submitting = ref(false)
 const errorMessage = ref('')
 // 焦点链：显示名 → 密码 → 确认密码（uni 的 focus 属性只在变为 true 时生效，用后需复位）
 const focusedField = ref<'' | 'password' | 'confirm'>('')
+
+/** 当前邀请是否为注册码/CDK 渠道（需自填邮箱） */
+const isCodeChannel = computed(() => invitation.value?.channel === 'code')
 
 /** 把焦点移到下一个输入框（供回车/确认键使用） */
 function focusNext(field: 'password' | 'confirm') {
@@ -88,6 +92,11 @@ async function handleRegister() {
     errorMessage.value = '请填写显示名称'
     return
   }
+  // 表单校验：CDK/注册码渠道需自填合法邮箱
+  if (isCodeChannel.value && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.value.trim())) {
+    errorMessage.value = '请输入有效的邮箱地址'
+    return
+  }
   // 表单校验：密码强度规则
   const passwordError = validatePassword()
   if (passwordError) {
@@ -105,6 +114,7 @@ async function handleRegister() {
       invitationToken: invitationToken.value.trim(),
       password: password.value,
       displayName: displayName.value.trim(),
+      email: isCodeChannel.value ? email.value.trim() : undefined,
     })
     await login(created.email, password.value)
     loadFavorites(true).catch(() => undefined)
@@ -161,13 +171,25 @@ function invitationError(error: unknown): string {
 
     <!-- 第二步：设置账号 -->
     <template v-else>
-      <!-- 校验通过的邀请信息：受邀邮箱与有效期 -->
+      <!-- 校验通过的邀请信息：受邀邮箱（CDK 渠道无邮箱，仅提示已验证）与有效期 -->
       <view class="invite-badge">
         <BadgeCheck :size="17" />
         <view class="invite-copy">
-          <text class="invite-email">受邀邮箱：{{ invitation?.email }}</text>
+          <text class="invite-email">{{ isCodeChannel ? '注册码已验证' : `受邀邮箱：${invitation?.email}` }}</text>
           <text class="invite-expiry">有效期至 {{ formatDate(invitation?.expiresAt ?? '') }}</text>
         </view>
+      </view>
+
+      <!-- CDK/注册码渠道：无绑定邮箱，需用户自填 -->
+      <view v-if="isCodeChannel" class="field">
+        <text class="field-label">邮箱</text>
+        <input
+          v-model="email"
+          class="field-input"
+          type="text"
+          maxlength="256"
+          placeholder="用于登录的邮箱地址"
+        />
       </view>
 
       <view class="field">

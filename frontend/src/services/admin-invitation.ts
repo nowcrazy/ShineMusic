@@ -1,8 +1,9 @@
 /**
- * 管理端邀请服务：创建邀请、查询邀请列表、重发、撤销。
+ * 管理端邀请服务：创建邀请、生成注册码、查询邀请列表、重发、撤销。
  *
  * 对齐后端 /api/v1/admin/invitations 系列端点：
  * - POST   /invitations                      （创建邀请并发送邮件）
+ * - POST   /invitations/code                 （生成注册码/CDK）
  * - GET    /invitations                      （分页查询邀请列表）
  * - POST   /invitations/{id}/resend          （重发邀请）
  * - DELETE /invitations/{id}                 （撤销邀请）
@@ -13,12 +14,18 @@ import { API_PREFIX, http } from './http'
 /** 邀请记录 DTO */
 export interface Invitation {
   id: string
-  email: string
-  status: string // created / sent / delivery_failed / redeemed / expired / revoked
+  email: string | null // CDK/注册码邀请在生成时无邮箱，为 null
+  status: string // created / sent / issued / delivery_failed / redeemed / expired / revoked
   createdAt: string
   expiresAt: string
   sentAt: string | null
   redeemedAt: string | null
+}
+
+/** 注册码生成响应：明文注册码（仅展示一次）+ 邀请记录 */
+export interface InvitationCode {
+  code: string
+  invitation: Invitation
 }
 
 /**
@@ -28,6 +35,14 @@ export interface Invitation {
  */
 export async function createInvitation(email: string): Promise<Invitation> {
   return http.post<Invitation>(`${API_PREFIX}/admin/invitations`, { email })
+}
+
+/**
+ * 生成注册码/CDK：不绑定邮箱，注册时由用户自填邮箱。
+ * @returns 明文注册码（仅此一次）+ 邀请记录（状态 issued）
+ */
+export async function createInvitationCode(): Promise<InvitationCode> {
+  return http.post<InvitationCode>(`${API_PREFIX}/admin/invitations/code`)
 }
 
 /**

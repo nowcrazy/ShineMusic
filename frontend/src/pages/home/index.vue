@@ -77,6 +77,13 @@ let searchTimer: ReturnType<typeof setTimeout> | undefined
 const myPlaylists = ref<readonly ApiPlaylistSummary[]>([])
 const libraryLoading = ref(false)
 
+// —— 新建歌单弹层（受控 Vue 弹层，替代 uni.showModal 的 editable 模式）——
+// uni.showModal({editable:true}) 在 H5 首次关闭后无法再次打开（模态框 DOM 残留），
+// 改用受控弹层，任意次数打开/关闭都可靠。
+const createSheetVisible = ref(false)
+const newPlaylistName = ref('')
+const creatingPlaylist = ref(false)
+
 // —— “曲库”页数据：我的曲库引用（UserLibraryItem，含私有与公开） ——
 // 列表与加载态来自 services/user-library 的模块级单例（全局共享，移除后即时同步）。
 // 移除进行中的曲目 Id（防重复点击 Modal 回调）。
@@ -455,31 +462,39 @@ function goPlaylist(playlist: ApiPlaylistSummary) {
   uni.navigateTo({ url: `/pages/playlist/detail?id=${playlist.id}` })
 }
 
-/**
- * 新建歌单：弹出可编辑 Modal，表单校验（名称 trim 后非空）通过后调用创建接口并刷新列表
- */
-async function handleCreatePlaylist() {
-  uni.showModal({
-    title: '新建歌单',
-    editable: true,
-    placeholderText: '给歌单起个名字',
-    success: async ({ confirm, content }) => {
-      if (!confirm) return
-      const name = (content ?? '').trim()
-      // 表单校验：歌单名不能为空
-      if (!name) {
-        uni.showToast({ title: '名字不能为空', icon: 'none' })
-        return
-      }
-      try {
-        await createPlaylist(name)
-        uni.showToast({ title: '歌单已创建', icon: 'none' })
-        await loadLibrary()
-      } catch {
-        uni.showToast({ title: '创建失败，请稍后再试', icon: 'none' })
-      }
-    },
-  })
+/** 打开新建歌单弹层：复位输入框并显示受控弹层 */
+function openCreatePlaylist() {
+  newPlaylistName.value = ''
+  createSheetVisible.value = true
+}
+
+/** 关闭新建歌单弹层（取消/点击遮罩） */
+function closeCreatePlaylist() {
+  if (creatingPlaylist.value) return
+  createSheetVisible.value = false
+}
+
+/** 确认新建歌单：校验名称非空 → 调用创建接口 → 刷新列表并关闭弹层 */
+async function confirmCreatePlaylist() {
+  const name = newPlaylistName.value.trim()
+  // 表单校验：歌单名不能为空
+  if (!name) {
+    uni.showToast({ title: '名字不能为空', icon: 'none' })
+    return
+  }
+  if (creatingPlaylist.value) return
+  creatingPlaylist.value = true
+  try {
+    await createPlaylist(name)
+    uni.showToast({ title: '歌单已创建', icon: 'none' })
+    newPlaylistName.value = ''
+    createSheetVisible.value = false
+    await loadLibrary()
+  } catch {
+    uni.showToast({ title: '创建失败，请稍后再试', icon: 'none' })
+  } finally {
+    creatingPlaylist.value = false
+  }
 }
 
 /**
@@ -825,7 +840,7 @@ function coverOf(collection: ApiCollectionSummary) {
             <view v-if="capabilities.capabilities.userCollections" class="library-block">
               <view class="section-heading">
                 <view><text class="section-kicker">MY PLAYLISTS</text><text class="section-title">我的歌单</text></view>
-                <view class="create-playlist" @tap="handleCreatePlaylist"><Plus :size="17" /><text>新建</text></view>
+                <view class="create-playlist" @tap="openCreatePlaylist"><Plus :size="17" /><text>新建</text></view>
               </view>
               <view v-if="!myPlaylists.length" class="inline-error">还没有歌单，点“新建”创建一个。</view>
               <view
@@ -924,6 +939,29 @@ function coverOf(collection: ApiCollectionSummary) {
         <Library v-else-if="tab === '曲库'" :size="19" />
         <User v-else :size="19" />
         <text>{{ tab }}</text>
+      </view>
+    </view>
+
+    <!-- 新建歌单弹层（受控 Dialog，替代 uni.showModal editable） -->
+    <view v-if="createSheetVisible" class="sheet-mask" @tap="closeCreatePlaylist">
+      <view class="sheet-dialog" @tap.stop>
+        <text class="sheet-title">新建歌单</text>
+        <input
+          v-model="newPlaylistName"
+          class="sheet-input"
+          type="text"
+          maxlength="60"
+          placeholder="给歌单起个名字"
+          :focus="true"
+          confirm-type="done"
+          @confirm="confirmCreatePlaylist"
+        />
+        <view class="sheet-actions">
+          <view class="sheet-btn ghost" @tap="closeCreatePlaylist">取消</view>
+          <view class="sheet-btn primary" :class="{ disabled: creatingPlaylist }" @tap="confirmCreatePlaylist">
+            {{ creatingPlaylist ? '创建中…' : '创建' }}
+          </view>
+        </view>
       </view>
     </view>
   </view>
@@ -1031,6 +1069,17 @@ function coverOf(collection: ApiCollectionSummary) {
 .profile-email { overflow: hidden; color: var(--sm-text-2); font-size: 17rpx; text-overflow: ellipsis; white-space: nowrap; }
 .profile-chevron { flex: none; color: var(--sm-text-3); }
 .create-playlist { display: flex; align-items: center; gap: 6rpx; padding-bottom: 4rpx; color: var(--sm-accent); font-size: 19rpx; font-weight: 700; }
+/* 新建歌单受控弹层：居中 Dialog + 半透明遮罩 */
+.sheet-mask { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; padding: 40rpx; background: var(--sm-mask); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
+.sheet-dialog { width: 100%; max-width: 560rpx; padding: 40rpx 36rpx 32rpx; border-radius: 28rpx; background: var(--sm-surface-3); border: 1rpx solid var(--sm-border-strong); box-shadow: var(--sm-shadow); }
+.sheet-title { display: block; color: var(--sm-text); font-size: 28rpx; font-weight: 800; }
+.sheet-input { width: 100%; height: 88rpx; margin-top: 26rpx; padding: 0 24rpx; border: 1rpx solid var(--sm-border); border-radius: 16rpx; background: var(--sm-surface); color: var(--sm-text); font-size: 22rpx; box-sizing: border-box; }
+.sheet-input::placeholder { color: var(--sm-text-3); }
+.sheet-actions { display: flex; gap: 18rpx; margin-top: 32rpx; }
+.sheet-btn { display: flex; flex: 1; align-items: center; justify-content: center; height: 82rpx; border-radius: 41rpx; font-size: 21rpx; font-weight: 700; }
+.sheet-btn.ghost { border: 1rpx solid var(--sm-border); background: var(--sm-surface); color: var(--sm-text-2); }
+.sheet-btn.primary { background: var(--sm-accent); color: var(--sm-accent-ink); }
+.sheet-btn.disabled { opacity: .6; }
 .playlist-icon { display: grid; flex: none; place-items: center; width: 66rpx; height: 66rpx; border-radius: 16rpx; background: var(--sm-accent-soft); color: var(--sm-accent); }
 .playlist-thumbnail { width: 100%; height: 100%; border-radius: inherit; }
 .playlist-copy { display: flex; flex: 1; flex-direction: column; gap: 6rpx; }

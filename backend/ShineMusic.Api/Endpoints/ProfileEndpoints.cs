@@ -10,9 +10,11 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 using ShineMusic.Api.Contracts;
 using ShineMusic.Api.Data;
 using ShineMusic.Api.Extensions;
+using ShineMusic.Api.Options;
 using ShineMusic.Api.Services;
 
 namespace ShineMusic.Api.Endpoints;
@@ -140,12 +142,14 @@ public sealed class ProfileController : ControllerBase
     }
 
     // 【POST /api/v1/me/password】修改登录密码（需提供当前密码）。
-    // 新密码强度由 Identity 密码策略校验；成功后当前会话保持有效（不强制重新登录）。
-    // 返回：204 成功；400 字段缺失或旧密码错误/新密码不合规；401 未登录。
+    // 新密码先校验密码强度门槛（PasswordPolicy:MinimumStrength，0-4 级），随后由 Identity 校验基础策略；
+    // 成功后当前会话保持有效（不强制重新登录）。
+    // 返回：204 成功；400 字段缺失/强度不足/旧密码错误/新密码不合规；401 未登录。
     [HttpPost("password", Name = "ChangeMyPassword")]
     public async Task<IResult> ChangePassword(
         ChangePasswordRequest request,
         UserManager<ApplicationUser> userManager,
+        IOptions<PasswordPolicyOptions> passwordPolicy,
         CancellationToken cancellationToken)
     {
         if (!HttpContext.User.TryGetUserId(out var userId))
@@ -156,6 +160,9 @@ public sealed class ProfileController : ControllerBase
 
         if (string.IsNullOrWhiteSpace(request.CurrentPassword) || string.IsNullOrWhiteSpace(request.NewPassword))
             return ApiResults.ValidationError(HttpContext, "password", "Current and new password are required.");
+
+        if (PasswordStrength.Estimate(request.NewPassword) < passwordPolicy.Value.MinimumStrength)
+            return ApiResults.Error(HttpContext, StatusCodes.Status400BadRequest, ErrorCodes.PasswordTooWeak, "The new password is too weak.");
 
         var result = await userManager.ChangePasswordAsync(user, request.CurrentPassword, request.NewPassword);
         if (!result.Succeeded)

@@ -19,7 +19,7 @@ public static class SongRequestStateMachine
 {
     /// <summary>
     /// 合法状态流转白名单：允许向前推进/跳级，禁止回退，终态无出口。
-    /// 唯一例外是 declined → open：管理员可在补到音源后重新开启（走专用 reopen 端点）。
+    /// 例外是 declined/withdrawn → open：管理员可在补到音源后重新开启（走专用 reopen 端点）。
     /// </summary>
     private static readonly Dictionary<string, HashSet<string>> AllowedTransitions = new()
     {
@@ -28,7 +28,7 @@ public static class SongRequestStateMachine
         [SongRequestStatuses.InProgress] = [SongRequestStatuses.Fulfilled, SongRequestStatuses.Declined],
         [SongRequestStatuses.Fulfilled] = [],
         [SongRequestStatuses.Declined] = [SongRequestStatuses.Open],
-        [SongRequestStatuses.Withdrawn] = []
+        [SongRequestStatuses.Withdrawn] = [SongRequestStatuses.Open]
     };
 
     /// <summary>
@@ -41,10 +41,11 @@ public static class SongRequestStateMachine
         AllowedTransitions.TryGetValue(from, out var allowed) && allowed.Contains(to);
 
     /// <summary>
-    /// 是否为终态：终态没有正常流转出口（declined 只能经专用 reopen 端点重新开启）。
+    /// 是否为终态：终态没有正常流转出口。declined/withdrawn 均可经专用 reopen 端点
+    /// 重新开启，故只有 fulfilled（已入库）才算不可逆终态。
     /// </summary>
     public static bool IsTerminal(string status) =>
-        status is SongRequestStatuses.Fulfilled or SongRequestStatuses.Withdrawn;
+        status is SongRequestStatuses.Fulfilled;
 
     /// <summary>
     /// 状态字面量是否为已知取值。

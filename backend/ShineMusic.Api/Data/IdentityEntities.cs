@@ -50,10 +50,10 @@ public sealed class Invitation
 {
     /// <summary>邀请唯一标识，Guid 主键。</summary>
     public Guid Id { get; set; } = Guid.NewGuid();
-    /// <summary>受邀邮箱地址。</summary>
-    public required string Email { get; set; }
-    /// <summary>归一化（大写）邮箱，用于按邮箱+状态检索的复合索引。</summary>
-    public required string NormalizedEmail { get; set; }
+    /// <summary>受邀邮箱地址；CDK/注册码类邀请（issued 状态）生成时尚无邮箱，为空，注册时由用户自填。</summary>
+    public string? Email { get; set; }
+    /// <summary>归一化（大写）邮箱，用于按邮箱+状态检索的复合索引；CDK 邀请为空。</summary>
+    public string? NormalizedEmail { get; set; }
     /// <summary>邀请令牌的哈希（唯一索引）；邮件链接中携带明文令牌，库内只存哈希。</summary>
     public required string TokenHash { get; set; }
     /// <summary>邀请当前状态，取值见 <see cref="InvitationStatuses"/>（邀请状态机，最长 32 字符）。</summary>
@@ -77,6 +77,8 @@ public static class InvitationStatuses
     public const string Created = "created";
     /// <summary>邀请邮件已成功发送，等待用户注册。</summary>
     public const string Sent = "sent";
+    /// <summary>CDK/注册码已生成（无绑定邮箱），等待用户在注册时自填邮箱兑换。</summary>
+    public const string Issued = "issued";
     /// <summary>邮件投递失败，可重试发送。</summary>
     public const string DeliveryFailed = "delivery_failed";
     /// <summary>终态：用户已凭邀请完成注册（已兑换）。</summary>
@@ -91,6 +93,7 @@ public static class InvitationStatuses
     [
         Created,
         Sent,
+        Issued,
         DeliveryFailed,
         Redeemed,
         Expired,

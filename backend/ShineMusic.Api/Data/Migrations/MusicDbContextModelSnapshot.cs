@@ -464,14 +464,12 @@ namespace ShineMusic.Api.Data.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Email")
-                        .IsRequired()
                         .HasColumnType("TEXT");
 
                     b.Property<DateTime>("ExpiresAtUtc")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("NormalizedEmail")
-                        .IsRequired()
                         .HasColumnType("TEXT");
 
                     b.Property<DateTime?>("RedeemedAtUtc")
@@ -579,6 +577,9 @@ namespace ShineMusic.Api.Data.Migrations
                     b.Property<string>("ErrorMessage")
                         .HasColumnType("TEXT");
 
+                    b.Property<bool?>("Explicit")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("GenresJson")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -587,6 +588,12 @@ namespace ShineMusic.Api.Data.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<bool>("IsUserUpload")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ItunesCountry")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("ItunesTrackId")
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("Lyrics")
@@ -607,6 +614,9 @@ namespace ShineMusic.Api.Data.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<Guid?>("PublishedTrackId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Region")
                         .HasColumnType("TEXT");
 
                     b.Property<int?>("ReleaseYear")

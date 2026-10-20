@@ -78,6 +78,25 @@ public sealed class TokenService(IOptions<AuthOptions> authOptions)
         .Replace('/', '_');
 
     /// <summary>
+    /// 生成注册码（CDK）：加密安全随机数产生一段便于人工输入/复制的大写短码，
+    /// 形如 ABCD-EFGH-JKLM（数字组去易混淆字符）。明文仅在生成响应中返回一次，
+    /// 库内复用 TokenHash/HashToken 存哈希。
+    /// </summary>
+    public static string CreateRegistrationCode(int groups = 3, int groupSize = 4)
+    {
+        const string alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // 去掉易混淆的 0/O/1/I
+        var parts = new string[groups];
+        for (var g = 0; g < groups; g++)
+        {
+            var bytes = RandomNumberGenerator.GetBytes(groupSize);
+            var chars = new char[groupSize];
+            for (var i = 0; i < groupSize; i++) chars[i] = alphabet[bytes[i] % alphabet.Length];
+            parts[g] = new string(chars);
+        }
+        return string.Join('-', parts);
+    }
+
+    /// <summary>
     /// 计算刷新令牌的过期时刻（UTC）；可注入 nowUtc 以便测试。
     /// </summary>
     public DateTime GetRefreshTokenExpiry(DateTime? nowUtc = null) =>

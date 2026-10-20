@@ -15,7 +15,7 @@
 import { ref } from 'vue'
 
 /** 主题 id 联合类型 */
-export type ThemeId = 'lime' | 'glass' | 'cream' | 'night'
+export type ThemeId = 'lime' | 'glass' | 'cream' | 'night' | 'sunset' | 'violet' | 'ocean' | 'sakura' | 'oled'
 
 /** 主题元数据（用于主题选择页展示） */
 export interface ThemeMeta {
@@ -60,6 +60,41 @@ export const THEMES: ThemeMeta[] = [
     description: '深墨绿底 + 荧光青柠，夜间护眼，微光氛围',
     tone: '深色',
     swatch: { bg: '#14170f', surface: 'rgba(255,255,255,.14)', accent: '#c8f36a', text: '#eef3e2' },
+  },
+  {
+    id: 'sunset',
+    name: '落日橙',
+    description: '暖橘底 + 珊瑚橙，黄昏氛围，温暖而有活力',
+    tone: '浅色',
+    swatch: { bg: '#fdf3ec', surface: '#ffffff', accent: '#ff8a5c', text: '#3a2a22' },
+  },
+  {
+    id: 'violet',
+    name: '紫罗兰',
+    description: '深紫底 + 霓虹紫，梦幻神秘，暗夜里的霓虹感',
+    tone: '深色',
+    swatch: { bg: '#15121f', surface: 'rgba(255,255,255,.12)', accent: '#9d6bff', text: '#f2effa' },
+  },
+  {
+    id: 'ocean',
+    name: '海洋蓝',
+    description: '雾蓝底 + 澄澈海蓝，冷静清爽，通透明快',
+    tone: '浅色',
+    swatch: { bg: '#eef4f8', surface: '#ffffff', accent: '#4aa3df', text: '#1f2a33' },
+  },
+  {
+    id: 'sakura',
+    name: '樱花粉',
+    description: '樱粉底 + 落樱粉，柔和不刺眼，少女氛围',
+    tone: '浅色',
+    swatch: { bg: '#fdf2f5', surface: '#ffffff', accent: '#f18ab0', text: '#3a2530' },
+  },
+  {
+    id: 'oled',
+    name: 'OLED 纯黑',
+    description: '纯黑底 + 霓虹青，极致省电，OLED 屏观感最佳',
+    tone: '深色',
+    swatch: { bg: '#000000', surface: 'rgba(255,255,255,.06)', accent: '#45d0ff', text: '#e8e8ea' },
   },
 ]
 

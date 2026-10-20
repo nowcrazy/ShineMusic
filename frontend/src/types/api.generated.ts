@@ -223,6 +223,7 @@ export interface ApiInvitation {
 /** 来源：`backend/ShineMusic.Api/Endpoints/AuthEndpoints.cs` */
 export interface ApiInvitationValidation {
   email: string
+  channel: string // email | code
   expiresAt: string
 }
 
@@ -468,6 +469,7 @@ export interface ApiSystemCapabilities {
   userUploads: boolean
   allowedFormats: readonly string[]
   maxUploadSizeBytes?: number | null
+  minimumPasswordStrength: number
 }
 
 /** 来源：`backend/ShineMusic.Api/Contracts/StorageDtos.cs` */

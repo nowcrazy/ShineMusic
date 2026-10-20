@@ -38,8 +38,8 @@ export async function updateSongRequestStatus(
 }
 
 /**
- * 重新开启一条已拒绝的需求（declined → open）。
- * 原因必填：会写入时间线并通知提交人，同时保留原拒绝原因作为历史。
+ * 重新开启一条已结束的需求（declined/withdrawn → open）。
+ * 原因必填：会写入时间线并通知提交人，同时保留原拒绝/撤回原因作为历史。
  *
  * POST /admin/song-requests/{id}/reopen
  */

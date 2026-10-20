@@ -36,10 +36,10 @@ public sealed class AuthController : ControllerBase
     public AuthController(ILogger<AuthController> logger) => _logger = logger;
 
     // 【POST /api/v1/auth/invitations/validate】注册前校验邀请令牌（匿名）。
-    // 请求体：ValidateInvitationRequest.InvitationToken（明文一次性令牌）。
-    // 返回：200 InvitationValidationResponse（脱敏邮箱 + 到期时间 UTC）；
+    // 请求体：ValidateInvitationRequest.InvitationToken（明文一次性令牌，可为邮件链接令牌或注册码/CDK）。
+    // 返回：200 InvitationValidationResponse（脱敏邮箱（CDK 为空）+ 渠道 channel=email|code + 到期时间 UTC）；
     //       400 validation_error（令牌为空）/ invitation_invalid / invitation_redeemed / invitation_expired。
-    // 副作用：令牌已过期且状态仍为 Sent 时，惰性将其置为 Expired。
+    // 副作用：令牌已过期且状态仍为 Sent/Issued 时，惰性将其置为 Expired。
     [HttpPost("invitations/validate", Name = "ValidateInvitation")]
     public async Task<IResult> ValidateInvitation(
         ValidateInvitationRequest request,
@@ -59,28 +59,32 @@ public sealed class AuthController : ControllerBase
             return InvitationError(HttpContext, ErrorCodes.InvitationRedeemed, "The invitation has already been used."); // 400：已被核销
         if (invitation.ExpiresAtUtc <= DateTime.UtcNow)
         {
-            // 惰性过期：首次在过期后被使用时把 Sent 状态落库为 Expired，便于管理端列表展示。
-            if (invitation.Status == InvitationStatuses.Sent)
+            // 惰性过期：首次在过期后被使用时把 Sent/Issued 状态落库为 Expired，便于管理端列表展示。
+            if (invitation.Status is InvitationStatuses.Sent or InvitationStatuses.Issued)
             {
                 invitation.Status = InvitationStatuses.Expired;
                 await db.SaveChangesAsync(cancellationToken);
             }
             return InvitationError(HttpContext, ErrorCodes.InvitationExpired, "The invitation has expired."); // 400：已过期
         }
-        if (invitation.Status != InvitationStatuses.Sent)
-            return InvitationError(HttpContext, ErrorCodes.InvitationInvalid, "The invitation is not available."); // 400：Created/失败/撤销等非 Sent 状态不可用
+        if (invitation.Status is not (InvitationStatuses.Sent or InvitationStatuses.Issued))
+            return InvitationError(HttpContext, ErrorCodes.InvitationInvalid, "The invitation is not available."); // 400：Created/失败/撤销等非可用状态
 
+        // CDK(issued) 无绑定邮箱：返回空邮箱 + code 渠道，由前端提示用户自填邮箱。
+        var isCode = invitation.Status == InvitationStatuses.Issued;
         return Results.Ok(new InvitationValidationResponse(
-            MaskEmail(invitation.Email),
+            isCode ? string.Empty : MaskEmail(invitation.Email!),
+            isCode ? "code" : "email",
             DateTime.SpecifyKind(invitation.ExpiresAtUtc, DateTimeKind.Utc)));
     }
 
     // 【POST /api/v1/auth/register】凭邀请令牌注册新用户（匿名）。
-    // 请求体：RegisterRequest（invitationToken、password、displayName）。
+    // 请求体：RegisterRequest（invitationToken、password、displayName、email[仅 CDK 渠道必填]）。
     // 返回：201 Created（Location=/api/v1/me，载荷含 id/email/displayName/role=user）；
     //       400 令牌类错误（同 validate）或 Identity 密码/身份校验错误。
     // 业务规则：核销邀请与创建用户在同一数据库事务内完成；先以条件 UPDATE 抢占令牌，
     //           影响行数不为 1（已被并发请求抢走/已过期）即回滚，杜绝一邀多用。
+    // 邮箱来源：邮件邀请沿用绑定邮箱；CDK(issued) 要求请求体自填合法邮箱。
     [HttpPost("/api/v1/auth/register", Name = "Register")]
     public async Task<IResult> Register(
         RegisterRequest request,
@@ -106,20 +110,37 @@ public sealed class AuthController : ControllerBase
             return InvitationError(HttpContext, ErrorCodes.InvitationRedeemed, "The invitation has already been used."); // 400
         if (invitation.ExpiresAtUtc <= now)
         {
-            if (invitation.Status == InvitationStatuses.Sent)
+            if (invitation.Status is InvitationStatuses.Sent or InvitationStatuses.Issued)
             {
                 invitation.Status = InvitationStatuses.Expired;
                 await db.SaveChangesAsync(cancellationToken);
             }
             return InvitationError(HttpContext, ErrorCodes.InvitationExpired, "The invitation has expired."); // 400
         }
-        if (invitation.Status != InvitationStatuses.Sent)
+        if (invitation.Status is not (InvitationStatuses.Sent or InvitationStatuses.Issued))
             return InvitationError(HttpContext, ErrorCodes.InvitationInvalid, "The invitation is not available."); // 400
 
+        // 邮箱来源：邮件邀请沿用绑定邮箱；CDK(issued) 要求自填并校验合法、且不得重复建号。
+        var isCode = invitation.Status == InvitationStatuses.Issued;
+        string email;
+        if (isCode)
+        {
+            if (!TryNormalizeEmail(request.Email, out email!))
+                return ApiResults.ValidationError(HttpContext, "email", "A valid email address is required for this registration code."); // 400：CDK 自填邮箱非法
+            if (await userManager.FindByEmailAsync(email) is not null)
+                return Results.Conflict(new ApiErrorResponse(new ApiErrorDetail(ErrorCodes.ResourceConflict, "An account already exists for this email.", HttpContext.TraceIdentifier))); // 409：邮箱已被占用
+        }
+        else
+        {
+            email = invitation.Email!;
+        }
+
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
-        // 抢占式核销：仅当状态仍为 Sent 且未过期时更新成功（CAS 语义），防止两个并发注册共用同一邀请。
+        // 抢占式核销：仅当状态仍为 Sent/Issued 且未过期时更新成功（CAS 语义），防止两个并发注册共用同一邀请。
         var redeemed = await db.Invitations
-            .Where(item => item.Id == invitation.Id && item.Status == InvitationStatuses.Sent && item.ExpiresAtUtc > now)
+            .Where(item => item.Id == invitation.Id &&
+                (item.Status == InvitationStatuses.Sent || item.Status == InvitationStatuses.Issued) &&
+                item.ExpiresAtUtc > now)
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(item => item.Status, InvitationStatuses.Redeemed)
                 .SetProperty(item => item.RedeemedAtUtc, now), cancellationToken);
@@ -129,11 +150,10 @@ public sealed class AuthController : ControllerBase
             return InvitationError(HttpContext, ErrorCodes.InvitationInvalid, "The invitation is invalid or expired."); // 400：并发竞争失败
         }
 
-        // 邮箱取自邀请本身而非请求体，保证注册者只能使用受邀邮箱。
         var user = new ApplicationUser
         {
-            Email = invitation.Email,
-            UserName = invitation.Email,
+            Email = email,
+            UserName = email,
             DisplayName = request.DisplayName.Trim(),
             EmailConfirmed = true
         };
@@ -339,6 +359,25 @@ public sealed class AuthController : ControllerBase
         return $"{email[0]}***{email[(separator - 1)..]}";
     }
 
+    /// <summary>规范化注册码（CDK）注册时用户自填的邮箱：trim 并校验为合法邮箱，合法则赋给 <paramref name="email"/> 返回 true。</summary>
+    private static bool TryNormalizeEmail(string? input, out string email)
+    {
+        email = input?.Trim() ?? string.Empty;
+        if (email.Length is 0 or > 256)
+            return false;
+        try
+        {
+            var addr = new MailAddress(email);
+            if (!string.Equals(addr.Address, email, StringComparison.OrdinalIgnoreCase))
+                return false;
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+        return true;
+    }
+
     /// <summary>把 Identity 错误集合合并为单个 400 validation_error 响应。</summary>
     private static IResult IdentityValidationError(HttpContext ctx, IEnumerable<IdentityError> errors) =>
         Results.BadRequest(new ApiErrorResponse(new ApiErrorDetail(
@@ -359,8 +398,8 @@ public sealed class AuthController : ControllerBase
 }
 
 // 以下为本端点组使用的请求/响应 DTO（由请求体反序列化或作为响应载荷返回）。
-public sealed record ValidateInvitationRequest(string? InvitationToken);   // 邀请校验请求体：明文邀请令牌
-public sealed record RegisterRequest(string? InvitationToken, string Password, string DisplayName); // 注册请求体：邀请令牌 + 密码 + 昵称
+public sealed record ValidateInvitationRequest(string? InvitationToken);   // 邀请校验请求体：明文邀请令牌（邮件链接令牌或注册码/CDK）
+public sealed record RegisterRequest(string? InvitationToken, string Password, string DisplayName, string? Email = null); // 注册请求体：邀请令牌 + 密码 + 昵称 + 邮箱（仅 CDK 渠道必填）
 public sealed record LoginRequest(string? Email, string? Username, string Password); // 登录请求体：邮箱或用户名 + 密码
 public sealed record RefreshTokenRequest(string? RefreshToken);           // 刷新/登出请求体：刷新令牌（登出时可空）
-public sealed record InvitationValidationResponse(string Email, DateTime ExpiresAt); // 邀请校验成功响应：脱敏邮箱 + 到期时间（UTC）
+public sealed record InvitationValidationResponse(string Email, string Channel, DateTime ExpiresAt); // 邀请校验成功响应：脱敏邮箱（CDK 为空）+ 渠道(email|code) + 到期时间（UTC）

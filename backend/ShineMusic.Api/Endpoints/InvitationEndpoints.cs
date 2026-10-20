@@ -79,6 +79,35 @@ public sealed class InvitationController : ControllerBase
         return await DeliverInvitation(invitation, secret, db, emailSender, HttpContext, cancellationToken);
     }
 
+    // 【POST /api/v1/admin/invitations/code】生成注册码/CDK（管理员）。
+    // 注册码不绑定邮箱：生成时 Email 为空、状态为 issued；注册时由用户自填合法邮箱。
+    // 明文注册码仅在本响应中返回一次，数据库只存哈希；重复生成换发新码。
+    // 返回：201 InvitationCodeResponse（明文 code + InvitationDto）。
+    [HttpPost("code", Name = "CreateInvitationCode")]
+    public async Task<IResult> CreateInvitationCode(
+        MusicDbContext db,
+        IOptions<AuthOptions> authOptions,
+        CancellationToken cancellationToken)
+    {
+        var now = DateTime.UtcNow;
+        var code = TokenService.CreateRegistrationCode();
+        var invitation = new Invitation
+        {
+            Email = null,
+            NormalizedEmail = null,
+            TokenHash = TokenService.HashToken(code),
+            CreatedByUserId = Guid.Parse(HttpContext.User.FindFirst("sub")!.Value),
+            Status = InvitationStatuses.Issued,
+            CreatedAtUtc = now,
+            ExpiresAtUtc = now.AddHours(authOptions.Value.InvitationExpiryHours)
+        };
+        db.Invitations.Add(invitation);
+        AdminAudit.Add(HttpContext, db, "invitation.code_created", "invitation", invitation.Id);
+        await db.SaveChangesAsync(cancellationToken);
+        return Results.Created($"/api/v1/admin/invitations/{invitation.Id}",
+            new InvitationCodeResponse(code, ToDto(invitation)));
+    }
+
     // 【GET /api/v1/admin/invitations】分页查询邀请列表（管理员）。
     // 查询参数：status（可选；pending 为聚合虚拟状态=Created/Sent/DeliveryFailed 且未过期，
     //           其余值必须是 InvitationStatuses.All 中的精确状态）、page（默认 1）、pageSize（默认 20，1~100）。
@@ -100,11 +129,12 @@ public sealed class InvitationController : ControllerBase
             var normalizedStatus = status.Trim().ToLowerInvariant();
             if (normalizedStatus == "pending")
             {
-                // 虚拟状态 pending：所有“尚未核销/撤销且未过期”的投递中状态合集。
+                // 虚拟状态 pending：所有“尚未核销/撤销且未过期”的投递中状态合集（含注册码 issued）。
                 var now = DateTime.UtcNow;
                 query = query.Where(invitation => invitation.ExpiresAtUtc > now &&
                     (invitation.Status == InvitationStatuses.Created ||
                      invitation.Status == InvitationStatuses.Sent ||
+                     invitation.Status == InvitationStatuses.Issued ||
                      invitation.Status == InvitationStatuses.DeliveryFailed));
             }
             else
@@ -199,7 +229,7 @@ public sealed class InvitationController : ControllerBase
     {
         try
         {
-            await emailSender.SendInvitationAsync(invitation.Email, secret, invitation.ExpiresAtUtc, cancellationToken);
+            await emailSender.SendInvitationAsync(invitation.Email!, secret, invitation.ExpiresAtUtc, cancellationToken);
             invitation.Status = InvitationStatuses.Sent;
             invitation.SentAtUtc = DateTime.UtcNow;
             await db.SaveChangesAsync(cancellationToken);
@@ -283,4 +313,5 @@ public sealed class InvitationController : ControllerBase
 }
 
 public sealed record CreateInvitationRequest(string? Email); // 创建邀请请求体：受邀邮箱
-public sealed record InvitationDto(Guid Id, string Email, string Status, DateTime CreatedAt, DateTime ExpiresAt, DateTime? SentAt, DateTime? RedeemedAt); // 邀请响应 DTO
+public sealed record InvitationDto(Guid Id, string? Email, string Status, DateTime CreatedAt, DateTime ExpiresAt, DateTime? SentAt, DateTime? RedeemedAt); // 邀请响应 DTO
+public sealed record InvitationCodeResponse(string Code, InvitationDto Invitation); // 注册码生成响应：明文注册码（仅一次）+ 邀请记录

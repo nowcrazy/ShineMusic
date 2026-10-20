@@ -303,6 +303,323 @@ onLaunch(() => {
   --sm-art-shadow: rgba(0, 0, 0, .5);
 }
 
+/* ---- 主题 E：sunset 落日橙（暖橘底 + 珊瑚橙强调） ---- */
+:root[data-sm-theme='sunset'] {
+  --sm-bg: #fdf3ec;
+  --sm-bg-soft: #fffaf5;
+  --sm-page-bg: #fdf3ec;
+  --sm-surface: #ffffff;
+  --sm-surface-2: #fdf5ee;
+  --sm-surface-3: #f8e8dc;
+  --sm-border: #f3e1d2;
+  --sm-border-strong: #e9cdb6;
+  --sm-divider: #f8ebdf;
+
+  --sm-text: #3a2a22;
+  --sm-text-2: #8a6d58;
+  --sm-text-3: #b3937e;
+
+  --sm-accent: #ff8a5c;
+  --sm-accent-ink: #4a2416;
+  --sm-accent-2: #f2a04d;
+  --sm-accent-3: #e56d8a;
+  --sm-accent-soft: #fde7dc;
+  --sm-accent-soft-border: #ff8a5c;
+  --sm-accent-grad: linear-gradient(90deg, #ff8a5c, #f2a04d);
+  --sm-accent-glow: rgba(255, 138, 92, .42);
+
+  --sm-danger: #cf4a36;
+  --sm-danger-soft: #f9e5de;
+  --sm-danger-soft-border: #efd2c6;
+  --sm-warn: #a86f1f;
+  --sm-warn-soft: #fbf0d9;
+  --sm-info-soft: #e8f0f8;
+  --sm-muted-soft: #f2e9e1;
+  --sm-accent-2-ink: #4a2416;
+  --sm-accent-3-soft: #f6e3e9;
+
+  --sm-radius-card: 24rpx;
+  --sm-radius-field: 18rpx;
+  --sm-radius-pill: 42rpx;
+  --sm-shadow: 0 16rpx 34rpx rgba(220, 130, 80, .2);
+  --sm-shadow-sm: 0 6rpx 16rpx rgba(220, 130, 80, .14);
+  --sm-blur: 0px;
+
+  --sm-glow-opacity: 0;
+  --sm-glow-1: #ffd9c4;
+  --sm-glow-2: #f2a04d;
+  --sm-glow-3: #f8c9d8;
+
+  --sm-hero-bg: linear-gradient(135deg, #f2a04d, #ff8a5c);
+  --sm-hero-shade: linear-gradient(90deg, rgba(74, 36, 22, .72) 0%, rgba(74, 36, 22, .34) 52%, rgba(74, 36, 22, .03) 100%);
+  --sm-hero-ink-bg: rgba(255, 255, 255, .94);
+  --sm-hero-ink: #4a2416;
+  --sm-avatar-bg: linear-gradient(135deg, #ffd9c4, #ff8a5c);
+  --sm-cover-bg: linear-gradient(135deg, #ffd9c4 0%, #ff8a5c 100%);
+  --sm-cover-ink: #7a3a1e;
+  --sm-overlay-ink: rgba(74, 36, 22, .5);
+  --sm-mask: rgba(74, 36, 22, .42);
+
+  --sm-nav-bg: #fdf3ec;
+  --sm-nav-text: #3a2a22;
+  --sm-tabbar-bg: rgba(253, 243, 236, .94);
+  --sm-art-shadow: rgba(220, 130, 80, .26);
+}
+
+/* ---- 主题 F：violet 紫罗兰（深紫底 + 霓虹紫） ---- */
+:root[data-sm-theme='violet'] {
+  --sm-bg: #15121f;
+  --sm-bg-soft: #1c1829;
+  --sm-page-bg: radial-gradient(circle at 8% 4%, rgba(157, 107, 255, .3), transparent 38%),
+    radial-gradient(circle at 96% 20%, rgba(120, 90, 230, .3), transparent 42%),
+    radial-gradient(circle at 4% 94%, rgba(220, 130, 240, .24), transparent 40%), #15121f;
+  --sm-surface: rgba(255, 255, 255, .09);
+  --sm-surface-2: rgba(255, 255, 255, .06);
+  --sm-surface-3: rgba(255, 255, 255, .12);
+  --sm-border: rgba(255, 255, 255, .16);
+  --sm-border-strong: rgba(255, 255, 255, .22);
+  --sm-divider: rgba(255, 255, 255, .08);
+
+  --sm-text: #f2effa;
+  --sm-text-2: rgba(242, 239, 250, .62);
+  --sm-text-3: rgba(242, 239, 250, .44);
+
+  --sm-accent: #9d6bff;
+  --sm-accent-ink: #180d30;
+  --sm-accent-2: #7aa2ff;
+  --sm-accent-3: #e06bff;
+  --sm-accent-soft: rgba(157, 107, 255, .18);
+  --sm-accent-soft-border: rgba(157, 107, 255, .4);
+  --sm-accent-grad: linear-gradient(90deg, #9d6bff, #7aa2ff);
+  --sm-accent-glow: rgba(157, 107, 255, .34);
+
+  --sm-danger: #ff8f8f;
+  --sm-danger-soft: rgba(255, 143, 143, .16);
+  --sm-danger-soft-border: rgba(255, 143, 143, .3);
+  --sm-warn: #ffd166;
+  --sm-warn-soft: rgba(255, 209, 102, .18);
+  --sm-info-soft: rgba(122, 162, 255, .2);
+  --sm-muted-soft: rgba(255, 255, 255, .12);
+  --sm-accent-2-ink: #1a1030;
+  --sm-accent-3-soft: rgba(224, 107, 255, .18);
+
+  --sm-radius-card: 24rpx;
+  --sm-radius-field: 16rpx;
+  --sm-radius-pill: 40rpx;
+  --sm-shadow: 0 16rpx 44rpx rgba(0, 0, 0, .46);
+  --sm-shadow-sm: 0 8rpx 20rpx rgba(0, 0, 0, .34);
+  --sm-blur: 20px;
+
+  --sm-glow-opacity: .5;
+  --sm-glow-1: #9d6bff;
+  --sm-glow-2: #785ae6;
+  --sm-glow-3: #dc82f0;
+
+  --sm-hero-bg: linear-gradient(135deg, rgba(157, 107, 255, .4), rgba(122, 162, 255, .34));
+  --sm-hero-shade: linear-gradient(90deg, rgba(0, 0, 0, .82) 0%, rgba(0, 0, 0, .42) 52%, rgba(0, 0, 0, .04) 100%);
+  --sm-hero-ink-bg: rgba(255, 255, 255, .94);
+  --sm-hero-ink: #180d30;
+  --sm-avatar-bg: linear-gradient(135deg, rgba(157, 107, 255, .6), rgba(122, 162, 255, .55));
+  --sm-cover-bg: linear-gradient(135deg, rgba(157, 107, 255, .42) 0%, rgba(122, 162, 255, .4) 100%);
+  --sm-cover-ink: rgba(255, 255, 255, .9);
+  --sm-overlay-ink: rgba(20, 16, 34, .5);
+  --sm-mask: rgba(8, 6, 16, .64);
+
+  --sm-nav-bg: #15121f;
+  --sm-nav-text: #f2effa;
+  --sm-tabbar-bg: rgba(21, 18, 31, .72);
+  --sm-art-shadow: rgba(0, 0, 0, .46);
+}
+
+/* ---- 主题 G：ocean 海洋蓝（雾蓝底 + 澄澈海蓝） ---- */
+:root[data-sm-theme='ocean'] {
+  --sm-bg: #eef4f8;
+  --sm-bg-soft: #f7fbfd;
+  --sm-page-bg: #eef4f8;
+  --sm-surface: #ffffff;
+  --sm-surface-2: #f3f8fb;
+  --sm-surface-3: #e3eef5;
+  --sm-border: #dfe9ef;
+  --sm-border-strong: #c6d8e2;
+  --sm-divider: #e8f0f4;
+
+  --sm-text: #1f2a33;
+  --sm-text-2: #5c7383;
+  --sm-text-3: #8ca3b0;
+
+  --sm-accent: #4aa3df;
+  --sm-accent-ink: #0f2740;
+  --sm-accent-2: #6fb7e8;
+  --sm-accent-3: #4a7fe0;
+  --sm-accent-soft: #e2eff8;
+  --sm-accent-soft-border: #4aa3df;
+  --sm-accent-grad: linear-gradient(90deg, #4aa3df, #6fb7e8);
+  --sm-accent-glow: rgba(74, 163, 223, .4);
+
+  --sm-danger: #d04a4a;
+  --sm-danger-soft: #f9e4e4;
+  --sm-danger-soft-border: #efd0d0;
+  --sm-warn: #a8761f;
+  --sm-warn-soft: #fbf0d9;
+  --sm-info-soft: #e2eff8;
+  --sm-muted-soft: #e9f1f5;
+  --sm-accent-2-ink: #0f2740;
+  --sm-accent-3-soft: #e4ecf9;
+
+  --sm-radius-card: 22rpx;
+  --sm-radius-field: 16rpx;
+  --sm-radius-pill: 40rpx;
+  --sm-shadow: 0 14rpx 32rpx rgba(40, 90, 120, .14);
+  --sm-shadow-sm: 0 6rpx 16rpx rgba(40, 90, 120, .1);
+  --sm-blur: 0px;
+
+  --sm-glow-opacity: 0;
+  --sm-glow-1: #c8e4f5;
+  --sm-glow-2: #8fc8ec;
+  --sm-glow-3: #b8d4f5;
+
+  --sm-hero-bg: linear-gradient(135deg, #6fb7e8, #4a7fe0);
+  --sm-hero-shade: linear-gradient(90deg, rgba(15, 39, 64, .76) 0%, rgba(15, 39, 64, .38) 52%, rgba(15, 39, 64, .03) 100%);
+  --sm-hero-ink-bg: rgba(255, 255, 255, .94);
+  --sm-hero-ink: #0f2740;
+  --sm-avatar-bg: linear-gradient(135deg, #c8e4f5, #6fb7e8);
+  --sm-cover-bg: linear-gradient(135deg, #c8e4f5 0%, #6fb7e8 100%);
+  --sm-cover-ink: #17445e;
+  --sm-overlay-ink: rgba(15, 39, 64, .5);
+  --sm-mask: rgba(15, 39, 64, .42);
+
+  --sm-nav-bg: #eef4f8;
+  --sm-nav-text: #1f2a33;
+  --sm-tabbar-bg: rgba(238, 244, 248, .94);
+  --sm-art-shadow: rgba(40, 90, 120, .22);
+}
+
+/* ---- 主题 H：sakura 樱花粉（樱粉底 + 落樱粉） ---- */
+:root[data-sm-theme='sakura'] {
+  --sm-bg: #fdf2f5;
+  --sm-bg-soft: #fff8fa;
+  --sm-page-bg: #fdf2f5;
+  --sm-surface: #ffffff;
+  --sm-surface-2: #fdf6f8;
+  --sm-surface-3: #f8e6ec;
+  --sm-border: #f6e0e7;
+  --sm-border-strong: #f0c9d6;
+  --sm-divider: #faecef;
+
+  --sm-text: #3a2530;
+  --sm-text-2: #8a5f70;
+  --sm-text-3: #b68c9b;
+
+  --sm-accent: #f18ab0;
+  --sm-accent-ink: #4a1e30;
+  --sm-accent-2: #f0a6c4;
+  --sm-accent-3: #e07a9a;
+  --sm-accent-soft: #fde6ee;
+  --sm-accent-soft-border: #f18ab0;
+  --sm-accent-grad: linear-gradient(90deg, #f18ab0, #f0a6c4);
+  --sm-accent-glow: rgba(241, 138, 176, .42);
+
+  --sm-danger: #d04a6a;
+  --sm-danger-soft: #fae2e8;
+  --sm-danger-soft-border: #f0cdd6;
+  --sm-warn: #a8761f;
+  --sm-warn-soft: #fbf0d9;
+  --sm-info-soft: #eaeff8;
+  --sm-muted-soft: #f5e9ed;
+  --sm-accent-2-ink: #4a1e30;
+  --sm-accent-3-soft: #f7e1ea;
+
+  --sm-radius-card: 26rpx;
+  --sm-radius-field: 20rpx;
+  --sm-radius-pill: 44rpx;
+  --sm-shadow: 0 16rpx 34rpx rgba(210, 120, 150, .18);
+  --sm-shadow-sm: 0 6rpx 16rpx rgba(210, 120, 150, .12);
+  --sm-blur: 0px;
+
+  --sm-glow-opacity: 0;
+  --sm-glow-1: #fcd5e0;
+  --sm-glow-2: #f0a6c4;
+  --sm-glow-3: #f8c9d8;
+
+  --sm-hero-bg: linear-gradient(135deg, #f0a6c4, #f18ab0);
+  --sm-hero-shade: linear-gradient(90deg, rgba(74, 30, 48, .7) 0%, rgba(74, 30, 48, .32) 52%, rgba(74, 30, 48, .03) 100%);
+  --sm-hero-ink-bg: rgba(255, 255, 255, .94);
+  --sm-hero-ink: #4a1e30;
+  --sm-avatar-bg: linear-gradient(135deg, #fcd5e0, #f18ab0);
+  --sm-cover-bg: linear-gradient(135deg, #fcd5e0 0%, #f18ab0 100%);
+  --sm-cover-ink: #7a3050;
+  --sm-overlay-ink: rgba(74, 30, 48, .5);
+  --sm-mask: rgba(74, 30, 48, .42);
+
+  --sm-nav-bg: #fdf2f5;
+  --sm-nav-text: #3a2530;
+  --sm-tabbar-bg: rgba(253, 242, 245, .94);
+  --sm-art-shadow: rgba(210, 120, 150, .24);
+}
+
+/* ---- 主题 I：oled OLED 纯黑（纯黑底 + 霓虹青） ---- */
+:root[data-sm-theme='oled'] {
+  --sm-bg: #000000;
+  --sm-bg-soft: #0a0a0c;
+  --sm-page-bg: #000000;
+  --sm-surface: rgba(255, 255, 255, .06);
+  --sm-surface-2: rgba(255, 255, 255, .03);
+  --sm-surface-3: rgba(255, 255, 255, .09);
+  --sm-border: rgba(255, 255, 255, .12);
+  --sm-border-strong: rgba(255, 255, 255, .18);
+  --sm-divider: rgba(255, 255, 255, .05);
+
+  --sm-text: #e8e8ea;
+  --sm-text-2: rgba(232, 232, 234, .55);
+  --sm-text-3: rgba(232, 232, 234, .38);
+
+  --sm-accent: #45d0ff;
+  --sm-accent-ink: #001c28;
+  --sm-accent-2: #6c8cff;
+  --sm-accent-3: #45ffd0;
+  --sm-accent-soft: rgba(69, 208, 255, .14);
+  --sm-accent-soft-border: rgba(69, 208, 255, .36);
+  --sm-accent-grad: linear-gradient(90deg, #45d0ff, #6c8cff);
+  --sm-accent-glow: rgba(69, 208, 255, .28);
+
+  --sm-danger: #ff7a7a;
+  --sm-danger-soft: rgba(255, 122, 122, .14);
+  --sm-danger-soft-border: rgba(255, 122, 122, .28);
+  --sm-warn: #ffd166;
+  --sm-warn-soft: rgba(255, 209, 102, .16);
+  --sm-info-soft: rgba(108, 140, 255, .18);
+  --sm-muted-soft: rgba(255, 255, 255, .1);
+  --sm-accent-2-ink: #00101c;
+  --sm-accent-3-soft: rgba(69, 255, 208, .14);
+
+  --sm-radius-card: 18rpx;
+  --sm-radius-field: 12rpx;
+  --sm-radius-pill: 36rpx;
+  --sm-shadow: 0 16rpx 40rpx rgba(0, 0, 0, .7);
+  --sm-shadow-sm: 0 8rpx 20rpx rgba(0, 0, 0, .5);
+  --sm-blur: 16px;
+
+  --sm-glow-opacity: .45;
+  --sm-glow-1: #45d0ff;
+  --sm-glow-2: #6c8cff;
+  --sm-glow-3: #45ffd0;
+
+  --sm-hero-bg: linear-gradient(135deg, rgba(69, 208, 255, .34), rgba(108, 140, 255, .3));
+  --sm-hero-shade: linear-gradient(90deg, rgba(0, 0, 0, .84) 0%, rgba(0, 0, 0, .44) 52%, rgba(0, 0, 0, .04) 100%);
+  --sm-hero-ink-bg: #45d0ff;
+  --sm-hero-ink: #001c28;
+  --sm-avatar-bg: linear-gradient(135deg, rgba(69, 208, 255, .5), rgba(108, 140, 255, .5));
+  --sm-cover-bg: linear-gradient(135deg, rgba(69, 208, 255, .36) 0%, rgba(108, 140, 255, .36) 100%);
+  --sm-cover-ink: rgba(255, 255, 255, .88);
+  --sm-overlay-ink: rgba(0, 0, 0, .55);
+  --sm-mask: rgba(0, 0, 0, .68);
+
+  --sm-nav-bg: #000000;
+  --sm-nav-text: #e8e8ea;
+  --sm-tabbar-bg: rgba(0, 0, 0, .78);
+  --sm-art-shadow: rgba(0, 0, 0, .6);
+}
+
 /* ============================================================================
  * 基础样式（全部引用主题令牌）
  * ========================================================================== */
@@ -316,6 +633,22 @@ page {
   background: var(--sm-bg);
   color: var(--sm-text);
   font-family: 'Avenir Next', Avenir, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+/* ============================================================================
+ * 折叠屏 / 平板适配
+ * ----------------------------------------------------------------------------
+ * 双折叠（Galaxy Fold / Mix Fold 等展开后约 700~900px）、三折叠（华为 Mate XT 等展开
+ * 后约 1000px+）展开后的视口远宽于普通手机，全宽渲染会导致内容过度拉伸、固定元素错位。
+ * 统一把页面内容收窄到 720px 并居中（与底部播放条 / 首页 tabbar 既有的 720px 上限一致），
+ * 左右留白透出主题背景色，观感自然且不偏移。折叠后的外屏（约 340~420px）走 rpx 等比缩放，
+ * 无需额外处理即可正常显示。
+ * ========================================================================== */
+@media (min-width: 700px) {
+  page {
+    max-width: 720px;
+    margin: 0 auto;
+  }
 }
 
 /* H5 原生导航栏：uni-app 会把 pages.json 的颜色写成行内样式，需 !important 覆盖 */

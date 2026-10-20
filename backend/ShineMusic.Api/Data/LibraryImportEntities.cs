@@ -115,6 +115,14 @@ public sealed class LibraryImportItem
     public int? DiscNumber { get; set; }
     /// <summary>发行年份（标签 Year）。</summary>
     public int? ReleaseYear { get; set; }
+    /// <summary>iTunes 曲目 ID（溯源用）；来自外部元数据源，非必须。</summary>
+    public long? ItunesTrackId { get; set; }
+    /// <summary>iTunes 上架国家/地区商店代码（如 US/CN），仅作溯源，不代表艺人国籍。</summary>
+    public string? ItunesCountry { get; set; }
+    /// <summary>地区分类（如 华语/欧美/日韩），由流派/艺人名文字推导，缺失时为 null。</summary>
+    public string? Region { get; set; }
+    /// <summary>成人内容标记（来自 iTunes trackExplicitness 解析）。</summary>
+    public bool? Explicit { get; set; }
     /// <summary>流派列表，以 JSON 数组字符串存储（JSON 列，应用层负责序列化）。</summary>
     public string GenresJson { get; set; } = "[]";
     /// <summary>时长（毫秒）；TagLib 解析结果优先，缺失时回退 ffprobe 探测结果。</summary>

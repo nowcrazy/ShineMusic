@@ -163,6 +163,7 @@ public sealed record MusicHomeDto(
 /// <param name="UserUploads">是否开放用户上传本地音频（扫码导入）：上传的歌曲默认私有、可立即收听，是否转公开由管理员审核决定。</param>
 /// <param name="AllowedFormats">允许上传的音频容器格式标识列表。</param>
 /// <param name="MaxUploadSizeBytes">单文件上传大小上限，单位字节；未配置限制时为 null。</param>
+/// <param name="MinimumPasswordStrength">修改密码要求达到的最低强度等级（0-4），由 PasswordPolicy:MinimumStrength 下发。</param>
 public sealed record SystemCapabilitiesDto(
     bool AnonymousPlayback,
     bool UserCollections,
@@ -175,7 +176,8 @@ public sealed record SystemCapabilitiesDto(
     bool ServerTranscoding,
     bool UserUploads,
     IReadOnlyList<string> AllowedFormats,
-    long? MaxUploadSizeBytes);
+    long? MaxUploadSizeBytes,
+    int MinimumPasswordStrength);
 
 /// <summary>
 /// 歌词展示信息，前端播放时按需拉取对应语言/格式的歌词。

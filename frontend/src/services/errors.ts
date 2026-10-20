@@ -38,6 +38,7 @@ export const ErrorCodes = {
   EmailOrPasswordInvalid: 'email_or_password_invalid',
   PasswordResetInvalid: 'password_reset_invalid',
   InvitationRequired: 'invitation_required',
+  PasswordTooWeak: 'password_too_weak',
 
   // ===== 邀请 =====
   InvitationInvalid: 'invitation_invalid',
@@ -83,6 +84,7 @@ const MESSAGES: Record<string, string> = {
   [ErrorCodes.InvitationExpired]: '邀请链接已过期',
   [ErrorCodes.InvitationRedeemed]: '邀请链接已经被使用',
   [ErrorCodes.InvitationRequired]: '注册需要邀请链接，请联系管理员获取',
+  [ErrorCodes.PasswordTooWeak]: '新密码强度不足，请使用更复杂的密码',
   [ErrorCodes.ResourceNotFound]: '内容不存在或已被删除',
   [ErrorCodes.ResourceConflict]: '操作冲突，请刷新后重试',
   [ErrorCodes.PermissionDenied]: '没有权限执行此操作',

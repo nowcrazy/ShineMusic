@@ -10,6 +10,7 @@
  * - 行为：收藏（library）、不感兴趣（feedback），播放/跳过/播完由 player 统一上报。
  */
 import { computed, getCurrentInstance, nextTick, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import {
   AlignLeft,
   AudioLines,
@@ -19,20 +20,30 @@ import {
   ListPlus,
   Pause,
   Play,
+  Repeat,
+  Repeat1,
+  Shuffle,
+  SlidersHorizontal,
   SkipBack,
   SkipForward,
   X,
 } from 'lucide-vue-next'
-import { nextTrack, previousTrack, seek, togglePlayback, usePlayer } from '@/services/player'
+import { cycleRepeatMode, nextTrack, previousTrack, seek, togglePlayback, toggleShuffle, usePlayer } from '@/services/player'
+import { EQ_PRESETS } from '@/services/eq-presets'
 import { addPlaylistTrack, favoriteIds, getPlaylists, toggleFavorite } from '@/services/library'
 import { setFeedback } from '@/services/feedback'
 import { isAuthenticated, requireLogin } from '@/services/session'
 import { formatTime } from '@/utils/format'
 import CoverArt from './CoverArt.vue'
 
-const { state } = usePlayer() // 全局播放器单例状态
+const { state, setEqPreset } = usePlayer() // 全局播放器单例状态
+const { t } = useI18n()
 const expanded = ref(false) // 全屏播放器是否展开
 const lyricMode = ref(false) // 是否处于沉浸歌词模式（隐藏封面、歌词铺满）
+const eqPanelVisible = ref(false) // 音效预设选择弹层是否可见
+
+/** 当前音效预设的本地化名称（音效按钮文案） */
+const eqPresetName = computed(() => t(`player.eqPresets.${state.eqPreset}`))
 
 /** 是否位于有自定义 tabbar 的页面（首页）：影响底部偏移量 */
 const props = withDefaults(defineProps<{ withTabbar?: boolean }>(), { withTabbar: false })
@@ -296,6 +307,12 @@ function toggleLyricMode() {
   lyricMode.value = !lyricMode.value
 }
 
+/** 选择音效预设并立即应用、关闭弹层 */
+function pickEqPreset(id: string) {
+  setEqPreset(id)
+  eqPanelVisible.value = false
+}
+
 /** 收藏 / 取消收藏当前曲目 */
 async function handleLike() {
   if (!state.currentTrack) return
@@ -532,8 +549,9 @@ function onSeekMove(event: TouchEvent) {
         <view class="seek-times"><text>{{ elapsedLabel }}</text><text>{{ durationLabel }}</text></view>
       </view>
 
-      <!-- 播放控制：加歌单 / 上一首 / 播放暂停 / 下一首 / 收藏 -->
+      <!-- 播放控制：随机 / 加歌单 / 上一首 / 播放暂停 / 下一首 / 循环模式 / 收藏 -->
       <view class="player-controls">
+        <view class="control-secondary" :class="{ active: state.shuffle }" @tap="toggleShuffle"><Shuffle :size="21" /></view>
         <view class="control-secondary" @tap="addToPlaylist"><ListPlus :size="22" /></view>
         <view class="control-skip" @tap="previousTrack"><SkipBack :size="24" fill="currentColor" /></view>
         <view class="control-play" @tap="togglePlayback">
@@ -541,17 +559,43 @@ function onSeekMove(event: TouchEvent) {
           <Play v-else :size="27" fill="currentColor" />
         </view>
         <view class="control-skip" @tap="nextTrack"><SkipForward :size="24" fill="currentColor" /></view>
+        <view class="control-secondary" :class="{ active: state.repeatMode !== 'order' }" @tap="cycleRepeatMode">
+          <Repeat1 v-if="state.repeatMode === 'one'" :size="21" />
+          <Repeat v-else :size="21" />
+        </view>
         <view class="control-secondary" :class="{ liked }" @tap="handleLike">
           <Heart :size="21" :fill="liked ? 'currentColor' : 'none'" />
         </view>
       </view>
 
-      <!-- 不感兴趣：负反馈入口，点击后减少同类推荐并切歌 -->
+      <!-- 音效 + 不感兴趣：音效仅 H5（Web Audio）可用时展示 -->
       <view class="player-extra">
+        <view v-if="state.eqSupported" class="extra-button" :class="{ active: state.eqPreset !== 'flat' }" @tap="eqPanelVisible = true">
+          <SlidersHorizontal :size="15" /><text>{{ t('player.eq') }} · {{ eqPresetName }}</text>
+        </view>
         <view class="extra-button" @tap="markNotInterested"><Ban :size="15" /><text>不感兴趣</text></view>
       </view>
 
       <view v-if="state.audioError" class="audio-notice">暂时无法播放该曲目，请稍后再试</view>
+    </view>
+
+    <!-- 音效预设选择弹层（底部抽屉） -->
+    <view v-if="eqPanelVisible" class="eq-sheet-mask" @tap="eqPanelVisible = false">
+      <view class="eq-sheet" @tap.stop>
+        <view class="eq-sheet-head">
+          <text class="eq-sheet-title">{{ t('player.eq') }}</text>
+          <view class="eq-sheet-close" @tap="eqPanelVisible = false"><X :size="20" /></view>
+        </view>
+        <view class="eq-grid">
+          <view
+            v-for="p in EQ_PRESETS"
+            :key="p.id"
+            class="eq-chip"
+            :class="{ active: state.eqPreset === p.id }"
+            @tap="pickEqPreset(p.id)"
+          >{{ t('player.eqPresets.' + p.id) }}</view>
+        </view>
+      </view>
     </view>
   </view>
 </template>
@@ -629,12 +673,28 @@ function onSeekMove(event: TouchEvent) {
 /* 控制区 */
 .player-controls { display: flex; flex: none; align-items: center; justify-content: space-between; margin-top: 24rpx; }
 .control-secondary, .control-skip { display: grid; place-items: center; width: 52rpx; height: 60rpx; color: var(--sm-text-2); }
+.control-secondary.active { color: var(--sm-accent); }
 .control-skip { color: var(--sm-text); }
 .control-play { display: grid; place-items: center; width: 88rpx; height: 88rpx; border-radius: 50%; background: var(--sm-hero-ink-bg); color: var(--sm-hero-ink); box-shadow: 0 10rpx 30rpx var(--sm-accent-glow); }
-.player-extra { display: flex; flex: none; justify-content: center; margin-top: 20rpx; }
+.player-extra { display: flex; flex: none; flex-wrap: wrap; justify-content: center; gap: 14rpx; margin-top: 20rpx; }
 .extra-button { display: flex; align-items: center; gap: 8rpx; padding: 12rpx 26rpx; border: 1rpx solid var(--sm-border); border-radius: var(--sm-radius-pill); color: var(--sm-text-2); font-size: 17rpx; }
+.extra-button.active { border-color: var(--sm-accent); color: var(--sm-accent); background: var(--sm-accent-soft); }
 .extra-button:active { opacity: .6; }
 .audio-notice { margin-top: 12rpx; color: var(--sm-danger); font-size: 16rpx; text-align: center; }
+
+/* 音效预设选择底部抽屉 */
+.eq-sheet-mask { position: fixed; z-index: 11; inset: 0; display: flex; align-items: flex-end; background: rgba(0, 0, 0, .45); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); animation: fade-in .2s ease-out; }
+.eq-sheet { display: flex; flex-direction: column; width: 100%; padding: 34rpx 40rpx calc(env(safe-area-inset-bottom) + 36rpx); border-radius: 34rpx 34rpx 0 0; background: var(--sm-surface-3); animation: slide-up .26s ease-out; }
+.eq-sheet-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 26rpx; }
+.eq-sheet-title { color: var(--sm-text); font-size: 22rpx; font-weight: 700; }
+.eq-sheet-close { display: grid; place-items: center; width: 48rpx; height: 48rpx; color: var(--sm-text-2); }
+.eq-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16rpx; }
+.eq-chip { display: grid; place-items: center; padding: 22rpx 0; border: 1rpx solid var(--sm-border); border-radius: 16rpx; background: var(--sm-surface); color: var(--sm-text-2); font-size: 18rpx; font-weight: 600; transition: border-color .18s ease, color .18s ease, background .18s ease; }
+.eq-chip.active { border-color: var(--sm-accent); color: var(--sm-accent); background: var(--sm-accent-soft); box-shadow: 0 0 0 2rpx var(--sm-accent-soft-border); }
+.eq-chip:active { opacity: .7; }
+
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slide-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
 
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes eq { 0%, 100% { transform: scaleY(.25); } 50% { transform: scaleY(1); } }

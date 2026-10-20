@@ -32,7 +32,8 @@ public sealed class SystemController : ControllerBase
     [Produces("application/json")]
     public IActionResult GetCapabilities(
         IOptions<FeatureOptions> featureOptions,
-        IOptions<UploadOptions> uploadOptions)
+        IOptions<UploadOptions> uploadOptions,
+        IOptions<PasswordPolicyOptions> passwordPolicy)
     {
         var features = featureOptions.Value;
         var uploads = uploadOptions.Value;
@@ -49,6 +50,7 @@ public sealed class SystemController : ControllerBase
             features.ServerTranscoding,
             features.UserUploads,
             uploads.AllowedFormats,
-            uploads.MaxFileSizeBytes));
+            uploads.MaxFileSizeBytes,
+            passwordPolicy.Value.MinimumStrength));
     }
 }

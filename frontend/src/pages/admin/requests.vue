@@ -125,8 +125,8 @@ function handleFulfill(item: ApiSongRequest) {
 }
 
 /**
- * 重新开启已拒绝的需求（declined → open）。
- * 原因必填：后端写入时间线并通知提交人，原拒绝原因作为历史保留。
+ * 重新开启已结束的需求（declined/withdrawn → open）。
+ * 原因必填：后端写入时间线并通知提交人，原拒绝/撤回原因作为历史保留。
  */
 function handleReopen(item: ApiSongRequest) {
   if (busyId.value) return
@@ -227,8 +227,8 @@ function handleReopen(item: ApiSongRequest) {
           </view>
         </view>
 
-        <!-- 已拒绝的需求可重新开启（补到音源后回补） -->
-        <view v-else-if="item.status === 'declined'" class="card-actions">
+        <!-- 已拒绝/已撤回的需求可重新开启（补到音源后回补 / 误撤回恢复） -->
+        <view v-else-if="item.status === 'declined' || item.status === 'withdrawn'" class="card-actions">
           <view class="act-btn primary" @tap="handleReopen(item)">
             <RotateCcw :size="14" /><text>重新开启</text>
           </view>

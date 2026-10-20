@@ -9,6 +9,7 @@ import { onShow } from '@dcloudio/uni-app'
 import {
   Mail,
   Plus,
+  KeyRound,
   RefreshCw,
   ShieldCheck,
   Trash2,
@@ -17,6 +18,7 @@ import {
 import { isAdmin } from '@/services/session'
 import {
   createInvitation,
+  createInvitationCode,
   getInvitations,
   resendInvitation,
   revokeInvitation,
@@ -27,6 +29,7 @@ const email = ref('')
 const invitations = ref<readonly Invitation[]>([])
 const loading = ref(false)
 const creating = ref(false)
+const generating = ref(false)
 const loadError = ref('')
 
 // 权限拦截
@@ -74,6 +77,27 @@ async function handleCreate() {
   }
 }
 
+/** 生成注册码/CDK：明文仅展示一次，随后刷新列表 */
+async function handleCreateCode() {
+  if (generating.value) return
+  generating.value = true
+  try {
+    const result = await createInvitationCode()
+    uni.showModal({
+      title: '注册码已生成',
+      content: `${result.code}\n\n注册码仅在本次展示，请立即复制保存。`,
+      showCancel: false,
+      confirmText: '我已保存',
+    })
+    await loadInvitations()
+  } catch (err: any) {
+    const msg = err?.message || '注册码生成失败'
+    uni.showToast({ title: msg, icon: 'none' })
+  } finally {
+    generating.value = false
+  }
+}
+
 /** 重发邀请 */
 async function handleResend(id: string) {
   try {
@@ -110,6 +134,7 @@ function statusLabel(status: string): string {
   const map: Record<string, string> = {
     created: '已创建',
     sent: '已发送',
+    issued: '已生成',
     delivery_failed: '发送失败',
     redeemed: '已注册',
     expired: '已过期',
@@ -122,6 +147,7 @@ function statusLabel(status: string): string {
 function statusClass(status: string): string {
   switch (status) {
     case 'sent': return 'status-sent'
+    case 'issued': return 'status-pending'
     case 'redeemed': return 'status-redeemed'
     case 'revoked':
     case 'expired': return 'status-inactive'
@@ -160,6 +186,12 @@ function formatDate(dateStr: string): string {
           <text>{{ creating ? '发送中…' : '发送邀请' }}</text>
         </view>
       </view>
+      <view class="form-row code-row">
+        <view class="code-btn" :class="{ disabled: generating }" @tap="handleCreateCode">
+          <KeyRound :size="16" />
+          <text>{{ generating ? '生成中…' : '生成注册码' }}</text>
+        </view>
+      </view>
     </view>
 
     <!-- 邀请列表 -->
@@ -180,7 +212,7 @@ function formatDate(dateStr: string): string {
     <view v-else class="invite-list">
       <view v-for="inv in invitations" :key="inv.id" class="invite-card">
         <view class="invite-main">
-          <text class="invite-email">{{ inv.email }}</text>
+          <text class="invite-email">{{ inv.email || '注册码（未绑定邮箱）' }}</text>
           <text class="invite-status" :class="statusClass(inv.status)">{{ statusLabel(inv.status) }}</text>
         </view>
         <view class="invite-meta">
@@ -199,7 +231,7 @@ function formatDate(dateStr: string): string {
             <RefreshCw :size="13" /><text>重发</text>
           </view>
           <view
-            v-if="inv.status === 'created' || inv.status === 'sent' || inv.status === 'delivery_failed'"
+            v-if="inv.status === 'created' || inv.status === 'sent' || inv.status === 'issued' || inv.status === 'delivery_failed'"
             class="action-btn revoke"
             @tap="handleRevoke(inv.id)"
           >
@@ -229,6 +261,10 @@ function formatDate(dateStr: string): string {
 .email-input input::placeholder { color: var(--sm-text-3); }
 .create-btn { display: flex; align-items: center; gap: 8rpx; padding: 0 24rpx; height: 76rpx; border-radius: 12rpx; background: var(--sm-accent); color: var(--sm-accent-ink); font-size: 17rpx; font-weight: 700; }
 .create-btn.disabled { opacity: .55; }
+
+.code-row { margin-top: 20rpx; }
+.code-btn { display: flex; flex: 1; align-items: center; justify-content: center; gap: 8rpx; height: 76rpx; border-radius: 12rpx; border: 1rpx solid var(--sm-border); background: var(--sm-surface); color: var(--sm-text-1); font-size: 17rpx; font-weight: 700; }
+.code-btn.disabled { opacity: .55; }
 
 .list-header { display: flex; align-items: center; justify-content: space-between; margin-top: 28rpx; margin-bottom: 14rpx; }
 .list-title { color: var(--sm-text); font-size: 20rpx; font-weight: 800; }
