@@ -1,6 +1,5 @@
 {
   "pages/home/index.vue": [
-    "([])\r\nconst selectedGenre = ref('全部') \nconst loadError = ref(false)\r\n\r\n\nconst query = ref('')\r\nconst searchResults = ref",
     "Billboard 热歌精选",
     "activeTab === '为你'",
     "activeTab === '发现'",

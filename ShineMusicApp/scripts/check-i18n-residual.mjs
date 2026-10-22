@@ -42,17 +42,26 @@ function scan() {
   const results = {}
   for (const file of walk(SRC)) {
     const rel = relative(SRC, file).replace(/\\/g, '/')
-    const src = stripComments(readFileSync(file, 'utf8'), extname(file) === '.vue')
+    // 统一换行符为 LF：消除 Windows(CRLF)/CI(LF) 检出差异导致的基线失配
+    const raw = readFileSync(file, 'utf8').replace(/\r\n/g, '\n')
+    const src = stripComments(raw, extname(file) === '.vue')
     const hits = new Set()
-    const strRe = /'([^'\n]*)'|"([^"\n]*)"|`([^`]*)`/g
+    // 引号分支仅单行；反引号模板串同样仅单行——跨行捕获必然吞进代码（误报），
+    // 多行 UI 文本由 vue 文本节点分支负责
+    const strRe = /'([^'\n]*)'|"([^"\n]*)"|`([^`\n]*)`/g
     let m
     while ((m = strRe.exec(src))) {
       const text = (m[1] ?? m[2] ?? m[3] ?? '').trim()
       if (text && CJK.test(text)) hits.add(text)
     }
     if (extname(file) === '.vue') {
+      // 文本节点分支只扫 <template> 区：script 区的 `>`/`<`（泛型、比较符）会
+      // 把整段代码误捕获为「标签间文本」（曾把 ref<Collection[]> 到下个 < 之间
+      // 含 '全部' 的代码串进基线，CI 换行符归一后暴露为误报）
+      const tplMatch = src.match(/<template[^>]*>[\s\S]*<\/template>/)
+      const tpl = tplMatch ? tplMatch[0] : ''
       const textRe = />([^<>{}]*[\u4e00-\u9fff][^<>{}]*)</g
-      while ((m = textRe.exec(src))) {
+      while ((m = textRe.exec(tpl))) {
         const text = m[1].trim()
         if (text) hits.add(text)
       }
