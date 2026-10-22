@@ -72,7 +72,10 @@ export function createAppI18n(): I18n {
   if (_i18n) return _i18n
   const initial = loadLocale()
   _i18n = createI18n({
-    legacy: false, // composition API: $t still works in template, useI18n() in setup
+    legacy: false, // composition API: useI18n() in setup
+    // 组合模式下 globalInjection 默认 false，$t/$d/$n 不会注入 globalProperties，
+    // 模板 $t 会报 _ctx.$t is not a function 导致首屏白屏（App/H5 同样中招），必须显式开启
+    globalInjection: true,
     locale: initial,
     fallbackLocale: DEFAULT_LOCALE,
     // vue-i18n@9.14 的 messages 选项是 schema 品牌类型，且其 d.ts 引用的 LocaleMessage
