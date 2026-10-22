@@ -1149,7 +1149,7 @@ function coverOf(collection: ApiCollectionSummary) {
 .bottom-spacer { height: 245rpx; }
 .genre-grid { display: flex; flex-wrap: wrap; gap: 16rpx; margin-top: 23rpx; }
 .genre-chip { display: flex; align-items: center; justify-content: space-between; width: calc(50% - 8rpx); height: 84rpx; padding: 0 24rpx; border: 1rpx solid var(--sm-border); border-radius: 18rpx; background: var(--sm-surface); color: var(--sm-text); font-size: 21rpx; font-weight: 600; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
-.genre-chip :deep(svg) { color: var(--sm-text-3); }
+.genre-chip :deep(svg), .genre-chip :deep(.lucide-shim) { color: var(--sm-text-3); }
 .search-results { margin-top: 40rpx; }
 .library-wrap { padding-top: 40rpx; }
 .library-block { margin-top: 44rpx; }
@@ -1212,8 +1212,8 @@ function coverOf(collection: ApiCollectionSummary) {
 .tabbar { position: fixed; z-index: 3; right: 0; bottom: 0; left: 0; display: flex; justify-content: space-around; padding: 17rpx 35rpx calc(env(safe-area-inset-bottom) + 20rpx); border-top: 1rpx solid var(--sm-surface-3); background: var(--sm-tabbar-bg); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); }
 .tab-item { display: flex; min-width: 105rpx; flex-direction: column; align-items: center; gap: 6rpx; padding: 10rpx 0; border-radius: 40rpx; color: var(--sm-text-3); font-size: 16rpx; transition: background .2s ease, color .2s ease; }
 .tab-item.active { color: var(--sm-text); font-weight: 700; background: var(--sm-accent-soft); }
-.tab-item :deep(svg) { transition: transform .18s ease; }
-.tab-item.active :deep(svg) { color: var(--sm-accent); transform: translateY(-2rpx) scale(1.1); }
+.tab-item :deep(svg), .tab-item :deep(.lucide-shim) { transition: transform .18s ease; }
+.tab-item.active :deep(svg), .tab-item.active :deep(.lucide-shim) { color: var(--sm-accent); transform: translateY(-2rpx) scale(1.1); }
 /* 中间凸起「消息」按钮：上浮出底栏顶边，未读角标贴右上角（描边用底栏底色做「嵌」进去的效果） */
 .tab-fab { position: relative; align-self: flex-start; display: grid; place-items: center; width: 96rpx; height: 96rpx; margin-top: -35rpx; border: 1rpx solid var(--sm-border-strong); border-radius: 50%; background: var(--sm-accent-grad); color: var(--sm-accent-ink); box-shadow: 0 10rpx 26rpx var(--sm-accent-glow); box-sizing: border-box; }
 .tab-fab-badge { position: absolute; top: -8rpx; right: -10rpx; min-width: 32rpx; padding: 0 8rpx; border: 2rpx solid var(--sm-tabbar-bg); border-radius: 20rpx; background: var(--sm-danger); color: #ffffff; font-size: 16rpx; font-weight: 800; line-height: 30rpx; text-align: center; box-sizing: border-box; }

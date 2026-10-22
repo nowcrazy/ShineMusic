@@ -44,8 +44,11 @@ desktop.ini
 
 # ---------- 前端包管理器：统一使用 yarn，npm 锁文件不入库 ----------
 frontend/package-lock.json
+ShineMusicApp/package-lock.json
 
 # ---------- AI 助手的本地工作记录 ----------
 /.workbuddy-ai/
 /.trae
 /docs
+
+# ---------- ShineMusicApp（HBuilderX uni-app 源码工程）：node_modules / unpackage 已由上方全局规则排除 ----------

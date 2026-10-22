@@ -25,7 +25,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 PROJECT = ROOT / "backend" / "ShineMusic.Api"
-OUTPUT = ROOT / "frontend" / "src" / "types" / "api.generated.ts"
+OUTPUT = ROOT / "ShineMusicApp" / "src" / "types" / "api.generated.ts"
 
 SKIP_DIRS = {"obj", "bin", "Migrations"}
 

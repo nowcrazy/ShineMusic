@@ -219,7 +219,8 @@ if (allowedOrigins.Length == 0)
         ? (string.IsNullOrWhiteSpace(lanIp)
             ? [$"http://localhost:{webPort}", $"http://127.0.0.1:{webPort}"]
             : [$"http://localhost:{webPort}", $"http://127.0.0.1:{webPort}", $"http://{lanIp}:{webPort}"])
-        : (string.IsNullOrWhiteSpace(serverWebOrigin) ? [] : [serverWebOrigin]);
+        // "null"：5+App/HBuilderX 本地壳的页面来源是 file://，浏览器规范规定其跨域请求 Origin 头为字面量 "null"
+        : (string.IsNullOrWhiteSpace(serverWebOrigin) ? [] : [serverWebOrigin, "null"]);
 }
 builder.Services.AddCors(options => options.AddPolicy("Client", policy =>
 {

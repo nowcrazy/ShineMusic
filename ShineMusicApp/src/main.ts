@@ -9,6 +9,9 @@ import { createSSRApp } from 'vue'
 import App from './App.vue'
 import { patchShowModal } from '@/utils/modal-patch'
 import { createAppI18n } from '@/locale'
+// #ifdef APP-PLUS
+import { installAppBootFix } from '@/utils/app-boot-fix'
+// #endif
 
 // 在应用创建前修补 uni.showModal（仅 H5 端生效），修复点击按钮后模态框不关闭的 bug。
 patchShowModal()
@@ -23,5 +26,9 @@ export function createApp() {
   // 注册 vue-i18n（legacy: false），使组件内 useI18n()/模板 $t 可用；
   // 必须在返回 app 前完成注册，否则 PlayerBar / LanguageSwitcher 等使用 useI18n 的组件会注入失败。
   app.use(createAppI18n())
+  // #ifdef APP-PLUS
+  // App 端启动竞态兜底（详见 app-boot-fix.ts；链路正常时零副作用）
+  installAppBootFix(app)
+  // #endif
   return { app }
 }

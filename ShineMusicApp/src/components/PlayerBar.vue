@@ -9,7 +9,7 @@
  * - 手势：封面区左右滑切歌、下滑关闭、双击收藏、单击切换歌词模式；
  * - 行为：收藏（library）、不感兴趣（feedback），播放/跳过/播完由 player 统一上报。
  */
-import { computed, getCurrentInstance, nextTick, ref, watch } from 'vue'
+import { computed, getCurrentInstance, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   AlignLeft,
@@ -285,10 +285,57 @@ watch(
   },
 )
 watch(expanded, (open) => {
+  applyOrientationLock()
   if (open) void nextTick(() => centerActiveLyric())
 })
 watch(lyricMode, () => {
   void nextTick(() => centerActiveLyric())
+})
+
+// 旋转屏幕/窗口尺寸变化后重新测量（横竖屏切换会改变歌词区高度）
+function onWindowResize() {
+  void nextTick(() => centerActiveLyric())
+}
+
+// ===== App 端横屏策略（对齐全屏视频/音乐类 App）=====
+// 全局保持竖屏锁定；仅当全屏播放器展开时解锁旋转（横屏呈现双栏布局），收起时恢复竖屏。
+function applyOrientationLock() {
+  // #ifdef APP-PLUS
+  try {
+    const plus = (globalThis as any).plus
+    if (!plus?.android) return
+    const main = plus.android.runtimeMainActivity()
+    const ActivityInfo = plus.android.importClass('android.content.pm.ActivityInfo')
+    main.setRequestedOrientation(
+      expanded.value ? ActivityInfo.SCREEN_ORIENTATION_FULL_USER : ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
+    )
+  } catch {
+    // 方向控制失败不影响播放
+  }
+  // #endif
+}
+
+onMounted(() => {
+  uni.onWindowResize?.(onWindowResize)
+  applyOrientationLock()
+})
+onUnmounted(() => {
+  uni.offWindowResize?.(onWindowResize)
+  // 展开态下组件被销毁（如从播放页 reLaunch 走）时收回竖屏锁定
+  // #ifdef APP-PLUS
+  if (expanded.value) {
+    try {
+      const plus = (globalThis as any).plus
+      const main = plus?.android?.runtimeMainActivity?.()
+      if (main) {
+        const ActivityInfo = plus.android.importClass('android.content.pm.ActivityInfo')
+        main.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT)
+      }
+    } catch {
+      // ignore
+    }
+  }
+  // #endif
 })
 
 // ===== 律动频谱条（视觉动效，非真实频谱；播放时律动、暂停时静置） =====
@@ -484,8 +531,8 @@ function onSeekMove(event: TouchEvent) {
       <view class="now-next" @tap.stop="nextTrack"><SkipForward :size="19" /></view>
     </view>
 
-    <!-- 全屏播放器弹层：动态背景 + 黑胶封面 / 沉浸歌词 + 频谱 + 控制区 -->
-    <view v-if="expanded" class="player-overlay" :style="overlayStyle">
+    <!-- 全屏播放器弹层：动态背景 + 黑胶封面 / 沉浸歌词 + 频谱 + 控制区；immersive 类供横屏布局切换歌词栏形态 -->
+    <view v-if="expanded" class="player-overlay" :class="{ immersive: lyricMode }" :style="overlayStyle">
       <!-- 顶栏：收起 / 歌词模式切换 / 关闭 -->
       <view class="player-topbar">
         <view class="player-icon-button" @tap="expanded = false"><ChevronDown :size="23" /></view>
@@ -708,7 +755,7 @@ function onSeekMove(event: TouchEvent) {
 /* 进度条 */
 .seek-area { flex: none; margin-top: 30rpx; }
 .seek-track { position: relative; height: 24rpx; touch-action: none; }
-.seek-track::before { content: ''; position: absolute; top: 9rpx; right: 0; left: 0; height: 5rpx; border-radius: 4rpx; background: var(--sm-border); }
+.seek-track::before { content: ''; position: absolute; top: 9rpx; right: 0; left: 0; height: 5rpx; border-radius: 4rpx; background: var(--sm-border-strong); }
 .seek-track > view:first-child { position: absolute; top: 9rpx; left: 0; height: 5rpx; border-radius: 4rpx; background: var(--sm-accent-grad); }
 .seek-knob { position: absolute; top: 50%; width: 15rpx; height: 15rpx; border: 3rpx solid var(--sm-bg); border-radius: 50%; background: var(--sm-accent); box-shadow: 0 0 14rpx var(--sm-accent); transform: translate(-50%, -50%); }
 .seek-times { display: flex; justify-content: space-between; margin-top: 10rpx; color: var(--sm-text-2); font-family: 'DM Sans', sans-serif; font-size: 15rpx; }
@@ -761,4 +808,108 @@ function onSeekMove(event: TouchEvent) {
   .now-playing { right: max(20rpx, calc((100vw - 680px) / 2)); left: max(20rpx, calc((100vw - 680px) / 2)); }
   .player-overlay { max-width: 720px; margin: 0 auto; }
 }
+
+/* 横屏 / 折叠屏展开态双栏布局（参考网易云 Pad 版 / QQ 音乐横屏 / Apple Music 双栏播放器的通行范式）：
+   左栏 = 黑胶封面 + 曲目信息 + 频谱 + 进度 + 传输控制 + 操作图标行；
+   右栏 = 歌词面板常驻（左对齐、大行距、毛玻璃卡片），与竖屏“封面/歌词二选一、居中沉浸”形成真正的形态差异；
+   队列/音效抽屉横屏下从底部弹层改为右侧滑入面板。
+   横屏下 rpx 以横屏宽度为基准整体放大，故控制/文字尺寸全部改用 px 显式约束。 */
+@media (orientation: landscape) and (min-width: 560px) {
+  .player-overlay {
+    display: grid;
+    grid-template-columns: minmax(0, 11fr) minmax(0, 9fr);
+    grid-template-rows: auto minmax(0, 1fr) auto auto auto auto auto;
+    grid-template-areas:
+      'top top'
+      'art lyric'
+      'info lyric'
+      'vis lyric'
+      'seek lyric'
+      'ctrl lyric'
+      'extra lyric';
+    column-gap: 28px;
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: calc(env(safe-area-inset-top) + 10px) 36px calc(env(safe-area-inset-bottom) + 14px);
+  }
+  .player-topbar { grid-area: top; }
+  .player-top-label { gap: 2px; font-size: 14px; }
+  .player-context { font-size: 12px; }
+
+  /* stage 退化为透传，其子元素（封面/信息/歌词）直接成为网格项，分到左右两栏 */
+  .player-stage { display: contents; }
+
+  /* —— 左栏：黑胶封面 —— */
+  .player-art-block { align-items: center; grid-area: art; justify-content: center; margin-top: 0; }
+  .player-art-wrap { width: min(32vh, 28vw, 300px); }
+  .disc-hole { border-width: 4px; }
+  .art-sticker { gap: 5px; padding: 6px 10px; font-size: 10px; }
+  .art-hint { display: none; } /* 横屏空间紧凑：手势提示隐藏（手势本身仍可用） */
+
+  /* —— 左栏：曲目信息 —— */
+  .player-info { grid-area: info; gap: 12px; margin-top: 14px; padding: 0 2px; }
+  .player-song-title { font-size: 21px; }
+  .player-song-artist { margin-top: 5px; font-size: 13px; }
+  .player-like { width: 38px; height: 38px; }
+
+  /* —— 左栏：频谱 + 进度 + 传输控制 —— */
+  .visualizer { grid-area: vis; gap: 3px; height: 26px; margin-top: 10px; }
+  .vbar { width: 4px; }
+  .seek-area { grid-area: seek; margin-top: 10px; }
+  .seek-times { margin-top: 5px; font-size: 12px; }
+  .player-controls { width: 100%; max-width: 430px; margin: 10px auto 0; }
+  .control-secondary, .control-skip { width: 44px; height: 48px; }
+  .control-play { width: 62px; height: 62px; }
+
+  /* —— 左栏：操作胶囊收成纯图标圆钮，省横向空间 —— */
+  .player-extra { grid-area: extra; gap: 12px; margin-top: 10px; }
+  .extra-button { justify-content: center; width: 42px; height: 42px; padding: 0; border-radius: 50%; }
+  .extra-button text { display: none; }
+  .audio-notice { grid-column: 1 / -1; margin-top: 8px; font-size: 12px; }
+
+  /* —— 右栏：歌词面板常驻 —— */
+  .lyric-view, .lyric-empty { grid-area: lyric; }
+  .lyric-view {
+    margin-top: 0; padding: 14px 16px;
+    border: 1px solid var(--sm-border);
+    border-radius: 18px;
+    background: var(--sm-surface-2);
+    -webkit-backdrop-filter: blur(16px);
+    backdrop-filter: blur(16px);
+  }
+  .lyric-line { padding: 6px 0 6px 10px; text-align: left; font-size: 15px; line-height: 1.85; }
+  .lyric-line.active { font-size: 18px; }
+  .player-stage.immersive .lyric-line { padding: 9px 0 9px 10px; font-size: 16px; }
+  .player-stage.immersive .lyric-line.active { font-size: 21px; }
+  .lyric-empty { align-self: center; margin-top: 0; font-size: 14px; }
+
+  /* —— 横屏沉浸歌词：左栏隐藏（v-if），歌词升为全幅主区 —— */
+  .player-overlay.immersive {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto auto auto auto;
+    grid-template-areas:
+      'top'
+      'lyric'
+      'vis'
+      'seek'
+      'ctrl'
+      'extra';
+  }
+  .player-overlay.immersive .lyric-view { padding: 6px 0 0; border: 0; background: transparent; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .player-overlay.immersive .lyric-line { text-align: center; }
+  .player-overlay.immersive .player-controls { max-width: 560px; }
+
+  /* —— 横屏队列/音效抽屉：底部弹层 → 右侧滑入面板 —— */
+  .eq-sheet-mask { align-items: stretch; justify-content: flex-end; }
+  .eq-sheet {
+    width: min(420px, 58vw); height: 100%; max-height: none;
+    padding: 24px 26px calc(env(safe-area-inset-bottom) + 24px);
+    border-radius: 24px 0 0 24px;
+    animation: slide-in-right .26s ease-out;
+  }
+  .queue-sheet { max-height: none; }
+  .queue-scroll { flex: 1 1 auto; max-height: none; }
+}
+
+@keyframes slide-in-right { from { transform: translateX(100%); } to { transform: translateX(0); } }
 </style>

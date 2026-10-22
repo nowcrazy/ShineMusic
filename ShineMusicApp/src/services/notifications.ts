@@ -13,6 +13,7 @@
 import { ref } from 'vue'
 import type { ApiPageResult } from '@/types/music'
 import { API_PREFIX, http } from './http'
+import { isAuthenticated } from './session'
 
 /** 站内信列表项 */
 export interface ApiNotification {
@@ -53,13 +54,18 @@ export async function getNotifications(
  * 未登录时不发请求，直接把计数归零。
  */
 export async function refreshUnreadCount() {
+  // 未登录不发请求（否则匿名用户每次进首页都吃一个 401），直接把计数归零
+  if (!isAuthenticated.value) {
+    unreadCount.value = 0
+    return
+  }
   try {
     const result = await http.get<{ count: number }>(
       `${API_PREFIX}/me/notifications/unread-count`,
     )
     unreadCount.value = result.count
   } catch {
-    // 未登录/网络异常：保持上一次的值，不打扰用户
+    // 网络异常：保持上一次的值，不打扰用户
   }
 }
 
