@@ -13,6 +13,7 @@
 **/.idea/
 **/.vscode/*
 !**/.vscode/extensions.json
+**/.hbuilderx/
 *.user
 *.suo
 
@@ -25,7 +26,7 @@
 *.log
 **/logs/
 
-# ---------- 本地运行数据 ----------
+# ---------- 本地运行数据（用户音频 / 数据库 / 私有壁纸，隐私红线） ----------
 /data/
 *.db
 *.db-shm
@@ -43,12 +44,20 @@ Thumbs.db
 desktop.ini
 
 # ---------- 前端包管理器：统一使用 yarn，npm 锁文件不入库 ----------
-frontend/package-lock.json
 ShineMusicApp/package-lock.json
+
+# ---------- 本地部署地址（含局域网 IP / Tailscale 域名，不入库；模板见 config/hosts.example.json） ----------
+/config/hosts.json
+
+# ---------- APK 构建产物（仅通过 GitHub Release 分发，不入库） ----------
+/Apk/
 
 # ---------- AI 助手的本地工作记录 ----------
 /.workbuddy-ai/
 /.trae
-/docs
+
+# ---------- 文档归置：根目录只保留 README.md，其余 md 统一放 docs/ ----------
+/*.md
+!/README.md
 
 # ---------- ShineMusicApp（HBuilderX uni-app 源码工程）：node_modules / unpackage 已由上方全局规则排除 ----------

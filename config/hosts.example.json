@@ -1,0 +1,16 @@
+{
+  "local": {
+    "label": "#Local · 本地开发 / 局域网（yarn dev:h5、真机调试）。首次克隆后：复制本文件为 hosts.json，把 lanIp 改成你电脑的局域网 IP",
+    "lanIp": "192.168.x.x",
+    "webPort": 5173,
+    "apiPort": 5180,
+    "appApiPort": 5180,
+    "apiHost": "localhost"
+  },
+  "server": {
+    "label": "#Server · 生产部署：改成你的固定公网地址（如 Tailscale Funnel / 域名），改完重新 yarn build:app 打 APK",
+    "webOrigin": "https://your-node.example.ts.net",
+    "apiOrigin": "",
+    "appApiOrigin": "https://your-node.example.ts.net"
+  }
+}
