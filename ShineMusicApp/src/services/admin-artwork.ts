@@ -5,6 +5,7 @@
  * - 请求字段名固定为 "file"；
  * - 成功响应 { id, artworkUrl }，id 用于后续 PATCH 曲目/专辑/歌单的 artworkId。
  */
+import { t } from '@/locale'
 import { API_PREFIX, resolveUrl } from './http'
 import { getAccessToken } from './tokens'
 
@@ -31,7 +32,7 @@ export function uploadArtwork(filePath: string | Blob): Promise<UploadArtworkRes
       header: token ? { Authorization: `Bearer ${token}` } : {},
       success: (res) => {
         if (res.statusCode < 200 || res.statusCode >= 300) {
-          let message = `上传失败（${res.statusCode}）`
+          let message = t('services.uploadFailedWithStatus', { status: res.statusCode })
           try {
             const body = JSON.parse(res.data)
             if (body?.error?.message) message = body.error.message
@@ -44,10 +45,10 @@ export function uploadArtwork(filePath: string | Blob): Promise<UploadArtworkRes
         try {
           resolve(JSON.parse(res.data) as UploadArtworkResult)
         } catch {
-          reject(new Error('上传成功，但响应解析失败'))
+          reject(new Error(t('services.uploadResponseParseFailed')))
         }
       },
-      fail: (err) => reject(new Error(err.errMsg || '上传失败')),
+      fail: (err) => reject(new Error(err.errMsg || t('services.uploadFailed'))),
     })
   })
 }

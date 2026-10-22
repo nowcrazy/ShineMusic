@@ -24,6 +24,7 @@ import type {
 } from '@/types/music'
 import { API_PREFIX, http, resolveUrl } from './http'
 import { getAccessToken } from './tokens'
+import { t } from '@/locale'
 
 // ---- 我的曲库状态（module 级单例，全局共享） ----
 // 已引用曲目列表（后端 UserLibraryItemDto 原样，页面侧按需映射）
@@ -72,15 +73,15 @@ export function uploadFiles(
           const body = typeof res.data === 'string' ? JSON.parse(res.data) : res.data
           if (res.statusCode < 200 || res.statusCode >= 300) {
             const detail = (body as { error?: { message?: string } })?.error
-            reject(new Error(detail?.message || `上传失败：${res.statusCode}`))
+            reject(new Error(detail?.message || t('catalogErrors.uploadFailedWithStatus', { status: res.statusCode })))
             return
           }
           resolve(body as ApiUserUploadResponse)
         } catch (error) {
-          reject(new Error(error instanceof Error ? error.message : '上传响应解析失败'))
+          reject(new Error(error instanceof Error ? error.message : t('catalogErrors.uploadResponseParseFailed')))
         }
       },
-      fail: (err) => reject(new Error(err.errMsg || '上传失败')),
+      fail: (err) => reject(new Error(err.errMsg || t('catalogErrors.uploadFailed'))),
     })
   })
 }

@@ -6,6 +6,10 @@
  * 面板常驻 DOM 以支持滑入/滑出过渡，关闭时 pointer-events 置空不影响页面交互。
  */
 import { Bell, Heart, History, Palette, Upload, UserRound, X } from 'lucide-vue-next'
+import { useI18n } from 'vue-i18n'
+
+// 文案多语言
+const { t } = useI18n()
 
 // 显隐由父组件 v-model 控制
 const props = defineProps<{ modelValue: boolean }>()
@@ -31,34 +35,34 @@ function go(url: string) {
     <!-- 底部面板 -->
     <view class="qpanel-sheet">
       <view class="qpanel-head">
-        <text class="qpanel-title">快捷功能</text>
+        <text class="qpanel-title">{{ t('quickPanel.title') }}</text>
         <view class="qpanel-close" @tap="close"><X :size="18" /></view>
       </view>
 
       <view class="qpanel-grid">
         <view class="qpanel-item" @tap="go('/pages/notifications/index')">
           <view class="qpanel-icon notify"><Bell :size="21" /></view>
-          <text class="qpanel-label">消息</text>
+          <text class="qpanel-label">{{ t('quickPanel.messages') }}</text>
         </view>
         <view class="qpanel-item" @tap="go('/pages/history/index')">
           <view class="qpanel-icon history"><History :size="21" /></view>
-          <text class="qpanel-label">播放历史</text>
+          <text class="qpanel-label">{{ t('quickPanel.history') }}</text>
         </view>
         <view class="qpanel-item" @tap="go('/pages/library/favorites')">
           <view class="qpanel-icon favorite"><Heart :size="21" /></view>
-          <text class="qpanel-label">我的收藏</text>
+          <text class="qpanel-label">{{ t('quickPanel.favorites') }}</text>
         </view>
         <view class="qpanel-item" @tap="go('/pages/social/follow')">
           <view class="qpanel-icon follow"><UserRound :size="21" /></view>
-          <text class="qpanel-label">关注与粉丝</text>
+          <text class="qpanel-label">{{ t('quickPanel.follow') }}</text>
         </view>
         <view class="qpanel-item" @tap="go('/pages/library/upload')">
           <view class="qpanel-icon upload"><Upload :size="21" /></view>
-          <text class="qpanel-label">上传音频</text>
+          <text class="qpanel-label">{{ t('quickPanel.upload') }}</text>
         </view>
         <view class="qpanel-item" @tap="go('/pages/settings/theme')">
           <view class="qpanel-icon theme"><Palette :size="21" /></view>
-          <text class="qpanel-label">主题外观</text>
+          <text class="qpanel-label">{{ t('quickPanel.theme') }}</text>
         </view>
       </view>
     </view>

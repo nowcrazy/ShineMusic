@@ -13,6 +13,7 @@
  * 4. ApiError：统一错误对象，携带 HTTP 状态码、后端错误码 code、消息与 traceId；
  *    uni.request 层网络不可达（DNS/断网/超时）时 status 为 0、code 为 'network_error'。
  */
+import { t } from '@/locale'
 import { getAccessToken, getRefreshToken } from './tokens'
 
 /** 后端 API 统一版本前缀，所有业务路径均以此开头，与后端路由 /api/v1 对齐 */
@@ -146,7 +147,7 @@ function sendRequest(method: HttpMethod, url: string, data: unknown, withAuth: b
       header,
       timeout: REQUEST_TIMEOUT_MS,
       success: ({ statusCode, data: body }) => resolve({ status: statusCode, data: body }),
-      fail: (error) => reject(new ApiError(0, 'network_error', error.errMsg || '网络连接失败')),
+      fail: (error) => reject(new ApiError(0, 'network_error', error.errMsg || t('services.networkError'))),
     })
   })
 }
@@ -210,7 +211,7 @@ export async function request<T>(
     throw new ApiError(
       status,
       detail.code || (status === 0 ? 'network_error' : 'internal_error'),
-      detail.message || `请求失败：${status}`,
+      detail.message || t('services.requestFailed', { status }),
       detail.traceId,
     )
   }

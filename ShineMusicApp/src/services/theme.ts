@@ -30,12 +30,18 @@ export type ThemeId = 'lime' | 'glass' | 'cream' | 'night' | 'sunset' | 'violet'
 export interface ThemeMeta {
   /** 主题标识，对应 <html data-sm-theme="..."> 的取值 */
   id: ThemeId
-  /** 主题名称 */
+  /** 主题名称（中文字面量，作为数据回退） */
   name: string
-  /** 一句话描述 */
+  /** 主题名称的多语言 key（展示处经 t()/\$t() 取当前语言文案） */
+  nameKey: string
+  /** 一句话描述（中文字面量，作为数据回退） */
   description: string
-  /** 明暗属性，供选择页标注 */
+  /** 一句话描述的多语言 key */
+  descKey: string
+  /** 明暗属性（中文字面量，作为数据回退），供选择页标注 */
   tone: '浅色' | '深色'
+  /** 明暗属性的多语言 key（themePage.toneLight / themePage.toneDark） */
+  toneKey: string
   /** 色卡预览：底色 / 卡片面 / 强调色 / 文字色 */
   swatch: { bg: string; surface: string; accent: string; text: string }
 }
@@ -45,64 +51,91 @@ export const THEMES: ThemeMeta[] = [
   {
     id: 'lime',
     name: '绿意精致',
+    nameKey: 'theme.lime',
     description: '米白底 + 青柠绿，清爽通透，适合白天使用',
+    descKey: 'theme.limeDesc',
     tone: '浅色',
+    toneKey: 'themePage.toneLight',
     swatch: { bg: '#f7f8f4', surface: '#ffffff', accent: '#c8f36a', text: '#23261f' },
   },
   {
     id: 'glass',
     name: '玻璃质感',
+    nameKey: 'theme.glass',
     description: '深色底 + 彩色光晕 + 毛玻璃，沉浸有质感',
+    descKey: 'theme.glassDesc',
     tone: '深色',
+    toneKey: 'themePage.toneDark',
     swatch: { bg: '#10131a', surface: 'rgba(255,255,255,.16)', accent: '#5be07a', text: '#f2f5f0' },
   },
   {
     id: 'cream',
     name: '暖调奶油',
+    nameKey: 'theme.cream',
     description: '米杏底 + 陶土橙，温暖柔和，大圆角留白',
+    descKey: 'theme.creamDesc',
     tone: '浅色',
+    toneKey: 'themePage.toneLight',
     swatch: { bg: '#faf4ea', surface: '#ffffff', accent: '#e8a87c', text: '#3a2f24' },
   },
   {
     id: 'night',
     name: '暗夜电台',
+    nameKey: 'theme.night',
     description: '深墨绿底 + 荧光青柠，夜间护眼，微光氛围',
+    descKey: 'theme.nightDesc',
     tone: '深色',
+    toneKey: 'themePage.toneDark',
     swatch: { bg: '#14170f', surface: 'rgba(255,255,255,.14)', accent: '#c8f36a', text: '#eef3e2' },
   },
   {
     id: 'sunset',
     name: '落日橙',
+    nameKey: 'theme.sunset',
     description: '暖橘底 + 珊瑚橙，黄昏氛围，温暖而有活力',
+    descKey: 'theme.sunsetDesc',
     tone: '浅色',
+    toneKey: 'themePage.toneLight',
     swatch: { bg: '#fdf3ec', surface: '#ffffff', accent: '#ff8a5c', text: '#3a2a22' },
   },
   {
     id: 'violet',
     name: '紫罗兰',
+    nameKey: 'theme.violet',
     description: '深紫底 + 霓虹紫，梦幻神秘，暗夜里的霓虹感',
+    descKey: 'theme.violetDesc',
     tone: '深色',
+    toneKey: 'themePage.toneDark',
     swatch: { bg: '#15121f', surface: 'rgba(255,255,255,.12)', accent: '#9d6bff', text: '#f2effa' },
   },
   {
     id: 'ocean',
     name: '海洋蓝',
+    nameKey: 'theme.ocean',
     description: '雾蓝底 + 澄澈海蓝，冷静清爽，通透明快',
+    descKey: 'theme.oceanDesc',
     tone: '浅色',
+    toneKey: 'themePage.toneLight',
     swatch: { bg: '#eef4f8', surface: '#ffffff', accent: '#4aa3df', text: '#1f2a33' },
   },
   {
     id: 'sakura',
     name: '樱花粉',
+    nameKey: 'theme.sakura',
     description: '樱粉底 + 落樱粉，柔和不刺眼，少女氛围',
+    descKey: 'theme.sakuraDesc',
     tone: '浅色',
+    toneKey: 'themePage.toneLight',
     swatch: { bg: '#fdf2f5', surface: '#ffffff', accent: '#f18ab0', text: '#3a2530' },
   },
   {
     id: 'oled',
     name: 'OLED 纯黑',
+    nameKey: 'theme.oled',
     description: '纯黑底 + 霓虹青，极致省电，OLED 屏观感最佳',
+    descKey: 'theme.oledDesc',
     tone: '深色',
+    toneKey: 'themePage.toneDark',
     swatch: { bg: '#000000', surface: 'rgba(255,255,255,.06)', accent: '#45d0ff', text: '#e8e8ea' },
   },
 ]

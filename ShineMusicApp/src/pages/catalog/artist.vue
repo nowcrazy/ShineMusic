@@ -68,8 +68,8 @@ function goAlbum(albumId: string) {
 <template>
   <scroll-view class="detail-page" scroll-y :show-scrollbar="false">
     <!-- 加载中 / 失败或不存在 的状态提示 -->
-    <view v-if="loading" class="state-text">正在加载…</view>
-    <view v-else-if="loadError || !detail" class="state-text">艺人不存在或暂时无法打开。</view>
+    <view v-if="loading" class="state-text">{{ $t('catalogPage.loading') }}</view>
+    <view v-else-if="loadError || !detail" class="state-text">{{ $t('catalogPage.artistUnavailable') }}</view>
     <template v-else>
       <!-- 艺人头部：头像、名字、简介、播放全部 -->
       <view class="detail-header">
@@ -77,13 +77,13 @@ function goAlbum(albumId: string) {
         <text class="detail-title">{{ detail.name }}</text>
         <text v-if="detail.biography" class="detail-sub">{{ detail.biography }}</text>
         <view v-if="tracks.length" class="play-all" @tap="playAll">
-          <Play :size="16" fill="currentColor" /><text>播放全部</text>
+          <Play :size="16" fill="currentColor" /><text>{{ $t('catalogPage.playAll') }}</text>
         </view>
       </view>
 
       <!-- 专辑区块：点击行进入专辑详情 -->
       <view v-if="detail.albums.length" class="section">
-        <text class="section-title">专辑</text>
+        <text class="section-title">{{ $t('catalogPage.albums') }}</text>
         <view
           v-for="album in detail.albums"
           :key="album.id"
@@ -97,7 +97,7 @@ function goAlbum(albumId: string) {
 
       <!-- 曲目区块 -->
       <view class="section">
-        <text class="section-title">曲目 · {{ tracks.length }}</text>
+        <text class="section-title">{{ $t('catalogPage.tracksCount', { count: tracks.length }) }}</text>
         <view class="detail-list">
           <TrackRow
             v-for="(track, index) in tracks"
@@ -106,7 +106,7 @@ function goAlbum(albumId: string) {
             :index="index"
             :queue="tracks"
           />
-          <view v-if="!tracks.length" class="state-text">还没有可播放的曲目。</view>
+          <view v-if="!tracks.length" class="state-text">{{ $t('catalogPage.noPlayableTracks') }}</view>
         </view>
       </view>
       <view class="page-bottom-spacer"></view>

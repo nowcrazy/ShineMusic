@@ -10,6 +10,7 @@
  * 对应后端接口：services/notifications（GET 列表 / POST read / POST read-all）。
  */
 import { ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { onShow } from '@dcloudio/uni-app'
 import { Bell, CheckCheck, Inbox, Music4, RotateCcw, XCircle } from 'lucide-vue-next'
 import {
@@ -22,6 +23,8 @@ import {
 import { isAuthenticated } from '@/services/session'
 import { formatDate } from '@/utils/format'
 import { ApiError } from '@/services/http'
+
+const { t } = useI18n()
 
 const items = ref<readonly ApiNotification[]>([])
 const loading = ref(true)
@@ -84,7 +87,7 @@ async function handleOpen(item: ApiNotification) {
   if (item.linkUrl) {
     uni.navigateTo({
       url: item.linkUrl,
-      fail: () => uni.showToast({ title: '页面暂不可用', icon: 'none' }),
+      fail: () => uni.showToast({ title: t('notifications.pageUnavailable'), icon: 'none' }),
     })
   }
 }
@@ -96,10 +99,10 @@ async function handleReadAll() {
   try {
     await markAllNotificationsRead()
     items.value = items.value.map((item) => ({ ...item, isRead: true }))
-    uni.showToast({ title: '已全部标记为已读', icon: 'none' })
+    uni.showToast({ title: t('notifications.allMarkedRead'), icon: 'none' })
   } catch (error) {
     uni.showToast({
-      title: error instanceof ApiError ? error.message : '操作失败，请稍后再试',
+      title: error instanceof ApiError ? error.message : t('notifications.operationFailed'),
       icon: 'none',
     })
   } finally {
@@ -118,8 +121,8 @@ function goLogin() {
     <!-- 页头：标题 + 全部已读 -->
     <view class="page-heading">
       <view class="heading-copy">
-        <text class="heading-title">消息</text>
-        <text class="heading-subtitle">需求处理结果与系统通知</text>
+        <text class="heading-title">{{ $t('notifications.title') }}</text>
+        <text class="heading-subtitle">{{ $t('notifications.subtitle') }}</text>
       </view>
       <view
         v-if="items.some((item) => !item.isRead)"
@@ -128,23 +131,23 @@ function goLogin() {
         @tap="handleReadAll"
       >
         <CheckCheck :size="15" />
-        <text>全部已读</text>
+        <text>{{ $t('notifications.markAllRead') }}</text>
       </view>
     </view>
 
     <!-- 未登录引导 -->
     <view v-if="!isAuthenticated" class="state-empty">
       <Inbox :size="28" />
-      <text class="state-title">登录后查看消息</text>
-      <view class="login-button" @tap="goLogin"><text>去登录</text></view>
+      <text class="state-title">{{ $t('notifications.loginToView') }}</text>
+      <view class="login-button" @tap="goLogin"><text>{{ $t('auth.goLogin') }}</text></view>
     </view>
 
-    <view v-else-if="loading" class="state-text">正在加载…</view>
-    <view v-else-if="loadError" class="state-text">加载失败，请稍后重试。</view>
+    <view v-else-if="loading" class="state-text">{{ $t('notifications.loading') }}</view>
+    <view v-else-if="loadError" class="state-text">{{ $t('notifications.loadFailed') }}</view>
     <view v-else-if="!items.length" class="state-empty">
       <Bell :size="28" />
-      <text class="state-title">暂时没有消息</text>
-      <text class="state-hint">需求被处理时，这里会收到通知</text>
+      <text class="state-title">{{ $t('notifications.empty') }}</text>
+      <text class="state-hint">{{ $t('notifications.emptyHint') }}</text>
     </view>
 
     <!-- 消息列表 -->

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 头像抽屉（QQ 式左侧滑出）：点击头像后滑出的个人菜单。
- * 内容：资料摘要（头像/昵称/邮箱/角色徽章）+「账号」组（个人资料；主题外观——内嵌展开直接切换；服务器地址——
+ * 内容：资料摘要（头像/昵称/邮箱/角色徽章）+「账号」组（个人资料；主题外观/语言——内嵌展开直接切换；服务器地址——
  *       后端地址查看/修改，保存即生效，APK 端地址失联时的自救入口）
  *       +「管理员」组（导入审核/曲目维护/歌单管理/需求管理/邀请管理，仅管理员）+ 退出登录。
  * 高频功能（消息/播放历史/收藏/关注）已移至首页 tabbar 快捷面板与「我的」页功能入口，此处不再重复。
@@ -10,7 +10,8 @@
  * 对应页面：pages/profile（个人资料）；退出走 services/session（清空本地收藏/歌单/曲库后重启首页）。
  */
 import { computed, ref } from 'vue'
-import { AudioLines, Check, ChevronRight, Inbox, LogOut, Mail, Palette, Server, ShieldCheck, Upload, UserCog, X } from 'lucide-vue-next'
+import { AudioLines, Check, ChevronRight, Inbox, Languages, LogOut, Mail, Palette, Server, ShieldCheck, Upload, UserCog, X } from 'lucide-vue-next'
+import LanguageSwitcher from './LanguageSwitcher.vue'
 import { currentUser, isAdmin, logout } from '@/services/session'
 import { resetLibrary } from '@/services/library'
 import { resetFeedback } from '@/services/feedback'
@@ -18,6 +19,10 @@ import { resetNotifications } from '@/services/notifications'
 import { resetMyLibrary } from '@/services/user-library'
 import { applyTheme, currentTheme, THEMES, type ThemeId } from '@/services/theme'
 import { currentApiBase, getApiBaseOverride, resolveUrl, setApiBaseOverride } from '@/services/http'
+import { useI18n } from 'vue-i18n'
+
+// 文案多语言
+const { t } = useI18n()
 
 // 显隐由父组件 v-model 控制
 const props = defineProps<{ modelValue: boolean }>()
@@ -28,6 +33,9 @@ const avatarLetter = computed(() => currentUser.value?.displayName?.slice(0, 1).
 
 // 主题区块内嵌展开状态：点击「主题外观」行切换，展开后直接在下方点选，无需跳页
 const themeExpanded = ref(false)
+
+// 语言区块内嵌展开状态：点击「语言」行切换，展开后点选语言立即生效并持久化
+const langExpanded = ref(false)
 
 // 退出请求进行中（防止 Modal 回调重复提交）
 const loggingOut = ref(false)
@@ -41,20 +49,20 @@ const serverBase = ref(currentApiBase())
  */
 function editServerBase() {
   uni.showModal({
-    title: '服务器地址',
+    title: t('drawer.serverAddress'),
     editable: true,
     content: getApiBaseOverride(),
-    placeholderText: 'http://域名或IP:端口（留空恢复内置）',
-    confirmText: '保存并测试',
+    placeholderText: t('drawer.serverPlaceholder'),
+    confirmText: t('drawer.serverSaveTest'),
     success: ({ confirm, content }) => {
       if (!confirm) return
       setApiBaseOverride(content ?? '')
       serverBase.value = currentApiBase()
       if (!getApiBaseOverride()) {
-        uni.showToast({ title: '已恢复内置地址', icon: 'none' })
+        uni.showToast({ title: t('drawer.serverRestored'), icon: 'none' })
         return
       }
-      uni.showLoading({ title: '测试连接…' })
+      uni.showLoading({ title: t('drawer.serverTesting') })
       uni.request({
         url: `${currentApiBase()}/health`,
         method: 'GET',
@@ -63,7 +71,7 @@ function editServerBase() {
           uni.hideLoading()
           const code = (result as { statusCode?: number }).statusCode
           uni.showToast({
-            title: code && code >= 200 && code < 300 ? '连接成功' : '暂未连通（地址已保存）',
+            title: code && code >= 200 && code < 300 ? t('drawer.serverConnected') : t('drawer.serverNotConnected'),
             icon: 'none',
           })
         },
@@ -81,7 +89,8 @@ function close() {
 function selectTheme(id: ThemeId) {
   if (currentTheme.value === id) return
   applyTheme(id)
-  uni.showToast({ title: `已切换为「${THEMES.find((theme) => theme.id === id)?.name}」`, icon: 'none' })
+  const switchedTheme = THEMES.find((theme) => theme.id === id)
+  uni.showToast({ title: t('drawer.themeSwitched', { name: switchedTheme ? t(switchedTheme.nameKey) : '' }), icon: 'none' })
 }
 
 /** 跳转个人资料页 */
@@ -125,9 +134,9 @@ function goRequestManagement() {
  */
 function handleLogout() {
   uni.showModal({
-    title: '退出登录',
-    content: '退出后收藏与歌单仍保留在账号中，下次登录可继续使用。',
-    confirmText: '退出',
+    title: t('drawer.logout'),
+    content: t('drawer.logoutKeepData'),
+    confirmText: t('drawer.logoutConfirmBtn'),
     success: async ({ confirm }) => {
       if (!confirm || loggingOut.value) return
       loggingOut.value = true
@@ -137,7 +146,7 @@ function handleLogout() {
         resetMyLibrary()
         resetFeedback()
         resetNotifications()
-        uni.showToast({ title: '已退出', icon: 'none' })
+        uni.showToast({ title: t('drawer.loggedOut'), icon: 'none' })
         setTimeout(() => uni.reLaunch({ url: '/pages/home/index' }), 300)
       } finally {
         loggingOut.value = false
@@ -173,8 +182,8 @@ function handleLogout() {
           <text class="drawer-user">{{ currentUser?.displayName }}</text>
           <text class="drawer-mail">{{ currentUser?.email }}</text>
           <view class="drawer-roles">
-            <text class="drawer-role">听众</text>
-            <text v-if="isAdmin" class="drawer-role admin"><ShieldCheck :size="12" /><text>管理员</text></text>
+            <text class="drawer-role">{{ t('drawer.listener') }}</text>
+            <text v-if="isAdmin" class="drawer-role admin"><ShieldCheck :size="12" /><text>{{ t('drawer.admin') }}</text></text>
           </view>
         </view>
       </view>
@@ -182,17 +191,17 @@ function handleLogout() {
       <!-- 功能入口：「账号」组（个人资料 + 主题外观内嵌展开）+「管理员」组（仅管理员） -->
       <scroll-view class="drawer-menu-scroll" scroll-y :show-scrollbar="false">
         <view class="drawer-menu">
-          <text class="drawer-group">账号</text>
+          <text class="drawer-group">{{ t('drawer.groupAccount') }}</text>
           <view class="drawer-item" @tap="goProfile">
             <view class="drawer-icon profile-icon"><UserCog :size="19" /></view>
-            <text class="drawer-item-title">个人资料</text>
+            <text class="drawer-item-title">{{ t('drawer.profile') }}</text>
             <ChevronRight :size="16" class="drawer-item-chevron" />
           </view>
 
           <!-- 主题外观：点击展开内嵌主题选择，选中即切换，不再跳转独立页面 -->
           <view class="drawer-item" @tap="themeExpanded = !themeExpanded">
             <view class="drawer-icon theme-icon"><Palette :size="19" /></view>
-            <text class="drawer-item-title">主题外观</text>
+            <text class="drawer-item-title">{{ t('drawer.theme') }}</text>
             <ChevronRight :size="16" class="drawer-item-chevron" :class="{ rotated: themeExpanded }" />
           </view>
           <view v-if="themeExpanded" class="theme-inline">
@@ -208,48 +217,58 @@ function handleLogout() {
                 <view class="theme-chip-bar" :style="{ background: theme.swatch.text }"></view>
               </view>
               <view class="theme-chip-copy">
-                <text class="theme-chip-name">{{ theme.name }}</text>
-                <text class="theme-chip-tone">{{ theme.tone }}</text>
+                <text class="theme-chip-name">{{ t(theme.nameKey) }}</text>
+                <text class="theme-chip-tone">{{ t(theme.toneKey) }}</text>
               </view>
               <view v-if="currentTheme === theme.id" class="theme-chip-check"><Check :size="13" /></view>
             </view>
+          </view>
+
+          <!-- 语言：点击展开内嵌语言切换（简体中文/English/日本語），选择立即生效并持久化 -->
+          <view class="drawer-item" @tap="langExpanded = !langExpanded">
+            <view class="drawer-icon lang-icon"><Languages :size="19" /></view>
+            <text class="drawer-item-title">{{ t('drawer.language') }}</text>
+            <ChevronRight :size="16" class="drawer-item-chevron" :class="{ rotated: langExpanded }" />
+          </view>
+          <view v-if="langExpanded" class="lang-inline">
+            <LanguageSwitcher :show-check="true" layout="fill" />
           </view>
 
           <!-- 服务器地址：查看/修改后端地址（保存即生效；APK 端地址失联时自救） -->
           <view class="drawer-item" @tap="editServerBase">
             <view class="drawer-icon server-icon"><Server :size="19" /></view>
             <view class="drawer-item-copy">
-              <text class="drawer-item-title">服务器地址</text>
-              <text class="drawer-item-sub">{{ serverBase || '未配置' }}</text>
+              <text class="drawer-item-title">{{ t('drawer.serverAddress') }}</text>
+              <text class="drawer-item-sub">{{ serverBase || t('drawer.notConfigured') }}</text>
             </view>
             <ChevronRight :size="16" class="drawer-item-chevron" />
           </view>
 
           <template v-if="isAdmin">
-            <text class="drawer-group">管理员</text>
+            <text class="drawer-group">{{ t('drawer.admin') }}</text>
             <view class="drawer-item" @tap="goRequestManagement">
             <view class="drawer-icon admin-icon"><Inbox :size="19" /></view>
-            <text class="drawer-item-title">需求管理</text>
+            <text class="drawer-item-title">{{ t('drawer.requestManagement') }}</text>
             <ChevronRight :size="16" class="drawer-item-chevron" />
           </view>
           <view class="drawer-item" @tap="goCollectionManagement">
             <view class="drawer-icon collection-icon"><AudioLines :size="19" /></view>
-            <text class="drawer-item-title">歌单管理</text>
+            <text class="drawer-item-title">{{ t('drawer.playlistManagement') }}</text>
             <ChevronRight :size="16" class="drawer-item-chevron" />
           </view>
           <view class="drawer-item" @tap="goImportManagement">
             <view class="drawer-icon import-icon"><Upload :size="19" /></view>
-            <text class="drawer-item-title">曲库导入审核</text>
+            <text class="drawer-item-title">{{ t('drawer.importReview') }}</text>
             <ChevronRight :size="16" class="drawer-item-chevron" />
           </view>
           <view class="drawer-item" @tap="goCatalogManagement">
             <view class="drawer-icon admin-icon"><ShieldCheck :size="19" /></view>
-            <text class="drawer-item-title">曲目维护</text>
+            <text class="drawer-item-title">{{ t('drawer.trackMaintenance') }}</text>
             <ChevronRight :size="16" class="drawer-item-chevron" />
           </view>
           <view class="drawer-item" @tap="goInvitationManagement">
             <view class="drawer-icon invite-icon"><Mail :size="19" /></view>
-            <text class="drawer-item-title">邀请管理</text>
+            <text class="drawer-item-title">{{ t('drawer.invitationManagement') }}</text>
             <ChevronRight :size="16" class="drawer-item-chevron" />
           </view>
           </template>
@@ -258,7 +277,7 @@ function handleLogout() {
 
       <!-- 底部：退出登录 -->
       <view class="drawer-foot">
-        <view class="drawer-logout" @tap="handleLogout"><LogOut :size="18" /><text>退出登录</text></view>
+        <view class="drawer-logout" @tap="handleLogout"><LogOut :size="18" /><text>{{ t('drawer.logout') }}</text></view>
       </view>
     </view>
   </view>
@@ -304,6 +323,9 @@ function handleLogout() {
 .drawer-item-chevron { flex: none; color: var(--sm-text-3); transition: transform .2s ease; }
 .drawer-item-chevron.rotated { transform: rotate(90deg); }
 .drawer-icon.server-icon { background: var(--sm-info-soft); color: var(--sm-accent-2); }
+.drawer-icon.lang-icon { background: var(--sm-accent-3-soft); color: var(--sm-accent-3); }
+/* 内嵌语言切换：与主题色卡同款内嵌容器 */
+.lang-inline { padding: 6rpx 8rpx 20rpx; }
 /* 服务器地址行：标题 + 当前生效地址副标题双行展示 */
 .drawer-item-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 2rpx; }
 .drawer-item-copy .drawer-item-title { flex: none; }

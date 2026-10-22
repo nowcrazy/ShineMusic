@@ -9,6 +9,7 @@
  */
 import { computed, ref } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
+import { useI18n } from 'vue-i18n'
 import { ArrowDown, ArrowUp, ChevronLeft, ListMusic, Plus, Search, Trash2, X } from 'lucide-vue-next'
 import { isAdmin } from '@/services/session'
 import {
@@ -31,6 +32,7 @@ type CachedTrack = {
 }
 
 // —— 列表态 ——
+const { t } = useI18n()
 const collections = ref<readonly ApiCollectionSummary[]>([])
 const loading = ref(false)
 const listMessage = ref('')
@@ -57,7 +59,7 @@ const addMessage = ref('')
 
 // 非管理员直接提示（服务端同样独立鉴权，此处仅前端防御）
 if (!isAdmin.value) {
-  uni.showToast({ title: '需要管理员权限', icon: 'none' })
+  uni.showToast({ title: t('collectionsAdmin.requireAdmin'), icon: 'none' })
 }
 
 /** 歌单封面地址解析（后端返回相对路径 artworkUrl） */
@@ -82,7 +84,7 @@ async function loadCollections() {
   try {
     collections.value = await getCollections()
   } catch (error) {
-    listMessage.value = error instanceof Error ? error.message : '加载失败'
+    listMessage.value = error instanceof Error ? error.message : t('collectionsAdmin.loadFailed')
   } finally {
     loading.value = false
   }
@@ -115,7 +117,7 @@ async function openEdit(collection: ApiCollectionSummary) {
     }
     addPanelOpen.value = false
   } catch (error) {
-    uni.showToast({ title: error instanceof Error ? error.message : '加载歌单详情失败', icon: 'none' })
+    uni.showToast({ title: error instanceof Error ? error.message : t('collectionsAdmin.loadDetailFailed'), icon: 'none' })
   }
 }
 
@@ -131,7 +133,7 @@ async function handleSave() {
   const state = editing.value
   const title = state.title.trim()
   if (!title) {
-    editMessage.value = '歌单标题不能为空'
+    editMessage.value = t('collectionsAdmin.titleRequired')
     return
   }
   saving.value = true
@@ -150,10 +152,10 @@ async function handleSave() {
       })
       await replaceCollectionTracks(state.id, state.trackIds)
     }
-    uni.showToast({ title: '歌单已保存', icon: 'none' })
+    uni.showToast({ title: t('collectionsAdmin.saved'), icon: 'none' })
     closeEditor()
   } catch (error) {
-    editMessage.value = error instanceof Error ? error.message : '保存失败'
+    editMessage.value = error instanceof Error ? error.message : t('collectionsAdmin.saveFailed')
   } finally {
     saving.value = false
   }
@@ -162,17 +164,17 @@ async function handleSave() {
 /** 删除歌单（二次确认） */
 function handleDelete(collection: ApiCollectionSummary) {
   uni.showModal({
-    title: '删除歌单',
-    content: `确定删除「${collection.title}」？歌单内的曲目不会从曲库中移除。`,
-    confirmText: '删除',
+    title: t('collectionsAdmin.deleteTitle'),
+    content: t('collectionsAdmin.deleteConfirm', { title: collection.title }),
+    confirmText: t('admin.common.delete'),
     success: async ({ confirm }) => {
       if (!confirm) return
       try {
         await deleteCollection(collection.id)
-        uni.showToast({ title: '已删除', icon: 'none' })
+        uni.showToast({ title: t('collectionsAdmin.deleted'), icon: 'none' })
         void loadCollections()
       } catch (error) {
-        uni.showToast({ title: error instanceof Error ? error.message : '删除失败', icon: 'none' })
+        uni.showToast({ title: error instanceof Error ? error.message : t('collectionsAdmin.deleteFailed'), icon: 'none' })
       }
     },
   })
@@ -214,7 +216,7 @@ async function runAddSearch(query: string) {
     const page = await searchTracksForCollection(query, 1, 50)
     addResults.value = page.items
   } catch (error) {
-    addMessage.value = error instanceof Error ? error.message : '搜索失败'
+    addMessage.value = error instanceof Error ? error.message : t('collectionsAdmin.searchFailed')
   } finally {
     addSearching.value = false
   }
@@ -224,17 +226,17 @@ async function runAddSearch(query: string) {
 function addTrackToPlaylist(track: CachedTrack) {
   if (!editing.value) return
   if (editing.value.trackIds.includes(track.id)) {
-    uni.showToast({ title: '该曲目已在歌单中', icon: 'none' })
+    uni.showToast({ title: t('collectionsAdmin.trackAlreadyIn'), icon: 'none' })
     return
   }
   if (editing.value.trackIds.length >= 200) {
-    uni.showToast({ title: '单个歌单最多 200 首', icon: 'none' })
+    uni.showToast({ title: t('collectionsAdmin.maxTracks', { count: 200 }), icon: 'none' })
     return
   }
   editing.value.trackIds.push(track.id)
   // 曲目摘要入缓存（最小可用信息，供编辑态列表展示）
   editing.value.trackCache.set(track.id, track)
-  uni.showToast({ title: '已加入', icon: 'none' })
+  uni.showToast({ title: t('collectionsAdmin.added'), icon: 'none' })
 }
 
 /** 编辑器内曲目展示信息（从缓存取，取不到回退占位） */
@@ -249,7 +251,7 @@ const addTrackInfo = computed(() =>
   addResults.value.map((track) => ({
     id: track.id,
     title: track.title,
-    artists: track.artists.map((artist) => artist.name).join('、') || '未知艺人',
+    artists: track.artists.map((artist) => artist.name).join('、') || t('collectionsAdmin.unknownArtist'),
     artworkUrl: track.artworkUrl ?? null,
   })),
 )
@@ -263,18 +265,18 @@ const addTrackInfo = computed(() =>
         <ChevronLeft v-if="!editing" :size="20" />
         <X v-else :size="20" />
       </view>
-      <text class="page-title">{{ editing ? '编辑歌单' : '歌单管理' }}</text>
-      <view v-if="!editing" class="head-action" @tap="openCreate"><Plus :size="18" /><text>新建</text></view>
+      <text class="page-title">{{ editing ? $t('collectionsAdmin.editTitle') : $t('collectionsAdmin.pageTitle') }}</text>
+      <view v-if="!editing" class="head-action" @tap="openCreate"><Plus :size="18" /><text>{{ $t('collectionsAdmin.create') }}</text></view>
     </view>
 
     <!-- ============ 列表态 ============ -->
     <scroll-view v-if="!editing" class="page-body" scroll-y :show-scrollbar="false">
-      <view v-if="loading" class="inline-hint">加载中…</view>
+      <view v-if="loading" class="inline-hint">{{ $t('admin.common.loading') }}</view>
       <view v-else-if="listMessage" class="inline-hint">{{ listMessage }}</view>
       <view v-else-if="!collections.length" class="empty-block">
         <ListMusic :size="26" />
-        <text>还没有运营歌单</text>
-        <text class="empty-sub">创建后会出现在首页「发现」页的推荐歌单区</text>
+        <text>{{ $t('collectionsAdmin.emptyTitle') }}</text>
+        <text class="empty-sub">{{ $t('collectionsAdmin.emptySub') }}</text>
       </view>
 
       <view v-for="collection in collections" :key="collection.id" class="collection-row">
@@ -284,8 +286,8 @@ const addTrackInfo = computed(() =>
         </view>
         <view class="collection-copy" @tap="openEdit(collection)">
           <text class="collection-title">{{ collection.title }}</text>
-          <text class="collection-desc">{{ collection.description || '暂无推荐语' }}</text>
-          <text class="collection-count">{{ collection.trackCount }} 首</text>
+          <text class="collection-desc">{{ collection.description || $t('collectionsAdmin.noDescription') }}</text>
+          <text class="collection-count">{{ $t('catalog.trackCount', { count: collection.trackCount }) }}</text>
         </view>
         <view class="row-actions">
           <view class="row-action" @tap="openEdit(collection)"><Search :size="16" /></view>
@@ -298,19 +300,19 @@ const addTrackInfo = computed(() =>
     <!-- ============ 编辑态 ============ -->
     <scroll-view v-else class="page-body" scroll-y :show-scrollbar="false">
       <view class="form-block">
-        <text class="field-label">歌单标题</text>
-        <input v-model="editing.title" class="field-input" type="text" placeholder="如：抖音热播" maxlength="100" />
-        <text class="field-label">推荐语</text>
-        <textarea v-model="editing.description" class="field-textarea" placeholder="一句话描述这个歌单（可选）" maxlength="500" />
+        <text class="field-label">{{ $t('collectionsAdmin.fieldTitle') }}</text>
+        <input v-model="editing.title" class="field-input" type="text" :placeholder="$t('collectionsAdmin.titlePlaceholder')" maxlength="100" />
+        <text class="field-label">{{ $t('collectionsAdmin.fieldDescription') }}</text>
+        <textarea v-model="editing.description" class="field-textarea" :placeholder="$t('collectionsAdmin.descriptionPlaceholder')" maxlength="500" />
       </view>
 
       <!-- 曲目编排 -->
       <view class="form-block">
         <view class="block-head">
-          <text class="field-label">歌单曲目（{{ editing.trackIds.length }} 首，顺序即播放顺序）</text>
-          <view class="add-track-button" @tap="openAddPanel"><Plus :size="15" /><text>添加曲目</text></view>
+          <text class="field-label">{{ $t('collectionsAdmin.tracksLabel', { count: editing.trackIds.length }) }}</text>
+          <view class="add-track-button" @tap="openAddPanel"><Plus :size="15" /><text>{{ $t('collectionsAdmin.addTrack') }}</text></view>
         </view>
-        <view v-if="!editing.trackIds.length" class="empty-sub">还没有曲目，点击「添加曲目」从曲库挑选</view>
+        <view v-if="!editing.trackIds.length" class="empty-sub">{{ $t('collectionsAdmin.noTracksHint') }}</view>
         <view v-for="(trackId, index) in editing.trackIds" :key="trackId" class="track-row">
           <text class="track-index">{{ index + 1 }}</text>
           <view class="track-copy">
@@ -328,7 +330,7 @@ const addTrackInfo = computed(() =>
       <view class="save-bar">
         <text v-if="editMessage" class="field-message">{{ editMessage }}</text>
         <view class="save-button" :class="{ disabled: saving }" @tap="handleSave">
-          <text>{{ saving ? '保存中…' : '保存歌单' }}</text>
+          <text>{{ saving ? $t('collectionsAdmin.saving') : $t('collectionsAdmin.saveButton') }}</text>
         </view>
       </view>
       <view class="bottom-space"></view>
@@ -339,7 +341,7 @@ const addTrackInfo = computed(() =>
       <view class="add-panel-mask" @tap="addPanelOpen = false"></view>
       <view class="add-panel-body">
         <view class="add-panel-head">
-          <text class="add-panel-title">添加曲目</text>
+          <text class="add-panel-title">{{ $t('collectionsAdmin.addTrack') }}</text>
           <view class="add-panel-close" @tap="addPanelOpen = false"><X :size="18" /></view>
         </view>
         <view class="add-search">
@@ -347,16 +349,16 @@ const addTrackInfo = computed(() =>
             v-model="addQuery"
             class="add-search-input"
             type="text"
-            placeholder="搜索歌曲、艺人（留空显示全部）"
+            :placeholder="$t('collectionsAdmin.searchPlaceholder')"
             confirm-type="search"
             @confirm="runAddSearch(addQuery)"
           />
           <view class="add-search-action" @tap="runAddSearch(addQuery)"><Search :size="16" /></view>
         </view>
         <scroll-view class="add-results" scroll-y :show-scrollbar="false">
-          <view v-if="addSearching" class="inline-hint">搜索中…</view>
+          <view v-if="addSearching" class="inline-hint">{{ $t('collectionsAdmin.searching') }}</view>
           <view v-else-if="addMessage" class="inline-hint">{{ addMessage }}</view>
-          <view v-else-if="!addTrackInfo.length" class="inline-hint">没有找到曲目</view>
+          <view v-else-if="!addTrackInfo.length" class="inline-hint">{{ $t('collectionsAdmin.noResults') }}</view>
           <view
             v-for="track in addTrackInfo"
             :key="track.id"
@@ -369,7 +371,7 @@ const addTrackInfo = computed(() =>
               <text class="track-artists">{{ track.artists }}</text>
             </view>
             <Plus v-if="!editing.trackIds.includes(track.id)" :size="16" class="add-result-plus" />
-            <text v-else class="added-tag">已加入</text>
+            <text v-else class="added-tag">{{ $t('collectionsAdmin.added') }}</text>
           </view>
         </scroll-view>
       </view>

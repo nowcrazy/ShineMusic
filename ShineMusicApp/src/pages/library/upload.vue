@@ -13,6 +13,7 @@
  */
 import { computed, ref } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
+import { useI18n } from 'vue-i18n'
 import { Music4, Upload } from 'lucide-vue-next'
 import { isAuthenticated } from '@/services/session'
 import { useCapabilities } from '@/services/capabilities'
@@ -23,6 +24,8 @@ import type { ApiUserUploadResponse } from '@/types/music'
 type PickedFile = { path: string; name: string; size: number }
 // 能力开关单例
 const caps = useCapabilities()
+
+const { t } = useI18n()
 
 // 已选文件列表 / 上传中 / 上传结果 / 错误信息
 const files = ref<PickedFile[]>([])
@@ -62,11 +65,14 @@ function validateFile(file: PickedFile): string | null {
   const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
   const allowed = caps.capabilities.allowedFormats
   if (allowed.length && !allowed.includes(ext)) {
-    return `不支持的格式：.${ext}（允许 ${allowed.join(' / ')}）`
+    return t('libraryPage.unsupportedFormat', { ext: `.${ext}`, allowed: allowed.join(' / ') })
   }
   const max = caps.capabilities.maxUploadSizeBytes
   if (max && file.size > max) {
-    return `文件过大：${(file.size / 1024 / 1024).toFixed(1)}MB（上限 ${(max / 1024 / 1024).toFixed(0)}MB）`
+    return t('libraryPage.fileTooLarge', {
+      size: (file.size / 1024 / 1024).toFixed(1),
+      max: (max / 1024 / 1024).toFixed(0),
+    })
   }
   return null
 }
@@ -127,7 +133,7 @@ async function handleUpload() {
     result.value = response
     files.value = []
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '上传失败，请稍后再试'
+    errorMessage.value = error instanceof Error ? error.message : t('uploadPage.uploadFailedRetry')
   } finally {
     uploading.value = false
   }
@@ -149,7 +155,7 @@ function goBackToLibrary() {
   <view class="up-page">
     <!-- 开关关闭提示 -->
     <view v-if="!caps.capabilities.userUploads" class="state-text">
-      上传功能暂未开放。
+      {{ $t('libraryPage.uploadDisabled') }}
     </view>
 
     <template v-else>
@@ -157,8 +163,8 @@ function goBackToLibrary() {
       <view class="up-tip">
         <view class="tip-icon"><Music4 :size="20" /></view>
         <view class="tip-copy">
-          <text class="tip-title">上传本地音频</text>
-          <text class="tip-sub">上传的歌曲默认私有，仅你本人可听；是否转公开由管理员审核决定。</text>
+          <text class="tip-title">{{ $t('library.upload') }}</text>
+          <text class="tip-sub">{{ $t('libraryPage.privacyNote') }}</text>
         </view>
       </view>
 
@@ -170,15 +176,15 @@ function goBackToLibrary() {
             <text class="file-name">{{ file.name }}</text>
             <text class="file-size">{{ (file.size / 1024 / 1024).toFixed(2) }} MB</text>
           </view>
-          <text class="file-remove" @tap.stop="handleRemoveFile(index)">移除</text>
+          <text class="file-remove" @tap.stop="handleRemoveFile(index)">{{ $t('uploadPage.removeFile') }}</text>
         </view>
       </view>
 
       <!-- 选择 / 上传操作 -->
       <view class="up-actions">
-        <view class="btn btn-ghost" @tap="handleChoose"><Upload :size="17" /><text>选择文件</text></view>
+        <view class="btn btn-ghost" @tap="handleChoose"><Upload :size="17" /><text>{{ $t('libraryPage.chooseFiles') }}</text></view>
         <view class="btn btn-primary" :class="{ 'is-disabled': !canUpload }" @tap="handleUpload">
-          {{ uploading ? '上传中…' : '开始上传' }}
+          {{ uploading ? $t('libraryPage.uploading') : $t('libraryPage.startUpload') }}
         </view>
       </view>
 
@@ -188,18 +194,18 @@ function goBackToLibrary() {
       <!-- 上传结果 -->
       <view v-if="result" class="up-result">
         <view v-if="result.referenced.length" class="result-group">
-          <text class="result-title">已加入曲库（{{ result.referenced.length }}）</text>
+          <text class="result-title">{{ $t('libraryPage.resultReferenced', { count: result.referenced.length }) }}</text>
           <text v-for="t in result.referenced" :key="t.trackId" class="result-line">· {{ t.title }}</text>
         </view>
         <view v-if="result.queued.length" class="result-group">
-          <text class="result-title">处理中（{{ result.queued.length }}）</text>
-          <text v-for="q in result.queued" :key="q.itemId" class="result-line">· {{ q.displayName }} —— 转码与歌词匹配完成后自动入库</text>
+          <text class="result-title">{{ $t('libraryPage.resultQueued', { count: result.queued.length }) }}</text>
+          <text v-for="q in result.queued" :key="q.itemId" class="result-line">· {{ q.displayName }} —— {{ $t('libraryPage.queuedHint') }}</text>
         </view>
         <view v-if="result.rejected.length" class="result-group">
-          <text class="result-title">未能处理（{{ result.rejected.length }}）</text>
+          <text class="result-title">{{ $t('libraryPage.resultRejected', { count: result.rejected.length }) }}</text>
           <text v-for="r in result.rejected" :key="r.displayName" class="result-line">· {{ r.displayName }} —— {{ r.reason }}</text>
         </view>
-        <view class="btn btn-primary" @tap="goBackToLibrary"><text>前往我的曲库</text></view>
+        <view class="btn btn-primary" @tap="goBackToLibrary"><text>{{ $t('libraryPage.goToLibrary') }}</text></view>
       </view>
     </template>
   </view>

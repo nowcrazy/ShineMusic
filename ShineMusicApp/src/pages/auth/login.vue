@@ -6,11 +6,15 @@
  * 键盘交互：邮箱框回车 → 焦点移到密码框；密码框回车 → 直接登录，无需点按钮。
  */
 import { ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { AudioLines } from 'lucide-vue-next'
 import { login } from '@/services/session'
 import { loadFavorites } from '@/services/library'
 import { loadFeedback } from '@/services/feedback'
 import { describeError } from '@/services/errors'
+import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
+
+const { t } = useI18n()
 
 // 表单状态：邮箱 / 密码 / 提交中（防重复点击）/ 错误文案
 const email = ref('')
@@ -35,7 +39,7 @@ function focusPassword() {
  * @returns 可直接展示的错误文案
  */
 function friendlyError(error: unknown): string {
-  return describeError(error, '登录失败，请稍后再试')
+  return describeError(error, t('auth.loginFailed'))
 }
 
 /**
@@ -50,7 +54,7 @@ async function handleLogin() {
   if (submitting.value) return
   // 表单校验：邮箱与密码均必填
   if (!email.value.trim() || !password.value) {
-    errorMessage.value = '请输入邮箱和密码'
+    errorMessage.value = t('auth.validationEmailPassword')
     return
   }
   submitting.value = true
@@ -59,7 +63,7 @@ async function handleLogin() {
     await login(email.value, password.value)
     loadFavorites(true).catch(() => undefined)
     loadFeedback().catch(() => undefined)
-    uni.showToast({ title: '欢迎回来', icon: 'none' })
+    uni.showToast({ title: t('auth.welcomeBack'), icon: 'none' })
     // getCurrentPages 在 H5/App/小程序均可用，返回当前页面栈数组
     const pages = getCurrentPages()
     setTimeout(() => {
@@ -84,30 +88,33 @@ function goRegister() {
 
 <template>
   <view class="auth-page">
+    <!-- 语言切换：登录前也能切换界面语言（右上角行内 chips，选择立即生效并持久化） -->
+    <view class="lang-entry"><LanguageSwitcher layout="inline" /></view>
+
     <!-- 品牌头与标题 -->
     <view class="brand-mark"><AudioLines :size="24" :stroke-width="2.7" /></view>
-    <text class="auth-title">登录 Shine Music</text>
-    <text class="auth-sub">收藏、歌单与歌曲需求会在设备间同步</text>
+    <text class="auth-title">{{ $t('auth.loginTitle') }}</text>
+    <text class="auth-sub">{{ $t('auth.loginSubtitle') }}</text>
 
     <!-- 登录表单：邮箱 / 密码 / 行内错误 / 提交按钮；两个输入框均支持回车提交 -->
     <view class="field">
-      <text class="field-label">邮箱</text>
+      <text class="field-label">{{ $t('auth.email') }}</text>
       <input
         v-model="email"
         class="field-input"
         type="text"
-        placeholder="you@example.com"
+        :placeholder="$t('auth.emailPlaceholder')"
         confirm-type="next"
         @confirm="focusPassword"
       />
     </view>
     <view class="field">
-      <text class="field-label">密码</text>
+      <text class="field-label">{{ $t('auth.password') }}</text>
       <input
         v-model="password"
         class="field-input"
         password
-        placeholder="请输入密码"
+        :placeholder="$t('auth.passwordPlaceholder')"
         confirm-type="done"
         :focus="passwordFocused"
         @confirm="handleLogin"
@@ -117,11 +124,11 @@ function goRegister() {
     <text v-if="errorMessage" class="error-text">{{ errorMessage }}</text>
 
     <view class="primary-button" :class="{ disabled: submitting }" @tap="handleLogin">
-      <text>{{ submitting ? '登录中…' : '登录' }}</text>
+      <text>{{ submitting ? $t('auth.loggingIn') : $t('auth.loginBtn') }}</text>
     </view>
     <!-- 邀请注册入口 -->
     <view class="secondary-link" @tap="goRegister">
-      <text>收到邀请邮件？<text class="link">使用邀请令牌注册</text></text>
+      <text>{{ $t('auth.inviteEmail') }}<text class="link">{{ $t('auth.useInviteToken') }}</text></text>
     </view>
   </view>
 </template>
@@ -129,7 +136,9 @@ function goRegister() {
 <style lang="scss" scoped>
 /* 登录页（方向 B · 玻璃质感） */
 /* 平台适配：顶部 padding 用 env(safe-area-inset-top) 避开刘海/状态栏 */
-.auth-page { display: flex; min-height: 100vh; flex-direction: column; padding: calc(env(safe-area-inset-top) + 80rpx) 56rpx 60rpx; box-sizing: border-box; background: var(--sm-page-bg); }
+.auth-page { position: relative; display: flex; min-height: 100vh; flex-direction: column; padding: calc(env(safe-area-inset-top) + 80rpx) 56rpx 60rpx; box-sizing: border-box; background: var(--sm-page-bg); }
+/* 语言切换：悬浮于页面右上角（品牌头右侧留白处） */
+.lang-entry { position: absolute; top: calc(env(safe-area-inset-top) + 40rpx); right: 40rpx; z-index: 10; }
 .brand-mark { display: grid; place-items: center; width: 80rpx; height: 80rpx; border-radius: 24rpx; background: var(--sm-surface-3); border: 1rpx solid var(--sm-border-strong); color: var(--sm-accent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
 .auth-title { margin-top: 36rpx; color: var(--sm-text); font-size: 44rpx; font-weight: 800; }
 .auth-sub { margin-top: 14rpx; color: var(--sm-text-2); font-size: 20rpx; line-height: 1.6; }

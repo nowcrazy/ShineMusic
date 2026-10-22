@@ -11,6 +11,7 @@
     "gen:icons": "node scripts/generate-lucide-shim.mjs",
     "gen:contracts": "python ../backend/tools/generate-ts-contracts.py",
     "check:contracts": "python ../backend/tools/generate-ts-contracts.py --check",
+    "check:i18n": "node scripts/check-i18n-residual.mjs",
     "typecheck": "vue-tsc --noEmit"
   },
   "dependencies": {

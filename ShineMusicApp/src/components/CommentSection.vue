@@ -15,6 +15,7 @@
  * - 本人 / 管理员评论显示删除按钮。
  */
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ChevronDown, ChevronUp, CornerDownRight, Heart, MessageCircle, Send, Trash2 } from 'lucide-vue-next'
 import EmptyState from '@/components/EmptyState.vue'
 import { createComment, deleteComment, getComments, likeComment, unlikeComment } from '@/services/comments'
@@ -36,6 +37,8 @@ interface CommentNode {
 }
 
 const props = defineProps<{ trackId: string }>()
+
+const { t } = useI18n()
 
 const comments = ref<CommentNode[]>([])
 const loading = ref(true)
@@ -71,12 +74,12 @@ function relativeTime(iso: string): string {
   if (!Number.isFinite(time)) return ''
   const diff = Date.now() - time
   const min = Math.floor(diff / 60000)
-  if (min < 1) return '刚刚'
-  if (min < 60) return `${min} 分钟前`
+  if (min < 1) return t('comments.justNow')
+  if (min < 60) return t('comments.minutesAgo', { min })
   const hours = Math.floor(min / 60)
-  if (hours < 24) return `${hours} 小时前`
+  if (hours < 24) return t('comments.hoursAgo', { hours })
   const days = Math.floor(hours / 24)
-  if (days < 7) return `${days} 天前`
+  if (days < 7) return t('comments.daysAgo', { days })
   const d = new Date(time)
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
@@ -152,7 +155,7 @@ async function submitTop() {
     total.value += 1
     draft.value = ''
   } catch {
-    uni.showToast({ title: '发表失败，请稍后再试', icon: 'none' })
+    uni.showToast({ title: t('comments.postFailed'), icon: 'none' })
   } finally {
     submittingTop.value = false
   }
@@ -172,7 +175,7 @@ async function submitReply() {
     replyDraft.value = ''
     replyingTo.value = null
   } catch {
-    uni.showToast({ title: '回复失败，请稍后再试', icon: 'none' })
+    uni.showToast({ title: t('comments.replyFailed'), icon: 'none' })
   } finally {
     submittingReply.value = false
   }
@@ -181,9 +184,9 @@ async function submitReply() {
 /** 删除某条评论（顶层或回复），带确认。 */
 function remove(target: CommentNode, parent?: CommentNode) {
   uni.showModal({
-    title: '删除评论',
-    content: '删除后不可恢复，确定删除这条评论吗？',
-    confirmText: '删除',
+    title: t('comments.deleteTitle'),
+    content: t('comments.deleteConfirm'),
+    confirmText: t('comments.deleteBtn'),
     confirmColor: '#e05a3f',
     success: async ({ confirm }) => {
       if (!confirm) return
@@ -195,9 +198,9 @@ function remove(target: CommentNode, parent?: CommentNode) {
           comments.value = comments.value.filter((item) => item.id !== target.id)
           total.value = Math.max(0, total.value - 1)
         }
-        uni.showToast({ title: '已删除', icon: 'none' })
+        uni.showToast({ title: t('comments.deleted'), icon: 'none' })
       } catch {
-        uni.showToast({ title: '删除失败，请稍后再试', icon: 'none' })
+        uni.showToast({ title: t('comments.deleteFailed'), icon: 'none' })
       }
     },
   })
@@ -216,7 +219,7 @@ async function toggleLike(comment: CommentNode) {
   } catch {
     comment.likedByMe = wasLiked
     comment.likeCount = Math.max(0, comment.likeCount + (wasLiked ? 1 : -1))
-    uni.showToast({ title: '操作失败，请稍后再试', icon: 'none' })
+    uni.showToast({ title: t('comments.operationFailed'), icon: 'none' })
   }
 }
 
@@ -231,17 +234,17 @@ onMounted(() => void load(true))
 <template>
   <view class="comment-section">
     <view class="cs-head">
-      <view class="cs-title"><MessageCircle :size="20" /><text>评论 {{ total }} 条</text></view>
+      <view class="cs-title"><MessageCircle :size="20" /><text>{{ $t('comments.title', { count: total }) }}</text></view>
     </view>
 
     <!-- 顶部写评论 -->
     <view class="cs-composer">
       <view class="cs-input-row">
-        <view class="cs-avatar cs-avatar--sm">{{ currentUser?.displayName?.slice(0, 1) || '我' }}</view>
+        <view class="cs-avatar cs-avatar--sm">{{ currentUser?.displayName?.slice(0, 1) || $t('comments.me') }}</view>
         <input
           v-model="draft"
           class="cs-input"
-          placeholder="写下你的评论…"
+          :placeholder="$t('comments.writePlaceholder')"
           confirm-type="send"
           maxlength="500"
           @confirm="submitTop"
@@ -253,14 +256,14 @@ onMounted(() => void load(true))
     </view>
 
     <!-- 列表态 -->
-    <view v-if="loading" class="cs-state">加载评论中…</view>
-    <view v-else-if="loadError" class="cs-state">评论加载失败，下拉重试</view>
+    <view v-if="loading" class="cs-state">{{ $t('comments.loading') }}</view>
+    <view v-else-if="loadError" class="cs-state">{{ $t('comments.loadFailed') }}</view>
     <template v-else>
       <EmptyState
         v-if="!comments.length"
         :icon="MessageCircle"
-        title="还没有评论"
-        hint="抢占头排，来聊聊这首歌吧"
+        :title="$t('comments.emptyTitle')"
+        :hint="$t('comments.emptyHint')"
         compact
       />
       <view v-else class="cs-list">
@@ -279,9 +282,9 @@ onMounted(() => void load(true))
                 <Heart :size="16" :fill="comment.likedByMe ? 'currentColor' : 'none'" />
                 <text v-if="comment.likeCount > 0">{{ comment.likeCount }}</text>
               </view>
-              <text class="cs-op cs-op--reply" @tap="startReply(comment)">回复</text>
+              <text class="cs-op cs-op--reply" @tap="startReply(comment)">{{ $t('comments.reply') }}</text>
               <text v-if="comment.replies.length" class="cs-op cs-op--toggle" @tap="toggleReplies(comment)">
-                {{ isExpanded(comment) ? '收起' : `共 ${comment.replies.length} 条回复` }}
+                {{ isExpanded(comment) ? $t('comments.collapse') : $t('comments.repliesCount', { count: comment.replies.length }) }}
                 <ChevronUp v-if="isExpanded(comment)" :size="14" />
                 <ChevronDown v-else :size="14" />
               </text>
@@ -310,7 +313,7 @@ onMounted(() => void load(true))
                       <Heart :size="14" :fill="reply.likedByMe ? 'currentColor' : 'none'" />
                       <text v-if="reply.likeCount > 0">{{ reply.likeCount }}</text>
                     </view>
-                    <text class="cs-op cs-op--reply" @tap="startReply(comment)">回复</text>
+                    <text class="cs-op cs-op--reply" @tap="startReply(comment)">{{ $t('comments.reply') }}</text>
                   </view>
                 </view>
               </view>
@@ -320,14 +323,14 @@ onMounted(() => void load(true))
             <view v-if="replyingTo?.id === comment.id" class="cs-inline-reply">
               <view class="cs-reply-hint">
                 <CornerDownRight :size="14" />
-                <text>回复 @{{ comment.userName }}</text>
-                <text class="cs-reply-cancel" @tap="cancelReply">取消</text>
+                <text>{{ $t('comments.replyingTo', { name: comment.userName }) }}</text>
+                <text class="cs-reply-cancel" @tap="cancelReply">{{ $t('comments.cancel') }}</text>
               </view>
               <view class="cs-input-row">
                 <input
                   v-model="replyDraft"
                   class="cs-input"
-                  :placeholder="`回复 ${comment.userName}…`"
+                  :placeholder="$t('comments.replyPlaceholder', { name: comment.userName })"
                   confirm-type="send"
                   maxlength="500"
                   @confirm="submitReply"
@@ -340,7 +343,7 @@ onMounted(() => void load(true))
           </view>
         </view>
       </view>
-      <view v-if="hasMore" class="cs-more" @tap="loadMore">加载更多</view>
+      <view v-if="hasMore" class="cs-more" @tap="loadMore">{{ $t('comments.loadMore') }}</view>
     </template>
   </view>
 </template>

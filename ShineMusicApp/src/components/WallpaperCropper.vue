@@ -10,9 +10,12 @@
  *   以 objectURL 交给上层，同时承担压缩职责（原图不再直接参与铺底与上传）。
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{ src: string }>()
 const emit = defineEmits<{ (e: 'cancel'): void; (e: 'confirm', url: string): void }>()
+
+const { t } = useI18n()
 
 /** 导出位图最长边；导出同时完成压缩，控制整页背景的解码/绘制开销 */
 const MAX_EXPORT_EDGE = 2560
@@ -206,9 +209,9 @@ async function confirmCrop() {
 <template>
   <view class="cropper-mask">
     <view class="cropper-top">
-      <text class="cp-btn" @tap="emit('cancel')">取消</text>
-      <text class="cp-title">调整壁纸区域</text>
-      <text class="cp-btn primary" @tap="confirmCrop">{{ exporting ? '处理中…' : '完成' }}</text>
+      <text class="cp-btn" @tap="emit('cancel')">{{ $t('wallpaper.cancel') }}</text>
+      <text class="cp-title">{{ $t('wallpaper.title') }}</text>
+      <text class="cp-btn primary" @tap="confirmCrop">{{ exporting ? $t('wallpaper.processing') : $t('wallpaper.done') }}</text>
     </view>
     <!-- #ifdef H5 -->
     <div
@@ -221,12 +224,12 @@ async function confirmCrop() {
       @wheel.prevent="onWheel"
     >
       <img v-if="loaded" class="crop-img" :src="props.src" :style="imgStyle" draggable="false" alt="" />
-      <view v-else class="crop-loading">图片加载中…</view>
+      <view v-else class="crop-loading">{{ $t('wallpaper.loading') }}</view>
     </div>
     <!-- #endif -->
     <view class="cropper-bottom">
-      <text class="hint">拖动调整位置 · 双指或滚轮缩放</text>
-      <text class="reset" @tap="resetView">重置</text>
+      <text class="hint">{{ $t('wallpaper.gestureHint') }}</text>
+      <text class="reset" @tap="resetView">{{ $t('wallpaper.reset') }}</text>
     </view>
   </view>
 </template>

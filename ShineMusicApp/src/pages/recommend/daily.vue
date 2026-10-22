@@ -8,12 +8,15 @@
  */
 import { ref } from 'vue'
 import { onLoad, onPullDownRefresh } from '@dcloudio/uni-app'
+import { useI18n } from 'vue-i18n'
 import { Play, RefreshCw, Sparkles } from 'lucide-vue-next'
 import TrackRow from '@/components/TrackRow.vue'
 import PlayerBar from '@/components/PlayerBar.vue'
 import { getDailyRecommendations } from '@/services/recommend'
 import { playQueue } from '@/services/player'
 import type { Track } from '@/types/music'
+
+const { t } = useI18n()
 
 const tracks = ref<Track[]>([])
 const loading = ref(true)
@@ -26,7 +29,7 @@ const refreshing = ref(false)
 function formatDate(date: string): string {
   const [year, month, day] = date.split('-')
   if (!year || !month || !day) return date
-  return `${Number(month)} 月 ${Number(day)} 日`
+  return t('daily.date', { month: Number(month), day: Number(day) })
 }
 
 /** 拉取每日推荐。 */
@@ -68,25 +71,25 @@ onPullDownRefresh(async () => {
     <view class="daily-hero">
       <view class="hero-icon"><Sparkles :size="26" /></view>
       <view class="hero-copy">
-        <text class="hero-title">每日推荐</text>
+        <text class="hero-title">{{ t('daily.title') }}</text>
         <text class="hero-sub">
-          {{ dateLabel ? dateLabel + ' · ' : '' }}{{ personalized ? '根据你的收听口味' : '热门与新鲜好歌' }}
+          {{ dateLabel ? dateLabel + ' · ' : '' }}{{ personalized ? t('daily.personalizedSub') : t('daily.freshSub') }}
         </text>
       </view>
       <view class="hero-play" :class="{ disabled: !tracks.length }" @tap="playAll">
         <Play :size="20" fill="currentColor" />
-        <text>播放</text>
+        <text>{{ t('daily.play') }}</text>
       </view>
     </view>
 
     <!-- 状态：加载中 / 失败 / 列表 -->
-    <view v-if="loading" class="state-text">正在为你挑选…</view>
+    <view v-if="loading" class="state-text">{{ t('daily.picking') }}</view>
     <view v-else-if="loadError" class="state-block">
-      <text class="state-text">暂时无法获取推荐，请稍后再试。</text>
-      <view class="retry-button" @tap="load"><RefreshCw :size="17" /><text>重试</text></view>
+      <text class="state-text">{{ t('daily.loadError') }}</text>
+      <view class="retry-button" @tap="load"><RefreshCw :size="17" /><text>{{ t('daily.retry') }}</text></view>
     </view>
     <template v-else>
-      <view v-if="tracks.length" class="list-head"><text class="list-count">共 {{ tracks.length }} 首</text></view>
+      <view v-if="tracks.length" class="list-head"><text class="list-count">{{ t('daily.totalTracks', { count: tracks.length }) }}</text></view>
       <TrackRow
         v-for="(track, index) in tracks"
         :key="track.id"
@@ -94,8 +97,8 @@ onPullDownRefresh(async () => {
         :index="index"
         :queue="tracks"
       />
-      <view v-if="!tracks.length" class="state-text">曲库还比较安静，稍后再来看看。</view>
-      <view v-else class="list-end">每天为你更新 30 首</view>
+      <view v-if="!tracks.length" class="state-text">{{ t('daily.quiet') }}</view>
+      <view v-else class="list-end">{{ t('daily.daily30') }}</view>
     </template>
     <view class="page-bottom-spacer"></view>
   </view>

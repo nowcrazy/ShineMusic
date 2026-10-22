@@ -35,7 +35,7 @@ jobs:
         run: dotnet build ShineMusic.slnx --configuration Release --no-restore
 
   frontend:
-    name: 前端（契约漂移 + 类型检查 + 构建）
+    name: 前端（契约漂移 + i18n 残留 + 类型检查 + 构建）
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -62,6 +62,11 @@ jobs:
 
       - name: 类型检查（vue-tsc --noEmit）
         run: yarn typecheck
+
+      # i18n 防回退闸门：新增 UI 中文串必须进语言包并接线，
+      # 基线 = 有意保留的逻辑匹配值白名单（见 scripts/i18n-residual-baseline.json）。
+      - name: i18n 残留检查
+        run: yarn check:i18n
 
       - name: 构建 H5
         run: yarn build:h5

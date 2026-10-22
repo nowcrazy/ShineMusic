@@ -379,7 +379,7 @@ async function handleLike() {
   try {
     await toggleFavorite(state.currentTrack)
   } catch {
-    uni.showToast({ title: '操作失败，请稍后再试', icon: 'none' })
+    uni.showToast({ title: t('playback.operationFailed'), icon: 'none' })
   }
 }
 
@@ -396,10 +396,10 @@ async function markNotInterested() {
   const trackId = state.currentTrack.id
   try {
     await setFeedback(trackId, 'not_interested')
-    uni.showToast({ title: '已减少此类推荐', icon: 'none' })
+    uni.showToast({ title: t('playback.lessLikeThis'), icon: 'none' })
     nextTrack()
   } catch {
-    uni.showToast({ title: '操作失败，请稍后再试', icon: 'none' })
+    uni.showToast({ title: t('playback.operationFailed'), icon: 'none' })
   }
 }
 
@@ -409,7 +409,7 @@ async function addToPlaylist() {
   try {
     const playlists = (await getPlaylists()).items
     if (!playlists.length) {
-      uni.showToast({ title: '先在“收藏”里创建一个歌单', icon: 'none' })
+      uni.showToast({ title: t('playback.createPlaylistFirst'), icon: 'none' })
       return
     }
     uni.showActionSheet({
@@ -418,11 +418,11 @@ async function addToPlaylist() {
         const playlist = playlists[tapIndex]
         if (!playlist) return
         await addPlaylistTrack(playlist.id, state.currentTrack!.id)
-        uni.showToast({ title: '已加入歌单', icon: 'none' })
+        uni.showToast({ title: t('playback.addedToPlaylist'), icon: 'none' })
       },
     })
   } catch {
-    uni.showToast({ title: '操作失败，请稍后再试', icon: 'none' })
+    uni.showToast({ title: t('playback.operationFailed'), icon: 'none' })
   }
 }
 
@@ -537,8 +537,8 @@ function onSeekMove(event: TouchEvent) {
       <view class="player-topbar">
         <view class="player-icon-button" @tap="expanded = false"><ChevronDown :size="23" /></view>
         <view class="player-top-label">
-          <text>正在播放</text>
-          <text class="player-context">{{ lyricMode ? '歌词模式' : 'Shine Music' }}</text>
+          <text>{{ t('player.nowPlaying') }}</text>
+          <text class="player-context">{{ lyricMode ? t('playback.lyricsMode') : 'Shine Music' }}</text>
         </view>
         <view class="player-icon-button" :class="{ active: lyricMode }" @tap="toggleLyricMode"><AlignLeft :size="20" /></view>
       </view>
@@ -559,7 +559,7 @@ function onSeekMove(event: TouchEvent) {
             </view>
             <view class="art-sticker"><AudioLines :size="16" /><text>SHINE SESSION</text></view>
           </view>
-          <view class="art-hint">← 切歌 · 下滑收起 · 双击收藏 →</view>
+          <view class="art-hint">{{ t('playback.gestureHint') }}</view>
         </view>
 
         <!-- 曲名/艺人 + 收藏（封面模式下显示） -->
@@ -595,7 +595,7 @@ function onSeekMove(event: TouchEvent) {
           <!-- 底部留白：保证最后一行也能滚到中间 -->
           <view class="lyric-spacer" :style="{ height: `${lyricPad}px` }"></view>
         </scroll-view>
-        <view v-else class="lyric-empty">暂无歌词</view>
+        <view v-else class="lyric-empty">{{ t('player.noLyrics') }}</view>
       </view>
 
       <!-- 律动频谱条：播放时跳动，暂停时静置 -->
@@ -612,14 +612,13 @@ function onSeekMove(event: TouchEvent) {
         <view class="seek-times"><text>{{ elapsedLabel }}</text><text>{{ durationLabel }}</text></view>
       </view>
 
-      <!-- 播放控制：播放模式（单按钮三态）/ 加歌单 / 上一首 / 播放暂停 / 下一首 / 收藏 -->
+      <!-- 播放控制：播放模式（单按钮三态）/ 上一首 / 播放暂停 / 下一首 / 收藏（播放列表入口在下方 extra 行） -->
       <view class="player-controls">
         <view class="control-secondary" :class="{ active: state.playMode !== 'order' }" @tap="cyclePlayMode">
           <ListOrdered v-if="state.playMode === 'order'" :size="22" />
           <Shuffle v-else-if="state.playMode === 'shuffle'" :size="22" />
           <Repeat1 v-else :size="22" />
         </view>
-        <view class="control-secondary" @tap="queuePanelVisible = true"><ListMusic :size="22" /></view>
         <view class="control-skip" @tap="previousTrack"><SkipBack :size="24" fill="currentColor" /></view>
         <view class="control-play" @tap="togglePlayback">
           <Pause v-if="state.isPlaying" :size="27" fill="currentColor" />
@@ -631,24 +630,25 @@ function onSeekMove(event: TouchEvent) {
         </view>
       </view>
 
-      <!-- 评论 / 音效 / 不感兴趣：音效仅 H5（Web Audio）可用时展示 -->
+      <!-- 评论 / 播放列表 / 加歌单 / 音效 / 不感兴趣：音效仅 H5（Web Audio）可用时展示 -->
       <view class="player-extra">
-        <view class="extra-button extra-button--primary" @tap="openComments"><MessageSquare :size="17" /><text>评论</text></view>
-        <view class="extra-button" @tap="addToPlaylist"><ListPlus :size="17" /><text>加歌单</text></view>
+        <view class="extra-button extra-button--primary" @tap="openComments"><MessageSquare :size="17" /><text>{{ t('player.comments') }}</text></view>
+        <view class="extra-button" @tap="queuePanelVisible = true"><ListMusic :size="17" /><text>{{ t('player.queue') }}</text></view>
+        <view class="extra-button" @tap="addToPlaylist"><ListPlus :size="17" /><text>{{ t('player.addToPlaylist') }}</text></view>
         <view v-if="state.eqSupported" class="extra-button" :class="{ active: state.eqPreset !== 'flat' }" @tap="eqPanelVisible = true">
           <SlidersHorizontal :size="17" /><text>{{ t('player.eq') }} · {{ eqPresetName }}</text>
         </view>
-        <view class="extra-button" @tap="markNotInterested"><Ban :size="17" /><text>不感兴趣</text></view>
+        <view class="extra-button" @tap="markNotInterested"><Ban :size="17" /><text>{{ t('playback.notInterested') }}</text></view>
       </view>
 
-      <view v-if="state.audioError" class="audio-notice">暂时无法播放该曲目，请稍后再试</view>
+      <view v-if="state.audioError" class="audio-notice">{{ t('playback.audioUnavailable') }}</view>
     </view>
 
     <!-- 播放队列面板（底部抽屉） -->
     <view v-if="queuePanelVisible" class="eq-sheet-mask" @tap="queuePanelVisible = false">
       <view class="eq-sheet queue-sheet" @tap.stop>
         <view class="eq-sheet-head">
-          <text class="eq-sheet-title">播放队列（{{ state.queue.length }}）</text>
+          <text class="eq-sheet-title">{{ t('player.queueTitle', { count: state.queue.length }) }}</text>
           <view class="eq-sheet-close" @tap="queuePanelVisible = false"><X :size="20" /></view>
         </view>
         <scroll-view scroll-y class="queue-scroll">

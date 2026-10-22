@@ -7,6 +7,7 @@
  */
 import { computed, ref } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
+import { useI18n } from 'vue-i18n'
 import { AlertCircle, Check, FileUp, ImageUp, Music, Plus, Search, ShieldCheck, Trash2 } from 'lucide-vue-next'
 import { createTrackLyric, deleteLyric, getAdminTracks, getTrackLyrics, updateAdminTrack, updateLyric } from '@/services/admin-catalog'
 import { resolveUrl } from '@/services/http'
@@ -33,6 +34,8 @@ const genres = ref('')
 const coverUploading = ref(false)
 // 歌词文件导入：隐藏的 <input type="file">（仅 H5 平台可用，App/小程序请用文本输入）
 const lyricFileInput = ref<HTMLInputElement | null>(null)
+
+const { t } = useI18n()
 
 // 当前选中的曲目对象（由 selectedId 在列表中派生）
 const selectedTrack = computed(() => tracks.value.find((track) => track.id === selectedId.value) ?? null)
@@ -66,7 +69,7 @@ async function loadTracks() {
       selectTrack(selectedTrack.value)
     }
   } catch {
-    loadError.value = '曲库暂时无法读取，请稍后重试。'
+    loadError.value = t('catalogAdmin.loadFailed')
   } finally {
     loading.value = false
   }
@@ -100,7 +103,7 @@ async function saveTrack() {
   if (!track || saving.value) return
   // 表单校验：曲名与至少一位艺人均不能为空
   if (!title.value.trim() || !artists.value.trim()) {
-    uni.showToast({ title: '歌曲名和艺人不能为空', icon: 'none' })
+    uni.showToast({ title: t('catalogAdmin.titleArtistRequired'), icon: 'none' })
     return
   }
   saving.value = true
@@ -116,9 +119,9 @@ async function saveTrack() {
     const index = tracks.value.findIndex((item) => item.id === updated.id)
     if (index >= 0) tracks.value.splice(index, 1, updated)
     selectTrack(updated)
-    uni.showToast({ title: '曲目信息已保存', icon: 'success' })
+    uni.showToast({ title: t('catalogAdmin.trackSaved'), icon: 'success' })
   } catch {
-    uni.showToast({ title: '保存失败，请重试', icon: 'none' })
+    uni.showToast({ title: t('catalogAdmin.saveFailed'), icon: 'none' })
   } finally {
     saving.value = false
   }
@@ -143,9 +146,9 @@ async function changeCover() {
         const updated = await updateAdminTrack(track.id, { artworkId: result.id })
         const index = tracks.value.findIndex((item) => item.id === updated.id)
         if (index >= 0) tracks.value.splice(index, 1, updated)
-        uni.showToast({ title: '封面已更新', icon: 'success' })
+        uni.showToast({ title: t('catalogAdmin.coverUpdated'), icon: 'success' })
       } catch (error) {
-        uni.showToast({ title: error instanceof Error ? error.message : '封面上传失败', icon: 'none' })
+        uni.showToast({ title: error instanceof Error ? error.message : t('catalogAdmin.coverUploadFailed'), icon: 'none' })
       } finally {
         coverUploading.value = false
       }
@@ -176,9 +179,9 @@ function onLyricFilePicked(event: Event) {
     if (/^\s*\[\d{1,2}:\d{2}(\.\d{1,3})?\]/m.test(text)) {
       lyricForm.value.format = 'lrc'
     }
-    uni.showToast({ title: '已从文件载入歌词', icon: 'none' })
+    uni.showToast({ title: t('catalogAdmin.lyricsLoadedFromFile'), icon: 'none' })
   }
-  reader.onerror = () => uni.showToast({ title: '文件读取失败', icon: 'none' })
+  reader.onerror = () => uni.showToast({ title: t('catalogAdmin.fileReadFailed'), icon: 'none' })
   reader.readAsText(file)
   input.value = '' // 允许重复选择同一文件
 }
@@ -195,6 +198,13 @@ const lyricForm = ref({
   isDefault: false,
 })
 const lyricSaving = ref(false)
+// 歌词内容输入框占位符：按格式（LRC/纯文本）拼接两行示例
+const lyricPlaceholder = computed(() => {
+  const [line1, line2] = lyricForm.value.format === 'lrc'
+    ? ['catalogAdmin.lyricLrcPlaceholderLine1', 'catalogAdmin.lyricLrcPlaceholderLine2']
+    : ['catalogAdmin.lyricPlainPlaceholderLine1', 'catalogAdmin.lyricPlainPlaceholderLine2']
+  return `${t(line1)}\n${t(line2)}`
+})
 
 /** 选中曲目时加载其歌词列表 */
 async function loadLyrics(trackId: string) {
@@ -213,11 +223,11 @@ async function loadLyrics(trackId: string) {
 function selectTrack(track: ApiTrack | null) {
   selectedId.value = track?.id ?? ''
   title.value = track?.title ?? ''
-  artists.value = track?.artists.map((artist) => artist.name).join('、') ?? ''
+  artists.value = track?.artists.map((artist) => artist.name).join(t('catalogAdmin.valueSeparator')) ?? ''
   trackNumber.value = track?.trackNumber?.toString() ?? ''
   discNumber.value = track?.discNumber?.toString() ?? ''
   releaseYear.value = track?.releaseYear?.toString() ?? ''
-  genres.value = track?.genres.join('、') ?? ''
+  genres.value = track?.genres.join(t('catalogAdmin.valueSeparator')) ?? ''
   resetLyricForm()
   void loadLyrics(track?.id ?? '')
 }
@@ -244,7 +254,7 @@ async function saveLyric() {
   const track = selectedTrack.value
   if (!track || lyricSaving.value) return
   if (!lyricForm.value.content.trim()) {
-    uni.showToast({ title: '歌词内容不能为空', icon: 'none' })
+    uni.showToast({ title: t('catalogAdmin.lyricsEmpty'), icon: 'none' })
     return
   }
   lyricSaving.value = true
@@ -257,7 +267,7 @@ async function saveLyric() {
         content: lyricForm.value.content,
         isDefault: lyricForm.value.isDefault,
       })
-      uni.showToast({ title: '歌词已更新', icon: 'success' })
+      uni.showToast({ title: t('catalogAdmin.lyricUpdated'), icon: 'success' })
     } else {
       // 新增模式
       await createTrackLyric(track.id, {
@@ -266,12 +276,12 @@ async function saveLyric() {
         content: lyricForm.value.content,
         isDefault: lyricForm.value.isDefault,
       })
-      uni.showToast({ title: '歌词已添加', icon: 'success' })
+      uni.showToast({ title: t('catalogAdmin.lyricAdded'), icon: 'success' })
     }
     resetLyricForm()
     await loadLyrics(track.id)
   } catch {
-    uni.showToast({ title: '保存失败，请重试', icon: 'none' })
+    uni.showToast({ title: t('catalogAdmin.saveFailed'), icon: 'none' })
   } finally {
     lyricSaving.value = false
   }
@@ -280,9 +290,9 @@ async function saveLyric() {
 /** 删除歌词 */
 async function removeLyric(lyric: ApiLyric) {
   uni.showModal({
-    title: '删除歌词',
-    content: `确定删除这份歌词吗？`,
-    confirmText: '删除',
+    title: t('catalogAdmin.deleteLyricTitle'),
+    content: t('catalogAdmin.deleteLyricConfirm'),
+    confirmText: t('admin.common.delete'),
     confirmColor: '#d0553a',
     success: async ({ confirm }) => {
       if (!confirm) return
@@ -290,9 +300,9 @@ async function removeLyric(lyric: ApiLyric) {
         await deleteLyric(lyric.id)
         if (lyricForm.value.id === lyric.id) resetLyricForm()
         await loadLyrics(selectedTrack.value?.id ?? '')
-        uni.showToast({ title: '已删除', icon: 'success' })
+        uni.showToast({ title: t('catalogAdmin.deleted'), icon: 'success' })
       } catch {
-        uni.showToast({ title: '删除失败，请重试', icon: 'none' })
+        uni.showToast({ title: t('catalogAdmin.deleteFailed'), icon: 'none' })
       }
     },
   })
@@ -305,8 +315,8 @@ async function removeLyric(lyric: ApiLyric) {
     <view class="page-heading">
       <view class="heading-icon"><ShieldCheck :size="20" /></view>
       <view class="heading-copy">
-        <text class="heading-title">曲目维护</text>
-        <text class="heading-subtitle">管理已发布曲目的元数据</text>
+        <text class="heading-title">{{ $t('admin.catalog.title') }}</text>
+        <text class="heading-subtitle">{{ $t('catalogAdmin.subtitle') }}</text>
       </view>
     </view>
 
@@ -314,19 +324,19 @@ async function removeLyric(lyric: ApiLyric) {
     <view class="search-row">
       <view class="search-field">
         <Search :size="18" />
-        <input v-model="query" confirm-type="search" placeholder="搜索歌曲、艺人或专辑" @confirm="loadTracks" />
+        <input v-model="query" confirm-type="search" :placeholder="$t('catalogAdmin.searchPlaceholder')" @confirm="loadTracks" />
       </view>
-      <view class="search-action" @tap="loadTracks">搜索</view>
+      <view class="search-action" @tap="loadTracks">{{ $t('admin.common.search') }}</view>
     </view>
     <!-- 过滤开关：切换后立即重新加载“仅缺元数据”结果 -->
     <view class="filter-row" @tap="missingMetadata = !missingMetadata; loadTracks()">
       <view class="filter-check" :class="{ checked: missingMetadata }"><Check v-if="missingMetadata" :size="13" /></view>
-      <text>仅显示缺少元数据的曲目</text>
+      <text>{{ $t('catalogAdmin.missingOnly') }}</text>
     </view>
 
-    <view v-if="loading" class="state-message">正在加载曲库…</view>
+    <view v-if="loading" class="state-message">{{ $t('catalogAdmin.loading') }}</view>
     <view v-else-if="loadError" class="state-message error"><AlertCircle :size="17" /><text>{{ loadError }}</text></view>
-    <view v-else-if="!tracks.length" class="state-message">没有找到曲目。</view>
+    <view v-else-if="!tracks.length" class="state-message">{{ $t('catalogAdmin.noTracksFound') }}</view>
 
     <!-- 工作区：左曲目列表 / 右元数据编辑器 -->
     <view v-else class="workspace">
@@ -341,22 +351,22 @@ async function removeLyric(lyric: ApiLyric) {
         >
           <view class="track-copy">
             <text class="track-title">{{ track.title }}</text>
-            <text class="track-meta">{{ track.artists.map((artist) => artist.name).join('、') || '缺少艺人' }}<text v-if="track.album"> · {{ track.album.title }}</text></text>
+            <text class="track-meta">{{ track.artists.map((artist) => artist.name).join($t('catalogAdmin.valueSeparator')) || $t('catalogAdmin.missingArtist') }}<text v-if="track.album"> · {{ track.album.title }}</text></text>
           </view>
-          <text class="track-length">{{ track.durationMs ? Math.round(track.durationMs / 60000) + ' 分' : '时长未知' }}</text>
+          <text class="track-length">{{ track.durationMs ? $t('catalogAdmin.durationMinutes', { count: Math.round(track.durationMs / 60000) }) : $t('catalogAdmin.durationUnknown') }}</text>
         </view>
       </view>
 
       <!-- 元数据编辑面板：选中曲目后出现 -->
       <view v-if="selectedTrack" class="editor">
         <view class="editor-heading">
-          <text class="editor-title">编辑曲目信息</text>
+          <text class="editor-title">{{ $t('catalogAdmin.editTrackInfo') }}</text>
           <text class="editor-id">{{ selectedTrack.id }}</text>
         </view>
 
         <!-- 封面：展示当前封面并提供更换入口 -->
         <view class="cover-block">
-          <text class="form-label">封面</text>
+          <text class="form-label">{{ $t('catalogAdmin.coverLabel') }}</text>
           <view class="cover-row">
             <view class="cover-thumb">
               <image v-if="selectedTrack.artworkUrl" class="cover-thumb-img" :src="resolveUrl(selectedTrack.artworkUrl)" mode="aspectFill" />
@@ -364,83 +374,83 @@ async function removeLyric(lyric: ApiLyric) {
             </view>
             <view class="cover-ops">
               <view class="cover-button" :class="{ disabled: coverUploading }" @tap="changeCover">
-                <ImageUp v-if="!coverUploading" :size="16" /><text>{{ coverUploading ? '上传中…' : '更换封面' }}</text>
+                <ImageUp v-if="!coverUploading" :size="16" /><text>{{ coverUploading ? $t('catalogAdmin.uploading') : $t('catalogAdmin.changeCover') }}</text>
               </view>
-              <text class="cover-hint">从相册选择图片作为曲目封面</text>
+              <text class="cover-hint">{{ $t('catalogAdmin.coverHint') }}</text>
             </view>
           </view>
         </view>
-        <label class="form-field"><text>歌曲名</text><input v-model="title" maxlength="300" /></label>
-        <label class="form-field"><text>艺人</text><input v-model="artists" placeholder="多个艺人用顿号分隔" maxlength="2000" /></label>
+        <label class="form-field"><text>{{ $t('catalogAdmin.fieldTitle') }}</text><input v-model="title" maxlength="300" /></label>
+        <label class="form-field"><text>{{ $t('admin.catalog.artist') }}</text><input v-model="artists" :placeholder="$t('catalogAdmin.artistsPlaceholder')" maxlength="2000" /></label>
         <view class="number-grid">
-          <label class="form-field"><text>曲序</text><input v-model="trackNumber" type="number" /></label>
-          <label class="form-field"><text>碟序</text><input v-model="discNumber" type="number" /></label>
-          <label class="form-field"><text>年份</text><input v-model="releaseYear" type="number" /></label>
+          <label class="form-field"><text>{{ $t('catalogAdmin.trackNumberLabel') }}</text><input v-model="trackNumber" type="number" /></label>
+          <label class="form-field"><text>{{ $t('catalogAdmin.discNumberLabel') }}</text><input v-model="discNumber" type="number" /></label>
+          <label class="form-field"><text>{{ $t('catalogAdmin.yearLabel') }}</text><input v-model="releaseYear" type="number" /></label>
         </view>
-        <label class="form-field"><text>风格</text><input v-model="genres" placeholder="多个风格用顿号分隔" maxlength="3000" /></label>
+        <label class="form-field"><text>{{ $t('admin.catalog.genre') }}</text><input v-model="genres" :placeholder="$t('catalogAdmin.genresPlaceholder')" maxlength="3000" /></label>
         <view class="save-button" :class="{ disabled: saving }" @tap="saveTrack">
-          <Check :size="17" /><text>{{ saving ? '保存中…' : '保存修改' }}</text>
+          <Check :size="17" /><text>{{ saving ? $t('catalogAdmin.saving') : $t('catalogAdmin.saveChanges') }}</text>
         </view>
       </view>
 
       <!-- 歌词管理面板：为已发布曲目增删改歌词 -->
       <view v-if="selectedTrack" class="lyric-panel">
         <view class="lyric-heading">
-          <text class="lyric-title">歌词管理</text>
-          <text class="lyric-subtitle">支持纯文本与 LRC 逐行时间轴，可添加多语言版本</text>
+          <text class="lyric-title">{{ $t('catalogAdmin.lyricsTitle') }}</text>
+          <text class="lyric-subtitle">{{ $t('catalogAdmin.lyricsSubtitle') }}</text>
         </view>
 
         <!-- 新增/编辑歌词表单 -->
         <view class="lyric-form">
           <view class="form-row">
             <label class="form-field small">
-              <text>语言</text>
-              <input v-model="lyricForm.language" placeholder="如 zh-CN、en（可留空）" maxlength="32" />
+              <text>{{ $t('catalogAdmin.languageLabel') }}</text>
+              <input v-model="lyricForm.language" :placeholder="$t('catalogAdmin.languagePlaceholder')" maxlength="32" />
             </label>
             <label class="form-field small">
-              <text>格式</text>
+              <text>{{ $t('catalogAdmin.formatLabel') }}</text>
               <view class="format-switch">
-                <view :class="{ active: lyricForm.format === 'plain' }" @tap="lyricForm.format = 'plain'">纯文本</view>
+                <view :class="{ active: lyricForm.format === 'plain' }" @tap="lyricForm.format = 'plain'">{{ $t('catalogAdmin.formatPlain') }}</view>
                 <view :class="{ active: lyricForm.format === 'lrc' }" @tap="lyricForm.format = 'lrc'">LRC</view>
               </view>
             </label>
             <label class="form-field checkbox-field" @tap="lyricForm.isDefault = !lyricForm.isDefault">
               <view class="filter-check" :class="{ checked: lyricForm.isDefault }"><Check v-if="lyricForm.isDefault" :size="13" /></view>
-              <text>设为默认歌词</text>
+              <text>{{ $t('catalogAdmin.setDefaultLyric') }}</text>
             </label>
           </view>
           <label class="form-field">
-            <text>歌词内容 {{ lyricForm.format === 'lrc' ? '（LRC 格式，每行 [mm:ss.xx] 歌词）' : '（纯文本，逐行输入）' }}</text>
-            <textarea v-model="lyricForm.content" class="lyric-textarea" :placeholder="lyricForm.format === 'lrc' ? '[00:12.34]第一行歌词\n[00:18.56]第二行歌词' : '第一行歌词\n第二行歌词'" />
+            <text>{{ $t('catalogAdmin.lyricsContentLabel') }} {{ lyricForm.format === 'lrc' ? $t('catalogAdmin.lyricsContentLrcHint') : $t('catalogAdmin.lyricsContentPlainHint') }}</text>
+            <textarea v-model="lyricForm.content" class="lyric-textarea" :placeholder="lyricPlaceholder" />
           </label>
           <view class="lyric-file-row">
-            <view class="lyric-file-button" @tap="pickLyricFile"><FileUp :size="16" /><text>从文件导入</text></view>
-            <text class="lyric-file-hint">支持 .lrc / .txt，内容将填入上方文本框</text>
+            <view class="lyric-file-button" @tap="pickLyricFile"><FileUp :size="16" /><text>{{ $t('catalogAdmin.importFromFile') }}</text></view>
+            <text class="lyric-file-hint">{{ $t('catalogAdmin.lyricFileHint') }}</text>
             <input ref="lyricFileInput" class="lyric-file-input" type="file" accept=".lrc,.txt" @change="onLyricFilePicked" />
           </view>
           <view class="lyric-actions">
-            <view v-if="lyricForm.id" class="cancel-button" @tap="resetLyricForm">取消编辑</view>
+            <view v-if="lyricForm.id" class="cancel-button" @tap="resetLyricForm">{{ $t('catalogAdmin.cancelEdit') }}</view>
             <view class="save-button" :class="{ disabled: lyricSaving }" @tap="saveLyric">
-              <Plus :size="17" /><text>{{ lyricSaving ? '保存中…' : lyricForm.id ? '更新歌词' : '添加歌词' }}</text>
+              <Plus :size="17" /><text>{{ lyricSaving ? $t('catalogAdmin.saving') : lyricForm.id ? $t('catalogAdmin.updateLyric') : $t('catalogAdmin.addLyric') }}</text>
             </view>
           </view>
         </view>
 
         <!-- 已有歌词列表 -->
         <view class="lyric-list">
-          <text class="lyric-list-title">已有歌词（{{ lyrics.length }}）</text>
-          <view v-if="lyricsLoading" class="state-message">加载歌词…</view>
-          <view v-else-if="!lyrics.length" class="lyric-empty">该曲目暂无歌词，可在上方添加。</view>
+          <text class="lyric-list-title">{{ $t('catalogAdmin.existingLyrics', { count: lyrics.length }) }}</text>
+          <view v-if="lyricsLoading" class="state-message">{{ $t('catalogAdmin.loadingLyrics') }}</view>
+          <view v-else-if="!lyrics.length" class="lyric-empty">{{ $t('catalogAdmin.noLyricsYet') }}</view>
           <view v-for="lyric in lyrics" :key="lyric.id" class="lyric-item">
             <view class="lyric-item-head">
               <view class="lyric-tags">
-                <text class="tag lang">{{ lyric.language || '未指定语言' }}</text>
-                <text class="tag" :class="lyric.format">{{ lyric.format === 'lrc' ? 'LRC' : '纯文本' }}</text>
-                <text v-if="lyric.isDefault" class="tag default">默认</text>
+                <text class="tag lang">{{ lyric.language || $t('catalogAdmin.unspecifiedLanguage') }}</text>
+                <text class="tag" :class="lyric.format">{{ lyric.format === 'lrc' ? 'LRC' : $t('catalogAdmin.formatPlain') }}</text>
+                <text v-if="lyric.isDefault" class="tag default">{{ $t('catalogAdmin.defaultTag') }}</text>
               </view>
               <view class="lyric-item-ops">
-                <view class="op-btn" @tap="editLyric(lyric)"><Check :size="13" />编辑</view>
-                <view class="op-btn danger" @tap="removeLyric(lyric)"><Trash2 :size="13" />删除</view>
+                <view class="op-btn" @tap="editLyric(lyric)"><Check :size="13" />{{ $t('admin.common.edit') }}</view>
+                <view class="op-btn danger" @tap="removeLyric(lyric)"><Trash2 :size="13" />{{ $t('admin.common.delete') }}</view>
               </view>
             </view>
             <text class="lyric-preview">{{ lyric.content.slice(0, 200) }}{{ lyric.content.length > 200 ? '…' : '' }}</text>

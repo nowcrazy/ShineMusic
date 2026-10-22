@@ -59,11 +59,25 @@ import { currentUser, isAuthenticated } from '@/services/session'
 import { useCapabilities } from '@/services/capabilities'
 import { refreshUnreadCount, unreadCount } from '@/services/notifications'
 import { formatTime } from '@/utils/format'
+import { useI18n } from 'vue-i18n'
 import type { ApiCollectionSummary, ApiPlaylistSummary, ApiUserLibraryItem, Track } from '@/types/music'
 
-// 当前激活的 tab 与固定 tab 列表（tab 切换核心状态）
+const { t } = useI18n()
+
+// 当前激活的 tab 与固定 tab 列表（tab 切换核心状态；tab 值为切换逻辑用的中文字面量，展示层走 i18n）
 const activeTab = ref('为你')
 const tabs = ['为你', '发现', '曲库', '我的'] as const
+const TAB_LABEL_KEYS: Record<string, string> = {
+  '为你': 'homePage.tabForYou',
+  '发现': 'homePage.tabDiscover',
+  '曲库': 'homePage.tabLibrary',
+  '我的': 'homePage.tabMine',
+}
+/** tab 展示文案：已知 tab 走 i18n，未知值原样兜底 */
+function tabLabel(tab: string) {
+  const key = TAB_LABEL_KEYS[tab]
+  return key ? t(key) : tab
+}
 
 // —— 底部凸起按钮：未读角标（99+ 封顶）；已登录点击弹出快捷面板，未登录先引导登录 ——
 const unreadLabel = computed(() => (unreadCount.value > 99 ? '99+' : String(unreadCount.value)))
@@ -129,7 +143,7 @@ function toLibraryTrack(item: ApiUserLibraryItem): Track {
   return {
     id: item.trackId,
     title: item.title,
-    artist: item.artists.length ? item.artists.join(', ') : '未知艺人',
+    artist: item.artists.length ? item.artists.join(', ') : t('homePage.unknownArtist'),
     album: item.albumTitle ?? '',
     albumId: null,
     cover: item.artworkUrl ? resolveUrl(item.artworkUrl) : '',
@@ -158,17 +172,17 @@ function handlePlayLibrary(index: number) {
 async function handleRemoveFromLibrary(item: ApiUserLibraryItem) {
   if (removingId.value) return
   uni.showModal({
-    title: '移出我的曲库',
-    content: `将「${item.title}」移出我的曲库？曲目本体保留，仅移除引用。`,
-    confirmText: '移出',
+    title: t('homePage.removeFromLibrary'),
+    content: t('homePage.removeFromLibraryConfirm', { title: item.title }),
+    confirmText: t('homePage.remove'),
     success: async ({ confirm }) => {
       if (!confirm) return
       removingId.value = item.trackId
       try {
         await removeFromLibrary(item.trackId)
-        uni.showToast({ title: '已移出', icon: 'none' })
+        uni.showToast({ title: t('homePage.removed'), icon: 'none' })
       } catch {
-        uni.showToast({ title: '操作失败，请稍后再试', icon: 'none' })
+        uni.showToast({ title: t('homePage.operationFailed'), icon: 'none' })
       } finally {
         removingId.value = null
       }
@@ -197,7 +211,23 @@ function onAvatarTap() {
 
 // 风格 chips：在服务端风格前补一个“全部”。后端空集合时回退到默认风格列表，避免空状态
 // 仅剩“全部”而显得页面不完整
+// chips 值同时用于 track.genres 过滤匹配，必须保留原中文；展示层经 GENRE_LABEL_KEYS 映射走 i18n
 const DEFAULT_GENRES = ['华语', '欧美', '日语', '电子', '民谣', '摇滚', 'R&B', '古风']
+const GENRE_LABEL_KEYS: Record<string, string> = {
+  '全部': 'home.genres',
+  '华语': 'homePage.genreHuayu',
+  '欧美': 'homePage.genreOumei',
+  '日语': 'homePage.genreRiyu',
+  '电子': 'homePage.genreDianzi',
+  '民谣': 'homePage.genreMinyao',
+  '摇滚': 'homePage.genreYaogun',
+  '古风': 'homePage.genreGufeng',
+}
+/** 风格 chips 展示文案：已知风格走 i18n（如 R&B 无需翻译），未知风格原样兜底 */
+function genreLabel(genre: string) {
+  const key = GENRE_LABEL_KEYS[genre]
+  return key ? t(key) : genre
+}
 const genreChips = computed(() => {
   const list = genres.value.length ? genres.value : DEFAULT_GENRES
   return ['全部', ...list]
@@ -211,6 +241,23 @@ const DEFAULT_COLLECTIONS: ApiCollectionSummary[] = [
   { id: 'default-dianzi', title: '电子律动', description: '深夜节拍不间断', artworkUrl: null, trackCount: 50 },
   { id: 'default-minyao', title: '民谣故事', description: '一把吉他一杯酒', artworkUrl: null, trackCount: 50 },
 ]
+// 内置兜底合集的展示 key：title 同时作为跳风格页的 genre 参数（逻辑值），展示层经此映射走 i18n
+const DEFAULT_COLLECTION_LABEL_KEYS: Record<string, { titleKey: string; descKey: string }> = {
+  'default-huayu': { titleKey: 'homePage.defaultHuayu', descKey: 'homePage.defaultHuayuDesc' },
+  'default-oumei': { titleKey: 'homePage.defaultOumei', descKey: 'homePage.defaultOumeiDesc' },
+  'default-dianzi': { titleKey: 'homePage.defaultDianzi', descKey: 'homePage.defaultDianziDesc' },
+  'default-minyao': { titleKey: 'homePage.defaultMinyao', descKey: 'homePage.defaultMinyaoDesc' },
+}
+/** 合集标题展示：内置兜底合集走 i18n，真实合集用后端数据 */
+function collectionTitle(collection: ApiCollectionSummary) {
+  const keys = DEFAULT_COLLECTION_LABEL_KEYS[collection.id]
+  return keys ? t(keys.titleKey) : collection.title
+}
+/** 合集描述展示：内置兜底合集走 i18n，真实合集用后端数据 */
+function collectionDesc(collection: ApiCollectionSummary) {
+  const keys = DEFAULT_COLLECTION_LABEL_KEYS[collection.id]
+  return keys ? t(keys.descKey) : collection.description
+}
 // 精选专题：后端无合集时回退到内置兜底合集
 const displayCollections = computed<readonly ApiCollectionSummary[]>(() =>
   collections.value.length ? collections.value : DEFAULT_COLLECTIONS,
@@ -271,23 +318,29 @@ const dailyLoading = ref(false)
 const dailyPreview = computed(() => dailyTracks.value.slice(0, 3))
 
 // —— 「今日灵感」时间驱动个性化 ——
-/** 当前时段（hour-based）：决定问候语、氛围标签、首选曲目风格 */
+/** 当前时段（hour-based）：决定问候语、氛围标签、首选曲目风格（展示层走 i18n key，逻辑不依赖文案） */
 const nowHour = new Date().getHours()
 const timeGreeting = computed(() => {
-  if (nowHour < 6) return { label: '夜深了', tone: '夜深了，来点安静的' }
-  if (nowHour < 11) return { label: '早安', tone: '早上好，今天从一首歌开始' }
-  if (nowHour < 14) return { label: '午好', tone: '午后放松一下' }
-  if (nowHour < 18) return { label: '下午好', tone: '下午茶时间' }
-  if (nowHour < 22) return { label: '晚上好', tone: '夜晚的旋律' }
-  return { label: '夜深了', tone: '夜深了，来点安静的' }
+  if (nowHour < 6) return { greetingKey: 'homePage.greetingNight', toneKey: 'homePage.toneNight' }
+  if (nowHour < 11) return { greetingKey: 'homePage.greetingMorning', toneKey: 'homePage.toneMorning' }
+  if (nowHour < 14) return { greetingKey: 'homePage.greetingNoon', toneKey: 'homePage.toneNoon' }
+  if (nowHour < 18) return { greetingKey: 'homePage.greetingAfternoon', toneKey: 'homePage.toneAfternoon' }
+  if (nowHour < 22) return { greetingKey: 'homePage.greetingEvening', toneKey: 'homePage.toneEvening' }
+  return { greetingKey: 'homePage.greetingNight', toneKey: 'homePage.toneNight' }
 })
-/** 时段氛围标签 — 搭配灵感卡片副标题 */
+/** 问候整句：含 {name} 插值，未登录或无昵称回退为「朋友」 */
+const greetingText = computed(() =>
+  t(timeGreeting.value.greetingKey, {
+    name: isAuthenticated.value ? currentUser.value?.displayName ?? t('homePage.friend') : t('homePage.friend'),
+  }),
+)
+/** 时段氛围标签 — 搭配灵感卡片副标题（time/mood 原中文值保留给匹配逻辑，展示走 *Key） */
 const moodTag = computed(() => {
-  if (nowHour < 6) return { time: '深夜', mood: '安静' }
-  if (nowHour < 11) return { time: '清晨', mood: '轻快' }
-  if (nowHour < 14) return { time: '午后', mood: '松弛' }
-  if (nowHour < 18) return { time: '下午', mood: '松弛' }
-  return { time: '夜晚', mood: '温柔' }
+  if (nowHour < 6) return { time: '深夜', timeKey: 'homePage.moodLateNight', mood: '安静', moodKey: 'homePage.moodQuiet' }
+  if (nowHour < 11) return { time: '清晨', timeKey: 'homePage.moodEarlyMorning', mood: '轻快', moodKey: 'homePage.moodBrisk' }
+  if (nowHour < 14) return { time: '午后', timeKey: 'homePage.moodNoon', mood: '松弛', moodKey: 'homePage.moodRelaxed' }
+  if (nowHour < 18) return { time: '下午', timeKey: 'homePage.moodAfternoon', mood: '松弛', moodKey: 'homePage.moodRelaxed' }
+  return { time: '夜晚', timeKey: 'homePage.moodNight', mood: '温柔', moodKey: 'homePage.moodGentle' }
 })
 /** 灵感主卡曲目：优先取每日推荐中匹配时段 mood 的曲目，否则 fallback 到第一首 */
 const inspirationTrack = computed<Track | null>(() => {
@@ -469,7 +522,7 @@ function goGenre(genre: string) {
 /** 进入歌曲需求池；功能开关关闭时 toast 拦截 */
 function goRequests() {
   if (!capabilities.capabilities.songRequests) {
-    uni.showToast({ title: '歌曲需求暂未开放', icon: 'none' })
+    uni.showToast({ title: t('homePage.requestsUnavailable'), icon: 'none' })
     return
   }
   uni.navigateTo({ url: '/pages/requests/index' })
@@ -505,19 +558,19 @@ async function confirmCreatePlaylist() {
   const name = newPlaylistName.value.trim()
   // 表单校验：歌单名不能为空
   if (!name) {
-    uni.showToast({ title: '名字不能为空', icon: 'none' })
+    uni.showToast({ title: t('homePage.nameRequired'), icon: 'none' })
     return
   }
   if (creatingPlaylist.value) return
   creatingPlaylist.value = true
   try {
     await createPlaylist(name)
-    uni.showToast({ title: '歌单已创建', icon: 'none' })
+    uni.showToast({ title: t('homePage.playlistCreated'), icon: 'none' })
     newPlaylistName.value = ''
     createSheetVisible.value = false
     await loadLibrary()
   } catch {
-    uni.showToast({ title: '创建失败，请稍后再试', icon: 'none' })
+    uni.showToast({ title: t('homePage.createFailed'), icon: 'none' })
   } finally {
     creatingPlaylist.value = false
   }
@@ -557,8 +610,8 @@ function coverOf(collection: ApiCollectionSummary) {
       <view class="page-heading">
         <view>
           <text class="eyebrow">SHINE MUSIC</text>
-          <text class="greeting">{{ timeGreeting.label }}，{{ isAuthenticated ? currentUser?.displayName ?? '朋友' : '朋友' }}</text>
-          <text class="greeting-sub">{{ timeGreeting.tone }}</text>
+          <text class="greeting">{{ greetingText }}</text>
+          <text class="greeting-sub">{{ $t(timeGreeting.toneKey) }}</text>
         </view>
       </view>
 
@@ -567,20 +620,20 @@ function coverOf(collection: ApiCollectionSummary) {
         <view class="inspiration-left">
           <view class="inspiration-badge">
             <Sparkles :size="13" />
-            <text>{{ moodTag.time }} · {{ moodTag.mood }}</text>
+            <text>{{ $t(moodTag.timeKey) }} · {{ $t(moodTag.moodKey) }}</text>
           </view>
-          <text class="inspiration-title">今日灵感</text>
+          <text class="inspiration-title">{{ $t('homePage.inspirationTitle') }}</text>
           <view v-if="inspirationTrack" class="inspiration-track">
             <text class="inspiration-name">{{ inspirationTrack.title }}</text>
             <text class="inspiration-artist">{{ inspirationTrack.artist }}</text>
           </view>
-          <text v-else class="inspiration-empty">正在为你挑选…</text>
+          <text v-else class="inspiration-empty">{{ $t('homePage.picking') }}</text>
           <view class="inspiration-actions">
             <view class="inspiration-play" @tap.stop="playInspiration">
-              <Play :size="16" fill="currentColor" /><text>播放</text>
+              <Play :size="16" fill="currentColor" /><text>{{ $t('homePage.play') }}</text>
             </view>
             <view class="inspiration-more">
-              <text>更多</text><ChevronRight :size="14" />
+              <text>{{ $t('homePage.more') }}</text><ChevronRight :size="14" />
             </view>
           </view>
         </view>
@@ -605,7 +658,7 @@ function coverOf(collection: ApiCollectionSummary) {
       <!-- 搜索入口：点击/聚焦切到“发现”tab -->
       <view class="search-box" @tap="goSearch">
         <Search :size="19" :stroke-width="2" />
-        <input v-model="query" confirm-type="search" placeholder="搜索歌曲、歌手或专辑" @focus="goSearch" />
+        <input v-model="query" confirm-type="search" :placeholder="$t('homePage.searchPlaceholder')" @focus="goSearch" />
       </view>
 
       <!-- 为你 -->
@@ -615,7 +668,7 @@ function coverOf(collection: ApiCollectionSummary) {
           <view class="section-heading feature-title-row">
             <view>
               <text class="section-kicker">YOUR DAILY SPARK</text>
-              <text class="section-title">今天，为你发现</text>
+              <text class="section-title">{{ $t('homePage.discoverForYou') }}</text>
             </view>
           </view>
           <view class="featured-card" @tap="tapHero">
@@ -623,13 +676,13 @@ function coverOf(collection: ApiCollectionSummary) {
               <CoverArt :src="featuredCollection ? coverOf(featuredCollection) : featuredTrack?.cover ?? ''" :rounded="16" :icon-size="34" />
             </view>
             <view class="featured-info">
-              <view class="feature-label"><Sparkles :size="13" /><text>编辑精选</text></view>
-              <text class="featured-name">{{ featuredCollection ? featuredCollection.title : featuredTrack?.title }}</text>
-              <text v-if="featuredCollection?.description" class="featured-caption">{{ featuredCollection.description }}</text>
-              <view class="feature-play"><Music2 :size="16" /><text>{{ featuredCollection ? '查看专题' : '立即播放' }}</text></view>
+              <view class="feature-label"><Sparkles :size="13" /><text>{{ $t('homePage.editorialPick') }}</text></view>
+              <text class="featured-name">{{ featuredCollection ? collectionTitle(featuredCollection) : featuredTrack?.title }}</text>
+              <text v-if="featuredCollection?.description" class="featured-caption">{{ collectionDesc(featuredCollection) }}</text>
+              <view class="feature-play"><Music2 :size="16" /><text>{{ featuredCollection ? $t('homePage.viewCollection') : $t('homePage.playNow') }}</text></view>
             </view>
             <view v-if="featuredCollection" class="feature-count">
-              <Music2 :size="13" /><text>{{ featuredCollection.trackCount }} 首</text>
+              <Music2 :size="13" /><text>{{ $t('homePage.trackCount', { count: featuredCollection.trackCount }) }}</text>
             </view>
           </view>
         </view>
@@ -637,16 +690,16 @@ function coverOf(collection: ApiCollectionSummary) {
         <!-- 最近加入曲目：主内容区（含网络错误 / 空数据 / 列表三种状态） -->
         <view class="recommend-section">
           <view class="section-heading recommend-heading">
-            <view><text class="section-kicker">RECENTLY ADDED</text><text class="section-title">最近加入</text></view>
+            <view><text class="section-kicker">RECENTLY ADDED</text><text class="section-title">{{ $t('homePage.recentlyAdded') }}</text></view>
             <view class="round-action" @tap="playAllRecent"><Music2 :size="17" /></view>
           </view>
           <view v-if="loadError" class="recommend-empty" @tap="retryHome">
-            <text class="recommend-empty-title">曲库暂时连不上</text>
-            <text class="recommend-empty-sub">先逛逛下面的精选 · 轻点重新连接</text>
+            <text class="recommend-empty-title">{{ $t('homePage.feedErrorTitle') }}</text>
+            <text class="recommend-empty-sub">{{ $t('homePage.feedErrorSub') }}</text>
           </view>
           <view v-else-if="!visibleRecent.length" class="recommend-empty">
-            <text class="recommend-empty-title">还没有已发布的曲目</text>
-            <text class="recommend-empty-sub">去发现更多好音乐</text>
+            <text class="recommend-empty-title">{{ $t('homePage.noTracksTitle') }}</text>
+            <text class="recommend-empty-sub">{{ $t('homePage.noTracksSub') }}</text>
           </view>
           <view v-else class="track-list">
             <TrackRow
@@ -662,7 +715,7 @@ function coverOf(collection: ApiCollectionSummary) {
         <!-- 精选专题横滑列表（次要区块，后端无数据时回退内置兜底合集） -->
         <view class="collection-section">
           <view class="section-heading">
-            <view><text class="section-kicker">EDITORIAL PICKS</text><text class="section-title">精选专题</text></view>
+            <view><text class="section-kicker">EDITORIAL PICKS</text><text class="section-title">{{ $t('home.collections') }}</text></view>
           </view>
           <scroll-view class="collection-scroll" scroll-x :show-scrollbar="false">
             <view class="collection-list">
@@ -673,8 +726,8 @@ function coverOf(collection: ApiCollectionSummary) {
                 @tap="tapCollection(collection)"
               >
                 <view class="collection-cover"><CoverArt :src="coverOf(collection)" :rounded="20" :icon-size="24" /></view>
-                <text class="collection-title">{{ collection.title }}</text>
-                <text class="collection-meta">{{ collection.trackCount }} 首</text>
+                <text class="collection-title">{{ collectionTitle(collection) }}</text>
+                <text class="collection-meta">{{ $t('homePage.trackCount', { count: collection.trackCount }) }}</text>
               </view>
             </view>
           </scroll-view>
@@ -683,7 +736,7 @@ function coverOf(collection: ApiCollectionSummary) {
         <!-- 风格 chips（次要区块）：选中后本地过滤上方“最近加入” -->
         <view class="mood-section">
           <view class="section-heading">
-            <view><text class="section-kicker">PICK YOUR GENRE</text><text class="section-title">按风格听听</text></view>
+            <view><text class="section-kicker">PICK YOUR GENRE</text><text class="section-title">{{ $t('homePage.byGenre') }}</text></view>
           </view>
           <scroll-view class="mood-scroll" scroll-x :show-scrollbar="false">
             <view class="mood-list">
@@ -694,7 +747,7 @@ function coverOf(collection: ApiCollectionSummary) {
                 :class="[`mood-${index % 5}`, { selected: selectedGenre === genre }]"
                 @tap="selectedGenre = genre"
               >
-                <text class="mood-dot"></text><text>{{ genre }}</text>
+                <text class="mood-dot"></text><text>{{ genreLabel(genre) }}</text>
               </view>
             </view>
           </scroll-view>
@@ -709,7 +762,7 @@ function coverOf(collection: ApiCollectionSummary) {
             <view class="section-heading">
               <view>
                 <text class="section-kicker">PLAYLISTS</text>
-                <text class="section-title">推荐歌单</text>
+                <text class="section-title">{{ $t('homePage.recommendedPlaylists') }}</text>
               </view>
             </view>
 
@@ -720,8 +773,8 @@ function coverOf(collection: ApiCollectionSummary) {
               </view>
               <view class="playlist-hero-copy">
                 <text class="playlist-hero-title">{{ collections[0].title }}</text>
-                <text class="playlist-hero-desc">{{ collections[0].description || '编辑精选' }}</text>
-                <text class="playlist-hero-meta">{{ collections[0].trackCount }} 首</text>
+                <text class="playlist-hero-desc">{{ collections[0].description || $t('homePage.editorialPick') }}</text>
+                <text class="playlist-hero-meta">{{ $t('homePage.trackCount', { count: collections[0].trackCount }) }}</text>
               </view>
             </view>
 
@@ -736,7 +789,7 @@ function coverOf(collection: ApiCollectionSummary) {
                 >
                   <view class="collection-cover"><CoverArt :src="coverOf(collection)" :rounded="20" :icon-size="24" /></view>
                   <text class="collection-title">{{ collection.title }}</text>
-                  <text class="collection-meta">{{ collection.trackCount }} 首</text>
+                  <text class="collection-meta">{{ $t('homePage.trackCount', { count: collection.trackCount }) }}</text>
                 </view>
               </view>
             </scroll-view>
@@ -744,14 +797,14 @@ function coverOf(collection: ApiCollectionSummary) {
 
           <view class="discover-block">
             <view class="section-heading">
-              <view><text class="section-kicker">BROWSE GENRES</text><text class="section-title">浏览风格</text></view>
+              <view><text class="section-kicker">BROWSE GENRES</text><text class="section-title">{{ $t('homePage.browseGenres') }}</text></view>
             </view>
             <view class="genre-grid">
               <view v-for="genre in genreChips.filter((item) => item !== '全部')" :key="genre" class="genre-chip" @tap="goGenre(genre)">
-                <text>{{ genre }}</text>
+                <text>{{ genreLabel(genre) }}</text>
                 <ChevronRight :size="15" />
               </view>
-              <view v-if="genreChips.length === 1" class="inline-error">曲库中还没有风格标签。</view>
+              <view v-if="genreChips.length === 1" class="inline-error">{{ $t('homePage.noGenres') }}</view>
             </view>
           </view>
         </view>
@@ -761,14 +814,14 @@ function coverOf(collection: ApiCollectionSummary) {
           <view class="section-heading recommend-heading">
             <view>
               <text class="section-kicker">SEARCH RESULTS</text>
-              <text class="section-title">“{{ query.trim() }}” 的结果</text>
+              <text class="section-title">{{ $t('homePage.searchResultsFor', { query: query.trim() }) }}</text>
             </view>
           </view>
-          <view v-if="searchPending" class="inline-error">正在搜索…</view>
+          <view v-if="searchPending" class="inline-error">{{ $t('homePage.searching') }}</view>
           <view v-else-if="searched && !searchResults.length" class="no-results">
-            <text>没有找到匹配的歌曲，换个关键词试试。</text>
+            <text>{{ $t('homePage.noMatch') }}</text>
             <view v-if="isAuthenticated" class="request-link" @tap="goRequests">
-              <Inbox :size="15" /><text>去歌曲需求池告诉管理员</text>
+              <Inbox :size="15" /><text>{{ $t('homePage.tellAdmins') }}</text>
             </view>
           </view>
           <view v-else class="track-list">
@@ -789,9 +842,9 @@ function coverOf(collection: ApiCollectionSummary) {
           <!-- 未登录：登录引导卡 -->
           <view v-if="!isAuthenticated" class="login-card">
             <view class="login-icon"><Library :size="22" /></view>
-            <text class="login-title">登录查看我的曲库</text>
-            <text class="login-copy">登录后管理你上传的歌曲，私有歌曲仅本人可听</text>
-            <view class="login-button" @tap="goLogin"><text>登录 / 邀请注册</text></view>
+            <text class="login-title">{{ $t('homePage.libraryLoginTitle') }}</text>
+            <text class="login-copy">{{ $t('homePage.libraryLoginCopy') }}</text>
+            <view class="login-button" @tap="goLogin"><text>{{ $t('homePage.loginOrRegister') }}</text></view>
           </view>
 
           <!-- 已登录：标题行（上传入口受开关控制）/ 加载 / 空态 / 列表 -->
@@ -799,26 +852,26 @@ function coverOf(collection: ApiCollectionSummary) {
             <view class="section-heading">
               <view>
                 <text class="section-kicker">MY LIBRARY</text>
-                <text class="section-title">我的曲库</text>
+                <text class="section-title">{{ $t('homePage.myLibraryTitle') }}</text>
               </view>
               <view v-if="canUserUpload" class="create-playlist" @tap="goUpload">
-                <Upload :size="17" /><text>上传</text>
+                <Upload :size="17" /><text>{{ $t('homePage.upload') }}</text>
               </view>
-              <text v-else class="library-count">{{ myLibraryItems.length }} 首</text>
+              <text v-else class="library-count">{{ $t('homePage.trackCount', { count: myLibraryItems.length }) }}</text>
             </view>
 
-            <view v-if="myLibraryLoading && !myLibraryItems.length" class="inline-error">正在加载…</view>
+            <view v-if="myLibraryLoading && !myLibraryItems.length" class="inline-error">{{ $t('homePage.loading') }}</view>
             <view v-else-if="!myLibraryItems.length" class="empty-state">
               <view class="empty-icon"><Library :size="23" /></view>
-              <text class="empty-title">曲库还没有歌曲</text>
-              <text class="empty-copy">上传本地音频后会安静地收在这里</text>
+              <text class="empty-title">{{ $t('homePage.libraryEmptyTitle') }}</text>
+              <text class="empty-copy">{{ $t('homePage.libraryEmptyCopy') }}</text>
               <view v-if="canUserUpload" class="empty-upload" @tap="goUpload">
-                <Upload :size="16" /><text>上传本地音频</text>
+                <Upload :size="16" /><text>{{ $t('nav.libraryUpload') }}</text>
               </view>
             </view>
 
             <template v-else>
-              <view class="lib-head"><text class="lib-count">共 {{ myLibraryItems.length }} 首</text></view>
+              <view class="lib-head"><text class="lib-count">{{ $t('homePage.totalTracks', { count: myLibraryItems.length }) }}</text></view>
               <view
                 v-for="(item, index) in myLibraryItems"
                 :key="item.trackId"
@@ -832,10 +885,10 @@ function coverOf(collection: ApiCollectionSummary) {
                 <view class="lib-copy">
                   <view class="lib-title-row">
                     <text class="lib-title">{{ item.title }}</text>
-                    <text v-if="!item.isPublic" class="lib-badge private">私有</text>
-                    <text v-else class="lib-badge public">已公开</text>
+                    <text v-if="!item.isPublic" class="lib-badge private">{{ $t('homePage.privateBadge') }}</text>
+                    <text v-else class="lib-badge public">{{ $t('homePage.publicBadge') }}</text>
                   </view>
-                  <text class="lib-artist">{{ item.artists.join(', ') || '未知艺人' }}</text>
+                  <text class="lib-artist">{{ item.artists.join(', ') || $t('homePage.unknownArtist') }}</text>
                 </view>
                 <view class="lib-meta">
                   <text class="lib-duration">{{ formatTime(Math.round((item.durationMs ?? 0) / 1000)) }}</text>
@@ -868,56 +921,56 @@ function coverOf(collection: ApiCollectionSummary) {
               <view class="quick-circle" @tap="goPage('/pages/notifications/index')">
                 <view class="qc-icon qc-notify"><Bell :size="20" /></view>
                 <text v-if="unreadCount > 0" class="qc-badge">{{ unreadLabel }}</text>
-                <text class="qc-label">消息</text>
+                <text class="qc-label">{{ $t('nav.notifications') }}</text>
               </view>
               <view class="quick-circle" @tap="goPage('/pages/library/favorites')">
                 <view class="qc-icon qc-favorite"><Heart :size="20" /></view>
-                <text class="qc-label">我的收藏</text>
+                <text class="qc-label">{{ $t('nav.favorites') }}</text>
               </view>
               <view class="quick-circle" @tap="goPage('/pages/history/index')">
                 <view class="qc-icon qc-history"><History :size="20" /></view>
-                <text class="qc-label">播放历史</text>
+                <text class="qc-label">{{ $t('nav.playHistory') }}</text>
               </view>
               <view class="quick-circle" @tap="goPage('/pages/social/follow')">
                 <view class="qc-icon qc-follow"><UserRound :size="20" /></view>
-                <text class="qc-label">关注粉丝</text>
+                <text class="qc-label">{{ $t('nav.followers') }}</text>
               </view>
             </view>
 
             <!-- 分组入口：音乐库 / 设置 -->
             <view class="entry-group">
-              <text class="entry-group-title">音乐库</text>
+              <text class="entry-group-title">{{ $t('nav.musicLibrary') }}</text>
               <view class="entry-row" @tap="goPage('/pages/library/upload')">
                 <view class="entry-icon ei-upload"><Upload :size="18" /></view>
-                <text class="entry-name">上传本地音频</text>
+                <text class="entry-name">{{ $t('nav.libraryUpload') }}</text>
                 <ChevronRight :size="16" class="profile-chevron" />
               </view>
               <view class="entry-row" @tap="goRequests">
                 <view class="entry-icon ei-request"><Inbox :size="18" /></view>
-                <text class="entry-name">歌曲需求池</text>
+                <text class="entry-name">{{ $t('nav.requestsPool') }}</text>
                 <ChevronRight :size="16" class="profile-chevron" />
               </view>
             </view>
             <view class="entry-group">
-              <text class="entry-group-title">设置</text>
+              <text class="entry-group-title">{{ $t('nav.settings') }}</text>
               <view class="entry-row" @tap="goPage('/pages/settings/theme')">
                 <view class="entry-icon ei-theme"><Palette :size="18" /></view>
-                <text class="entry-name">主题外观</text>
+                <text class="entry-name">{{ $t('nav.theme') }}</text>
                 <ChevronRight :size="16" class="profile-chevron" />
               </view>
               <view class="entry-row" @tap="goPage('/pages/profile/index')">
                 <view class="entry-icon ei-profile"><UserCog :size="18" /></view>
-                <text class="entry-name">个人资料</text>
+                <text class="entry-name">{{ $t('nav.profile') }}</text>
                 <ChevronRight :size="16" class="profile-chevron" />
               </view>
             </view>
 
             <view v-if="capabilities.capabilities.userCollections" class="library-block">
               <view class="section-heading">
-                <view><text class="section-kicker">MY PLAYLISTS</text><text class="section-title">我的歌单</text></view>
-                <view class="create-playlist" @tap="openCreatePlaylist"><Plus :size="17" /><text>新建</text></view>
+                <view><text class="section-kicker">MY PLAYLISTS</text><text class="section-title">{{ $t('homePage.myPlaylists') }}</text></view>
+                <view class="create-playlist" @tap="openCreatePlaylist"><Plus :size="17" /><text>{{ $t('homePage.create') }}</text></view>
               </view>
-              <view v-if="!myPlaylists.length" class="inline-error">还没有歌单，点“新建”创建一个。</view>
+              <view v-if="!myPlaylists.length" class="inline-error">{{ $t('homePage.noPlaylists') }}</view>
               <view
                 v-for="playlist in myPlaylists"
                 :key="playlist.id"
@@ -930,22 +983,22 @@ function coverOf(collection: ApiCollectionSummary) {
                 </view>
                 <view class="playlist-copy">
                   <text class="playlist-name">{{ playlist.name }}</text>
-                  <text class="playlist-meta">{{ playlist.trackCount }} 首</text>
+                  <text class="playlist-meta">{{ $t('homePage.trackCount', { count: playlist.trackCount }) }}</text>
                 </view>
                 <ChevronRight :size="16" class="profile-chevron" />
               </view>
             </view>
-            <view v-else class="inline-error">收藏与歌单功能暂未开放。</view>
+            <view v-else class="inline-error">{{ $t('homePage.collectionsUnavailable') }}</view>
 
             <view class="library-block">
               <view class="section-heading">
-                <view><text class="section-kicker">YOUR COLLECTION</text><text class="section-title">喜欢的音乐</text></view>
-                <text class="library-count">{{ favoriteTracks.length }} 首</text>
+                <view><text class="section-kicker">YOUR COLLECTION</text><text class="section-title">{{ $t('homePage.favoriteMusic') }}</text></view>
+                <text class="library-count">{{ $t('homePage.trackCount', { count: favoriteTracks.length }) }}</text>
               </view>
               <view v-if="!favoriteTracks.length" class="empty-state">
                 <view class="empty-icon"><Heart :size="23" /></view>
-                <text class="empty-title">收藏几首，慢慢听</text>
-                <text class="empty-copy">点曲目旁的爱心，会安静地收在这里</text>
+                <text class="empty-title">{{ $t('homePage.favEmptyTitle') }}</text>
+                <text class="empty-copy">{{ $t('homePage.favEmptyCopy') }}</text>
               </view>
               <TrackRow
                 v-for="(track, index) in favoriteTracks"
@@ -961,13 +1014,13 @@ function coverOf(collection: ApiCollectionSummary) {
           <template v-else>
             <view class="login-card">
               <view class="login-icon"><AudioLines :size="22" /></view>
-              <text class="login-title">登录 Shine Music</text>
-              <text class="login-copy">登录后同步收藏与歌单，还能提交歌曲需求和投票</text>
-              <view class="login-button" @tap="goLogin"><text>登录 / 邀请注册</text></view>
+              <text class="login-title">{{ $t('homePage.loginTitle') }}</text>
+              <text class="login-copy">{{ $t('homePage.loginSyncCopy') }}</text>
+              <view class="login-button" @tap="goLogin"><text>{{ $t('homePage.loginOrRegister') }}</text></view>
             </view>
             <view v-if="favoriteTracks.length" class="library-block">
               <view class="section-heading">
-                <view><text class="section-kicker">YOUR COLLECTION</text><text class="section-title">喜欢的音乐</text></view>
+                <view><text class="section-kicker">YOUR COLLECTION</text><text class="section-title">{{ $t('homePage.favoriteMusic') }}</text></view>
               </view>
               <TrackRow
                 v-for="(track, index) in favoriteTracks"
@@ -983,8 +1036,8 @@ function coverOf(collection: ApiCollectionSummary) {
           <view v-if="capabilities.capabilities.songRequests && !isAuthenticated" class="request-banner" @tap="goRequests">
             <view class="request-icon"><Inbox :size="19" /></view>
             <view class="upload-copy">
-              <text class="upload-title">想听的歌，告诉我们</text>
-              <text class="upload-subtitle">歌曲需求池 · 投票决定优先级</text>
+              <text class="upload-title">{{ $t('homePage.requestBannerTitle') }}</text>
+              <text class="upload-subtitle">{{ $t('homePage.requestBannerSub') }}</text>
             </view>
             <ChevronRight :size="17" class="profile-chevron" />
           </view>
@@ -1014,7 +1067,7 @@ function coverOf(collection: ApiCollectionSummary) {
       >
         <Sparkles v-if="tab === '为你'" :size="19" />
         <Search v-else :size="19" />
-        <text>{{ tab }}</text>
+        <text>{{ tabLabel(tab) }}</text>
       </view>
       <view class="tab-fab" @tap="onFabTap">
         <Bell :size="22" />
@@ -1029,28 +1082,28 @@ function coverOf(collection: ApiCollectionSummary) {
       >
         <Library v-if="tab === '曲库'" :size="19" />
         <User v-else :size="19" />
-        <text>{{ tab }}</text>
+        <text>{{ tabLabel(tab) }}</text>
       </view>
     </view>
 
     <!-- 新建歌单弹层（受控 Dialog，替代 uni.showModal editable） -->
     <view v-if="createSheetVisible" class="sheet-mask" @tap="closeCreatePlaylist">
       <view class="sheet-dialog" @tap.stop>
-        <text class="sheet-title">新建歌单</text>
+        <text class="sheet-title">{{ $t('homePage.createPlaylist') }}</text>
         <input
           v-model="newPlaylistName"
           class="sheet-input"
           type="text"
           maxlength="60"
-          placeholder="给歌单起个名字"
+          :placeholder="$t('homePage.playlistNamePlaceholder')"
           :focus="true"
           confirm-type="done"
           @confirm="confirmCreatePlaylist"
         />
         <view class="sheet-actions">
-          <view class="sheet-btn ghost" @tap="closeCreatePlaylist">取消</view>
+          <view class="sheet-btn ghost" @tap="closeCreatePlaylist">{{ $t('homePage.cancel') }}</view>
           <view class="sheet-btn primary" :class="{ disabled: creatingPlaylist }" @tap="confirmCreatePlaylist">
-            {{ creatingPlaylist ? '创建中…' : '创建' }}
+            {{ creatingPlaylist ? $t('homePage.creating') : $t('homePage.createBtn') }}
           </view>
         </view>
       </view>

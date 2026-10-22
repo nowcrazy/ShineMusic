@@ -5,6 +5,7 @@
  * 方向 A 改动：封面放大到 96rpx、行高加大到 130rpx、卡片化（背景+圆角+无硬分隔线）
  */
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { Heart, MessageCircle, Play } from 'lucide-vue-next'
 import type { Track } from '@/types/music'
 import { playTrack } from '@/services/player'
@@ -13,6 +14,8 @@ import { clearFeedback, feedbackMap, setFeedback } from '@/services/feedback'
 import { isAuthenticated, requireLogin } from '@/services/session'
 import { formatTime } from '@/utils/format'
 import CoverArt from './CoverArt.vue'
+
+const { t } = useI18n()
 
 const props = withDefaults(
   defineProps<{
@@ -40,25 +43,25 @@ function handleComment() {
 async function handleLike() {
   if (!isAuthenticated.value) { requireLogin(); return }
   try { await toggleFavorite(props.track) }
-  catch { uni.showToast({ title: '操作失败，请稍后再试', icon: 'none' }) }
+  catch { uni.showToast({ title: t('trackRow.operationFailed'), icon: 'none' }) }
 }
 
 function handleLongPress() {
   if (!requireLogin()) return
   const marked = notInterested.value
   uni.showActionSheet({
-    itemList: [marked ? '取消"不感兴趣"' : '不感兴趣'],
+    itemList: [marked ? t('trackRow.cancelNotInterested') : t('trackRow.notInterested')],
     success: async ({ tapIndex }) => {
       if (tapIndex !== 0) return
       try {
         if (marked) {
           await clearFeedback(props.track.id)
-          uni.showToast({ title: '已恢复推荐', icon: 'none' })
+          uni.showToast({ title: t('trackRow.recommendRestored'), icon: 'none' })
         } else {
           await setFeedback(props.track.id, 'not_interested')
-          uni.showToast({ title: '已减少此类推荐', icon: 'none' })
+          uni.showToast({ title: t('trackRow.lessLikeThis'), icon: 'none' })
         }
-      } catch { uni.showToast({ title: '操作失败，请稍后再试', icon: 'none' }) }
+      } catch { uni.showToast({ title: t('trackRow.operationFailed'), icon: 'none' }) }
     },
   })
 }
@@ -73,7 +76,7 @@ function handleLongPress() {
       <text class="tr-artist">{{ subtitle }}</text>
     </view>
     <view class="tr-actions">
-      <text v-if="notInterested" class="tr-flag">不感兴趣</text>
+      <text v-if="notInterested" class="tr-flag">{{ $t('trackRow.notInterested') }}</text>
       <view
         v-if="showHeart"
         class="tr-like"

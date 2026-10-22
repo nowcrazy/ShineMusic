@@ -15,6 +15,7 @@
  */
 import { computed, reactive } from 'vue'
 import type { ApiAuthTokens, ApiInvitationValidation, ApiMe } from '@/types/music'
+import { t } from '@/locale'
 import { http, setRefreshHandler } from './http'
 import { syncRemoteTheme } from './user-theme'
 import { clearTokens, getRefreshToken, hasSession, restoreTokens, saveTokens } from './tokens'
@@ -185,10 +186,10 @@ export async function restoreSession() {
 export function requireLogin(): boolean {
   if (isAuthenticated.value) return true
   uni.showModal({
-    title: '请先登录',
-    content: '登录后即可收藏、建歌单和提交歌曲需求',
-    confirmText: '去登录',
-    cancelText: '再看看',
+    title: t('socialErrors.loginRequiredTitle'),
+    content: t('socialErrors.loginRequiredContent'),
+    confirmText: t('auth.goLogin'),
+    cancelText: t('socialErrors.maybeLater'),
     success: ({ confirm }) => {
       if (confirm) uni.navigateTo({ url: '/pages/auth/login' })
     },

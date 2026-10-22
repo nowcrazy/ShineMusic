@@ -63,8 +63,8 @@ function playAll() {
 <template>
   <scroll-view class="detail-page" scroll-y :show-scrollbar="false">
     <!-- 加载中 / 失败或不存在 的状态提示 -->
-    <view v-if="loading" class="state-text">正在加载…</view>
-    <view v-else-if="loadError || !detail" class="state-text">专题不存在或暂时无法打开。</view>
+    <view v-if="loading" class="state-text">{{ $t('catalogPage.loading') }}</view>
+    <view v-else-if="loadError || !detail" class="state-text">{{ $t('catalogPage.collectionUnavailable') }}</view>
     <template v-else>
       <!-- 专题头部：封面、标题、简介、曲目数、播放全部 -->
       <view class="detail-header">
@@ -72,8 +72,8 @@ function playAll() {
         <view v-else class="detail-art detail-art-fallback"><Music2 :size="46" /></view>
         <text class="detail-title">{{ detail.title }}</text>
         <text v-if="detail.description" class="detail-sub">{{ detail.description }}</text>
-        <text class="detail-meta">编辑精选 · {{ tracks.length }} 首</text>
-        <view class="play-all" @tap="playAll"><Play :size="16" fill="currentColor" /><text>播放全部</text></view>
+        <text class="detail-meta">{{ $t('catalogPage.editorialPicks') }} · {{ $t('catalog.trackCount', { count: tracks.length }) }}</text>
+        <view class="play-all" @tap="playAll"><Play :size="16" fill="currentColor" /><text>{{ $t('catalogPage.playAll') }}</text></view>
       </view>
       <!-- 专题曲目列表（空专题给出空态提示） -->
       <view class="detail-list">
@@ -84,7 +84,7 @@ function playAll() {
           :index="index"
           :queue="tracks"
         />
-        <view v-if="!tracks.length" class="state-text">专题里还没有曲目。</view>
+        <view v-if="!tracks.length" class="state-text">{{ $t('catalogPage.collectionNoTracks') }}</view>
       </view>
       <view class="page-bottom-spacer"></view>
     </template>

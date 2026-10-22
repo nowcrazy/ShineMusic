@@ -11,6 +11,7 @@
  * 注意：投票一经提交不可撤销，因此不提供 unvote 方法。
  */
 import type { ApiPageResult, ApiSongRequest, SongRequestStatus } from '@/types/music'
+import { t } from '@/locale'
 import { API_PREFIX, http } from './http'
 
 /**
@@ -131,25 +132,25 @@ export async function getSongRequestTimeline(requestId: string) {
   )
 }
 
-/** 时间线事件类型的中文标签 */
+/** 时间线事件类型的本地化标签 */
 export const SONG_REQUEST_EVENT_LABEL: Record<string, string> = {
-  submitted: '提交需求',
-  planned: '已纳入计划',
-  in_progress: '开始处理',
-  fulfilled: '已入库',
-  declined: '未收录',
-  withdrawn: '已撤回',
-  reopened: '重新开启',
+  submitted: t('requests.eventSubmitted'),
+  planned: t('requests.eventPlanned'),
+  in_progress: t('requests.eventStarted'),
+  fulfilled: t('requests.eventFulfilled'),
+  declined: t('requests.eventDeclined'),
+  withdrawn: t('requests.eventWithdrawn'),
+  reopened: t('requests.eventReopened'),
 }
 
 /**
- * 点歌请求状态的中文标签与样式色调映射，供 UI 展示使用。
+ * 点歌请求状态的本地化标签与样式色调映射，供 UI 展示使用。
  */
 export const SONG_REQUEST_STATUS: Record<SongRequestStatus, { label: string; tone: string }> = {
-  open: { label: '待安排', tone: 'open' },
-  planned: { label: '已计划', tone: 'planned' },
-  in_progress: { label: '处理中', tone: 'progress' },
-  fulfilled: { label: '已入库', tone: 'fulfilled' },
-  declined: { label: '暂不收录', tone: 'declined' },
-  withdrawn: { label: '已撤回', tone: 'withdrawn' },
+  open: { label: t('requests.statusLabelOpen'), tone: 'open' },
+  planned: { label: t('requests.statusLabelPlanned'), tone: 'planned' },
+  in_progress: { label: t('requests.statusLabelInProgress'), tone: 'progress' },
+  fulfilled: { label: t('requests.statusLabelFulfilled'), tone: 'fulfilled' },
+  declined: { label: t('requests.statusLabelDeclined'), tone: 'declined' },
+  withdrawn: { label: t('requests.statusLabelWithdrawn'), tone: 'withdrawn' },
 }

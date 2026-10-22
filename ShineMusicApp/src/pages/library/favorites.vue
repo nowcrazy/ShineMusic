@@ -6,12 +6,15 @@
  */
 import { computed, ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
+import { useI18n } from 'vue-i18n'
 import { Heart } from 'lucide-vue-next'
 import EmptyState from '@/components/EmptyState.vue'
 import PlayerBar from '@/components/PlayerBar.vue'
 import TrackRow from '@/components/TrackRow.vue'
 import { useFavorites } from '@/services/library'
 import { isAuthenticated } from '@/services/session'
+
+const { t } = useI18n()
 
 const { favoriteTracks, loadFavorites } = useFavorites()
 const loading = ref(true)
@@ -42,25 +45,25 @@ onLoad(() => void load())
 
 <template>
   <view class="favorites-page">
-    <view v-if="loading" class="page-state">加载中…</view>
-    <view v-else-if="loadError" class="page-state">收藏加载失败，请稍后再试</view>
+    <view v-if="loading" class="page-state">{{ t('libraryPage.favLoading') }}</view>
+    <view v-else-if="loadError" class="page-state">{{ t('libraryPage.favLoadError') }}</view>
     <template v-else>
       <EmptyState
         v-if="!isAuthenticated"
         :icon="Heart"
-        title="登录后查看收藏"
-        hint="登录即可红心收藏喜欢的歌曲"
-        action-text="去登录"
+        :title="t('libraryPage.favLoginTitle')"
+        :hint="t('libraryPage.favLoginCopy')"
+        :action-text="t('libraryPage.goLogin')"
         @action="goLogin"
       />
       <EmptyState
         v-else-if="!favoriteTracks.length"
         :icon="Heart"
-        title="还没有收藏"
-        hint="听到喜欢的歌，点一下红心就能在这里找到"
+        :title="t('libraryPage.favEmptyTitle')"
+        :hint="t('libraryPage.favEmptyCopy')"
       />
       <template v-else>
-        <view class="list-head"><text class="list-count">{{ favoriteTracks.length }} 首</text></view>
+        <view class="list-head"><text class="list-count">{{ t('catalog.trackCount', { count: favoriteTracks.length }) }}</text></view>
         <TrackRow
           v-for="(track, index) in favoriteTracks"
           :key="track.id"

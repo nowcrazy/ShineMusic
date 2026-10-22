@@ -6,12 +6,15 @@
  */
 import { ref, watch } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
+import { useI18n } from 'vue-i18n'
 import { Check, Plus, Search } from 'lucide-vue-next'
 import { searchTracks } from '@/services/catalog'
 import { addPlaylistTrack } from '@/services/library'
 import { playTrack } from '@/services/player'
 import { formatTime } from '@/utils/format'
 import type { Track } from '@/types/music'
+
+const { t } = useI18n()
 
 // 页面状态：目标歌单 ID / 搜索词 / 结果 / 请求中 / 是否已搜索 / 本次会话已加入的曲目 ID 集合 / 防抖计时器
 const playlistId = ref('')
@@ -65,11 +68,11 @@ async function handleAdd(track: Track) {
     const next = new Set(addedIds.value)
     next.add(track.id)
     addedIds.value = next
-    uni.showToast({ title: '已加入歌单', icon: 'none' })
+    uni.showToast({ title: t('playlistPage.added'), icon: 'none' })
   } catch (error) {
     const code = (error as { code?: string }).code
     uni.showToast({
-      title: code === 'authentication_required' ? '登录已过期，请重新登录' : '添加失败',
+      title: code === 'authentication_required' ? t('playlistPage.sessionExpired') : t('playlistPage.addFailed'),
       icon: 'none',
     })
   }
@@ -81,20 +84,20 @@ async function handleAdd(track: Track) {
     <!-- 搜索框：自动聚焦，输入防抖触发搜索 -->
     <view class="search-box">
       <Search :size="19" :stroke-width="2" />
-      <input v-model="query" focus confirm-type="search" placeholder="搜索要加入的歌曲、歌手或专辑" />
+      <input v-model="query" focus confirm-type="search" :placeholder="t('playlistPage.searchPlaceholder')" />
     </view>
 
     <!-- 状态提示：搜索中 / 无结果 / 未输入 -->
-    <view v-if="pending" class="state-text">正在搜索…</view>
-    <view v-else-if="searched && !results.length" class="state-text">没有找到匹配的歌曲。</view>
-    <view v-else-if="!searched" class="state-text">输入关键词，从曲库中挑选歌曲。</view>
+    <view v-if="pending" class="state-text">{{ t('playlistPage.searching') }}</view>
+    <view v-else-if="searched && !results.length" class="state-text">{{ t('playlistPage.noMatch') }}</view>
+    <view v-else-if="!searched" class="state-text">{{ t('playlistPage.searchHint') }}</view>
 
     <!-- 搜索结果行：点击封面/信息试听，右侧圆形按钮加入歌单（@tap.stop 不触发试听） -->
     <view v-for="track in results" :key="track.id" class="pick-row">
       <image class="pick-cover" :src="track.cover" mode="aspectFill" @tap="playTrack(track, results)" />
       <view class="pick-copy" @tap="playTrack(track, results)">
         <text class="pick-title">{{ track.title }}</text>
-        <text class="pick-artist">{{ track.artist }} · {{ track.album || '未知专辑' }}</text>
+        <text class="pick-artist">{{ track.artist }} · {{ track.album || t('playlistPage.unknownAlbum') }}</text>
       </view>
       <text class="pick-duration">{{ formatTime(track.duration) }}</text>
       <view

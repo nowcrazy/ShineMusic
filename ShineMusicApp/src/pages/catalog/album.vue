@@ -70,8 +70,8 @@ function goArtist(artistId: string) {
 <template>
   <scroll-view class="detail-page" scroll-y :show-scrollbar="false">
     <!-- 加载中 / 失败或不存在 的状态提示 -->
-    <view v-if="loading" class="state-text">正在加载…</view>
-    <view v-else-if="loadError || !detail" class="state-text">专辑不存在或暂时无法打开。</view>
+    <view v-if="loading" class="state-text">{{ $t('catalogPage.loading') }}</view>
+    <view v-else-if="loadError || !detail" class="state-text">{{ $t('catalogPage.albumUnavailable') }}</view>
     <template v-else>
       <!-- 专辑头部：封面、标题、可点击的艺人链接、年份、播放全部 -->
       <view class="detail-header">
@@ -86,8 +86,8 @@ function goArtist(artistId: string) {
             @tap="goArtist(artist.id)"
           >{{ artist.name }}</text>
         </view>
-        <text class="detail-meta">{{ detail.releaseYear || '年份未知' }} · {{ tracks.length }} 首</text>
-        <view class="play-all" @tap="playAll"><Play :size="16" fill="currentColor" /><text>播放全部</text></view>
+        <text class="detail-meta">{{ detail.releaseYear || $t('catalogPage.unknownYear') }} · {{ $t('catalog.trackCount', { count: tracks.length }) }}</text>
+        <view class="play-all" @tap="playAll"><Play :size="16" fill="currentColor" /><text>{{ $t('catalogPage.playAll') }}</text></view>
       </view>
       <!-- 专辑曲目列表（空专辑给出空态提示） -->
       <view class="detail-list">
@@ -98,7 +98,7 @@ function goArtist(artistId: string) {
           :index="index"
           :queue="tracks"
         />
-        <view v-if="!tracks.length" class="state-text">专辑里还没有曲目。</view>
+        <view v-if="!tracks.length" class="state-text">{{ $t('catalogPage.albumNoTracks') }}</view>
       </view>
       <view class="page-bottom-spacer"></view>
     </template>

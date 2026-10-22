@@ -4,7 +4,10 @@
 
 ---
 
-## 第 1 步：本地预检（四道闸门）
+## 第 1 步：本地预检（五道闸门）
+
+> ⚠️ **必须在 PowerShell 窗口执行，不能用 cmd**（脚本用了 `;` 分隔与 `$LASTEXITCODE` 语法，cmd 会全部拆坏且不报明显的错）。
+> 当前若是 cmd（提示符 `C:\...>` 无 `PS` 前缀），先输入 `powershell` 回车切换再粘贴；若在 VS Code/Trae 内置终端，确认右上角终端类型是 PowerShell。
 
 执行目录：任意（**整段一次性复制粘贴，不要逐行**）
 
@@ -12,13 +15,16 @@
 cd c:\Learn\ShineMusic\ShineMusicApp
 yarn check:contracts;  if ($LASTEXITCODE -ne 0) { throw "闸门①失败：契约漂移，执行 yarn gen:contracts 后重新检查" }
 yarn typecheck;        if ($LASTEXITCODE -ne 0) { throw "闸门②失败：类型检查报错，按输出修复" }
-yarn build:h5;         if ($LASTEXITCODE -ne 0) { throw "闸门③失败：H5 构建报错，按输出修复" }
+yarn check:i18n;       if ($LASTEXITCODE -ne 0) { throw "闸门③失败：新增 UI 中文未走语言包，接线后重查；确属逻辑值则 yarn check:i18n --update 更新基线" }
+yarn build:h5;         if ($LASTEXITCODE -ne 0) { throw "闸门④失败：H5 构建报错，按输出修复" }
 cd c:\Learn\ShineMusic
-dotnet build backend/ShineMusic.slnx -c Release --nologo; if ($LASTEXITCODE -ne 0) { throw "闸门④失败：后端构建报错/有警告" }
-Write-Host "===== [OK] 四道闸门全过，进入第 2 步 =====" -ForegroundColor Green
+dotnet build backend/ShineMusic.slnx -c Release --nologo; if ($LASTEXITCODE -ne 0) { throw "闸门⑤失败：后端构建报错/有警告" }
+Write-Host "===== [OK] 五道闸门全过，进入第 2 步 =====" -ForegroundColor Green
 ```
 
 ✅ 成功标志：最后一行绿色 `[OK]`，且中途没有任何 throw 中断。
+
+> 闸门③（i18n 残留，2026-10-22 加入）：扫描 src 中的 UI 中文串与基线比对，新增 UI 文案必须进语言包并接线；基线 = 有意保留的逻辑匹配值白名单（`ShineMusicApp/scripts/i18n-residual-baseline.json`），脚本 `check-i18n-residual.mjs`。
 
 ---
 
@@ -78,7 +84,7 @@ git push origin main
 
 打开 <https://github.com/nowcrazy/ShineMusic/actions>，等最新提交的「后端」「前端」两个 job 全部绿 ✅。
 
-> 本地四道闸门与 CI 同源，正常直接绿；CI 多做的一步是云端自己 `yarn install --frozen-lockfile`（仓库里没有 node_modules，它每次自己装）。
+> 本地五道闸门与 CI 同源，正常直接绿；CI 多做的一步是云端自己 `yarn install --frozen-lockfile`（仓库里没有 node_modules，它每次自己装）。
 
 ---
 
@@ -88,8 +94,9 @@ git push origin main
 |---|---|
 | 闸门① 契约漂移 | `ShineMusicApp` 下执行 `yarn gen:contracts`，重新预检 |
 | 闸门② 类型报错 | 按报错文件/行号修复，重新预检 |
-| 闸门③ H5 构建报错 | 按报错修复，重新预检 |
-| 闸门④ 后端报错/警告 | 清零警告（项目"警告即错误"），重新预检 |
+| 闸门③ i18n 残留 | 按输出的文件/文案把新 UI 文案接入语言包（`$t()`/`t()` + key 入三语树）；确属有意保留的逻辑匹配值则 `yarn check:i18n --update` 更新基线后重新预检 |
+| 闸门④ H5 构建报错 | 按报错修复，重新预检 |
+| 闸门⑤ 后端报错/警告 | 清零警告（项目"警告即错误"），重新预检 |
 | CI 的 yarn install 失败 | 本地 `ShineMusicApp` 下 `yarn install` → 提交更新后的 `yarn.lock` |
 | CI 契约检查失败 | `yarn gen:contracts` → 提交 `src/types/api.generated.ts` |
 | push 被拒（rejected） | `git pull --rebase origin main` → 解决冲突 → 重新 push |

@@ -6,6 +6,7 @@
  * login（注册成功后自动登录）；并调用 loadFavorites 同步收藏。
  */
 import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { onLoad } from '@dcloudio/uni-app'
 import { AudioLines, BadgeCheck } from 'lucide-vue-next'
 import { login, registerWithInvitation, validateInvitation } from '@/services/session'
@@ -14,6 +15,8 @@ import { loadFeedback } from '@/services/feedback'
 import { describeError } from '@/services/errors'
 import { formatDate } from '@/utils/format'
 import type { ApiInvitationValidation } from '@/types/music'
+
+const { t } = useI18n()
 
 // —— 第一步（令牌校验）状态：当前步骤 / 令牌输入 / 校验中 / 校验通过的邀请信息 ——
 const step = ref<'token' | 'form'>('token')
@@ -75,7 +78,7 @@ async function handleValidate() {
  */
 function validatePassword(): string | null {
   const value = password.value
-  if (value.length < 6) return '密码至少需要 6 位'
+  if (value.length < 6) return t('authPage.passwordTooShort')
   return null
 }
 
@@ -89,12 +92,12 @@ async function handleRegister() {
   errorMessage.value = ''
   // 表单校验：显示名必填
   if (!displayName.value.trim()) {
-    errorMessage.value = '请填写显示名称'
+    errorMessage.value = t('authPage.displayNameRequired')
     return
   }
   // 表单校验：CDK/注册码渠道需自填合法邮箱
   if (isCodeChannel.value && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.value.trim())) {
-    errorMessage.value = '请输入有效的邮箱地址'
+    errorMessage.value = t('registerPage.emailInvalid')
     return
   }
   // 表单校验：密码强度规则
@@ -105,7 +108,7 @@ async function handleRegister() {
   }
   // 表单校验：两次密码必须一致
   if (password.value !== confirmPassword.value) {
-    errorMessage.value = '两次输入的密码不一致'
+    errorMessage.value = t('registerPage.passwordsNotMatch')
     return
   }
   submitting.value = true
@@ -119,12 +122,12 @@ async function handleRegister() {
     await login(created.email, password.value)
     loadFavorites(true).catch(() => undefined)
     loadFeedback().catch(() => undefined)
-    uni.showToast({ title: '账号已创建', icon: 'none' })
+    uni.showToast({ title: t('authPage.accountCreated'), icon: 'none' })
     setTimeout(() => {
       uni.reLaunch({ url: '/pages/home/index' })
     }, 300)
   } catch (error) {
-    errorMessage.value = describeError(error, '注册失败，请稍后再试')
+    errorMessage.value = describeError(error, t('authPage.registerFailed'))
   } finally {
     submitting.value = false
   }
@@ -136,7 +139,7 @@ async function handleRegister() {
  * @returns 可直接展示的错误文案
  */
 function invitationError(error: unknown): string {
-  return describeError(error, '验证失败，请稍后再试')
+  return describeError(error, t('authPage.validateFailed'))
 }
 </script>
 
@@ -144,13 +147,13 @@ function invitationError(error: unknown): string {
   <view class="auth-page">
     <!-- 品牌头与邀请制说明 -->
     <view class="brand-mark"><AudioLines :size="24" :stroke-width="2.7" /></view>
-    <text class="auth-title">邀请注册</text>
-    <text class="auth-sub">Shine Music 采用管理员邀请制，不开放公开注册</text>
+    <text class="auth-title">{{ $t('registerPage.title') }}</text>
+    <text class="auth-sub">{{ $t('authPage.subtitle') }}</text>
 
     <!-- 第一步：验证邀请令牌 -->
     <template v-if="step === 'token'">
       <view class="field">
-        <text class="field-label">邀请令牌</text>
+        <text class="field-label">{{ $t('authPage.inviteToken') }}</text>
         <!-- 回车即校验：H5 用 keydown.enter 兜底（textarea 默认会插入换行），移动端用键盘「完成」 -->
         <textarea
           v-model="invitationToken"
@@ -158,14 +161,14 @@ function invitationError(error: unknown): string {
           :maxlength="200"
           auto-height
           confirm-type="done"
-          placeholder="粘贴邀请邮件链接中的令牌"
+          :placeholder="$t('authPage.tokenPlaceholder')"
           @confirm="handleValidate"
           @keydown.enter.prevent="handleValidate"
         />
       </view>
       <text v-if="errorMessage" class="error-text">{{ errorMessage }}</text>
       <view class="primary-button" :class="{ disabled: !canValidate }" @tap="handleValidate">
-        <text>{{ validating ? '验证中…' : '验证邀请' }}</text>
+        <text>{{ validating ? $t('authPage.validating') : $t('authPage.validateBtn') }}</text>
       </view>
     </template>
 
@@ -175,54 +178,54 @@ function invitationError(error: unknown): string {
       <view class="invite-badge">
         <BadgeCheck :size="17" />
         <view class="invite-copy">
-          <text class="invite-email">{{ isCodeChannel ? '注册码已验证' : `受邀邮箱：${invitation?.email}` }}</text>
-          <text class="invite-expiry">有效期至 {{ formatDate(invitation?.expiresAt ?? '') }}</text>
+          <text class="invite-email">{{ isCodeChannel ? $t('registerPage.codeVerified') : $t('authPage.invitedEmail', { email: invitation?.email }) }}</text>
+          <text class="invite-expiry">{{ $t('authPage.validUntil', { date: formatDate(invitation?.expiresAt ?? '') }) }}</text>
         </view>
       </view>
 
       <!-- CDK/注册码渠道：无绑定邮箱，需用户自填 -->
       <view v-if="isCodeChannel" class="field">
-        <text class="field-label">邮箱</text>
+        <text class="field-label">{{ $t('auth.email') }}</text>
         <input
           v-model="email"
           class="field-input"
           type="text"
           maxlength="256"
-          placeholder="用于登录的邮箱地址"
+          :placeholder="$t('authPage.emailPlaceholder')"
         />
       </view>
 
       <view class="field">
-        <text class="field-label">显示名称</text>
+        <text class="field-label">{{ $t('registerPage.displayNameLabel') }}</text>
         <input
           v-model="displayName"
           class="field-input"
           maxlength="100"
-          placeholder="在曲库中显示的名字"
+          :placeholder="$t('authPage.displayNamePlaceholder')"
           confirm-type="next"
           @confirm="focusNext('password')"
         />
       </view>
       <view class="field">
-        <text class="field-label">密码</text>
+        <text class="field-label">{{ $t('auth.password') }}</text>
         <input
           v-model="password"
           class="field-input"
           password
-          placeholder="至少 6 位"
+          :placeholder="$t('authPage.passwordPlaceholder')"
           confirm-type="next"
           :focus="focusedField === 'password'"
           @confirm="focusNext('confirm')"
         />
       </view>
       <view class="field">
-        <text class="field-label">确认密码</text>
+        <text class="field-label">{{ $t('auth.confirmPassword') }}</text>
         <!-- 最后一个输入框回车直接创建账号，不需要点按钮 -->
         <input
           v-model="confirmPassword"
           class="field-input"
           password
-          placeholder="再输入一次密码"
+          :placeholder="$t('authPage.confirmPasswordPlaceholder')"
           confirm-type="done"
           :focus="focusedField === 'confirm'"
           @confirm="handleRegister"
@@ -231,7 +234,7 @@ function invitationError(error: unknown): string {
 
       <text v-if="errorMessage" class="error-text">{{ errorMessage }}</text>
       <view class="primary-button" :class="{ disabled: submitting }" @tap="handleRegister">
-        <text>{{ submitting ? '创建中…' : '创建账号并登录' }}</text>
+        <text>{{ submitting ? $t('authPage.creating') : $t('authPage.createAndLoginBtn') }}</text>
       </view>
     </template>
   </view>

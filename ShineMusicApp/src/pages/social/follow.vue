@@ -5,6 +5,7 @@
  * - 粉丝：  GET /me/followers，只读列表（展示谁在关注你）。
  */
 import { ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { onLoad } from '@dcloudio/uni-app'
 import { UserRound, Users } from 'lucide-vue-next'
 import EmptyState from '@/components/EmptyState.vue'
@@ -12,6 +13,8 @@ import PlayerBar from '@/components/PlayerBar.vue'
 import { getFollowers, getFollowing, unfollowUser } from '@/services/follow'
 import { isAuthenticated } from '@/services/session'
 import type { ApiUserBrief } from '@/types/music'
+
+const { t } = useI18n()
 
 type Tab = 'following' | 'followers'
 
@@ -50,9 +53,9 @@ async function handleUnfollow(user: ApiUserBrief) {
   try {
     await unfollowUser(user.id)
     following.value = following.value.filter((item) => item.id !== user.id)
-    uni.showToast({ title: '已取消关注', icon: 'none' })
+    uni.showToast({ title: t('followPage.unfollowedToast'), icon: 'none' })
   } catch {
-    uni.showToast({ title: '操作失败，请稍后再试', icon: 'none' })
+    uni.showToast({ title: t('followPage.operationFailed'), icon: 'none' })
   }
 }
 
@@ -68,22 +71,22 @@ onLoad(() => void load())
     <!-- 顶部切换 -->
     <view class="follow-tabs">
       <view class="ftab" :class="{ active: tab === 'following' }" @tap="switchTab('following')">
-        关注中 {{ following.length }}
+        {{ $t('followPage.tabFollowing') }} {{ following.length }}
       </view>
       <view class="ftab" :class="{ active: tab === 'followers' }" @tap="switchTab('followers')">
-        粉丝 {{ followers.length }}
+        {{ $t('followPage.tabFollowers') }} {{ followers.length }}
       </view>
     </view>
 
-    <view v-if="loading" class="page-state">加载中…</view>
-    <view v-else-if="loadError" class="page-state">加载失败，请稍后再试</view>
+    <view v-if="loading" class="page-state">{{ $t('followPage.loading') }}</view>
+    <view v-else-if="loadError" class="page-state">{{ $t('followPage.loadFailed') }}</view>
     <template v-else>
       <EmptyState
         v-if="!isAuthenticated"
         :icon="UserRound"
-        title="登录后查看关注"
-        hint="登录后即可关注喜欢的歌手与用户"
-        action-text="去登录"
+        :title="$t('followPage.loginToView')"
+        :hint="$t('followPage.loginHint')"
+        :action-text="$t('auth.goLogin')"
         @action="goLogin"
       />
 
@@ -92,15 +95,15 @@ onLoad(() => void load())
         <EmptyState
           v-if="!following.length"
           :icon="UserRound"
-          title="还没有关注任何人"
-          hint="关注用户，第一时间发现他们的动态"
+          :title="$t('followPage.emptyFollowingTitle')"
+          :hint="$t('followPage.emptyFollowingHint')"
           compact
         />
         <view v-else class="user-list">
           <view v-for="user in following" :key="user.id" class="user-item">
             <view class="user-avatar">{{ user.displayName.slice(0, 1) }}</view>
             <text class="user-name">{{ user.displayName }}</text>
-            <view class="user-action" @tap="handleUnfollow(user)">取消关注</view>
+            <view class="user-action" @tap="handleUnfollow(user)">{{ $t('followPage.unfollowBtn') }}</view>
           </view>
         </view>
       </template>
@@ -110,8 +113,8 @@ onLoad(() => void load())
         <EmptyState
           v-if="!followers.length"
           :icon="Users"
-          title="还没有粉丝"
-          hint="分享好歌，让更多人关注你"
+          :title="$t('followPage.emptyFollowersTitle')"
+          :hint="$t('followPage.emptyFollowersHint')"
           compact
         />
         <view v-else class="user-list">

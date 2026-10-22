@@ -6,6 +6,7 @@
  */
 import { ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
+import { useI18n } from 'vue-i18n'
 import { Play } from 'lucide-vue-next'
 import CoverArt from '@/components/CoverArt.vue'
 import CommentSection from '@/components/CommentSection.vue'
@@ -16,6 +17,8 @@ import { playTrack } from '@/services/player'
 import { formatTime } from '@/utils/format'
 import type { Track } from '@/types/music'
 import { Music2 } from 'lucide-vue-next'
+
+const { t } = useI18n()
 
 const track = ref<Track | null>(null)
 const loading = ref(true)
@@ -46,9 +49,9 @@ onLoad((query) => {
 
 <template>
   <view class="track-detail">
-    <view v-if="loading" class="detail-state">加载中…</view>
+    <view v-if="loading" class="detail-state">{{ t('trackDetail.loading') }}</view>
     <view v-else-if="notFound || !track" class="detail-state">
-      <EmptyState :icon="Music2" title="曲目不存在" hint="这首歌可能已下架，或你没有访问权限" tone="muted" />
+      <EmptyState :icon="Music2" :title="t('trackDetail.notFound')" :hint="t('trackDetail.notFoundHint')" tone="muted" />
     </view>
     <template v-else>
       <view class="detail-hero">
@@ -59,7 +62,7 @@ onLoad((query) => {
           <text class="detail-meta-item">{{ track.album }}</text>
           <text v-if="track.duration" class="detail-meta-item">{{ formatTime(track.duration) }}</text>
         </view>
-        <view class="detail-play" @tap="play"><Play :size="20" fill="currentColor" /><text>播放</text></view>
+        <view class="detail-play" @tap="play"><Play :size="20" fill="currentColor" /><text>{{ t('trackDetail.play') }}</text></view>
       </view>
 
       <CommentSection :track-id="track.id" />

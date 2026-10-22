@@ -5,6 +5,7 @@
  */
 import { computed, ref } from 'vue'
 import { onLoad, onReachBottom } from '@dcloudio/uni-app'
+import { useI18n } from 'vue-i18n'
 import { History as HistoryIcon } from 'lucide-vue-next'
 import EmptyState from '@/components/EmptyState.vue'
 import PlayerBar from '@/components/PlayerBar.vue'
@@ -12,6 +13,8 @@ import TrackRow from '@/components/TrackRow.vue'
 import { getListeningHistory, type HistoryEntry } from '@/services/history'
 import { formatDate } from '@/utils/format'
 import type { Track } from '@/types/music'
+
+const { t } = useI18n()
 
 const entries = ref<HistoryEntry[]>([])
 const loading = ref(true)
@@ -47,7 +50,7 @@ function loadMore() {
 
 function historyLabel(iso: string): string {
   const date = formatDate(iso)
-  return date ? `最近播放 ${date}` : '最近播放'
+  return date ? t('history.recentWithDate', { date }) : t('history.recent')
 }
 
 onLoad(() => void load(true))
@@ -56,25 +59,25 @@ onReachBottom(loadMore)
 
 <template>
   <view class="history-page">
-    <view v-if="loading" class="page-state">加载中…</view>
-    <view v-else-if="loadError" class="page-state">历史加载失败，重进本页重试</view>
+    <view v-if="loading" class="page-state">{{ t('history.loading') }}</view>
+    <view v-else-if="loadError" class="page-state">{{ t('history.loadError') }}</view>
     <template v-else>
       <EmptyState
         v-if="!entries.length"
         :icon="HistoryIcon"
-        title="还没有播放记录"
-        hint="去曲库挑几首歌，这里会记下你的足迹"
+        :title="t('history.empty')"
+        :hint="t('history.emptyHint')"
       />
       <template v-else>
-        <view class="list-head"><text class="list-count">共 {{ total }} 条</text></view>
+        <view class="list-head"><text class="list-count">{{ t('history.totalCount', { count: total }) }}</text></view>
         <view v-for="entry in entries" :key="entry.track.id" class="history-item">
           <view class="hi-head">
             <text class="hi-date">{{ historyLabel(entry.lastPlayedAt) }}</text>
-            <text class="hi-count">共播放 {{ entry.playCount }} 次</text>
+            <text class="hi-count">{{ t('history.playCount', { count: entry.playCount }) }}</text>
           </view>
           <TrackRow :track="entry.track" :queue="tracks" />
         </view>
-        <view v-if="hasMore" class="load-more" @tap="loadMore">加载更多</view>
+        <view v-if="hasMore" class="load-more" @tap="loadMore">{{ t('history.loadMore') }}</view>
       </template>
     </template>
     <view class="page-bottom-spacer"></view>

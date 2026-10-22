@@ -79,12 +79,12 @@ onReachBottom(async () => {
 <template>
   <view class="list-page">
     <!-- 加载中 / 失败状态 -->
-    <view v-if="loading" class="state-text">正在加载…</view>
-    <view v-else-if="loadError" class="state-text">暂时无法打开曲目列表。</view>
+    <view v-if="loading" class="state-text">{{ $t('catalogPage.loading') }}</view>
+    <view v-else-if="loadError" class="state-text">{{ $t('catalogPage.tracksUnavailable') }}</view>
     <template v-else>
       <!-- 列表头部：总数 -->
       <view class="list-head">
-        <text class="list-count">共 {{ total }} 首</text>
+        <text class="list-count">{{ $t('catalogPage.totalCount', { count: total }) }}</text>
       </view>
       <TrackRow
         v-for="(track, index) in tracks"
@@ -94,9 +94,9 @@ onReachBottom(async () => {
         :queue="tracks"
       />
       <!-- 列表尾部：空态 / 已全部加载 / 正在加载下一页 -->
-      <view v-if="!tracks.length" class="state-text">这里还没有曲目。</view>
-      <view v-else-if="tracks.length >= total" class="list-end">已经到底了</view>
-      <view v-else-if="loadingMore" class="list-end">加载中…</view>
+      <view v-if="!tracks.length" class="state-text">{{ $t('catalogPage.noTracksYet') }}</view>
+      <view v-else-if="tracks.length >= total" class="list-end">{{ $t('catalogPage.endOfList') }}</view>
+      <view v-else-if="loadingMore" class="list-end">{{ $t('catalogPage.loadingMore') }}</view>
     </template>
     <view class="page-bottom-spacer"></view>
   </view>

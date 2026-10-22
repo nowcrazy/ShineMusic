@@ -12,6 +12,7 @@
  * session 模块调用 syncRemoteTheme()：远端启用 → 拉取配置与壁纸并应用；
  * 远端停用而本地处于 custom → 回退默认预设主题。
  */
+import { t } from '@/locale'
 import { API_PREFIX, http, refreshAccessToken, resolveUrl } from './http'
 import { getAccessToken } from './tokens'
 import {
@@ -53,7 +54,7 @@ export function fetchMyTheme(): Promise<ApiUserTheme> {
  */
 export async function uploadWallpaper(filePath: string): Promise<ApiUserTheme> {
   // #ifdef H5
-  if (typeof fetch === 'undefined') throw new Error('当前环境不支持文件上传')
+  if (typeof fetch === 'undefined') throw new Error(t('services.uploadNotSupported'))
   const blob = await (await fetch(filePath)).blob()
   const send = () => {
     const form = new FormData()
@@ -74,7 +75,7 @@ export async function uploadWallpaper(filePath: string): Promise<ApiUserTheme> {
   const body = await response.json().catch(() => null)
   if (response.status < 200 || response.status >= 300) {
     const detail = (body as { error?: { message?: string } } | null)?.error
-    throw new Error(detail?.message || `上传失败：${response.status}`)
+    throw new Error(detail?.message || t('services.uploadFailedWithStatus', { status: response.status }))
   }
   return body as ApiUserTheme
   // #endif
@@ -93,15 +94,15 @@ export async function uploadWallpaper(filePath: string): Promise<ApiUserTheme> {
           const body = typeof res.data === 'string' ? JSON.parse(res.data) : res.data
           if (res.statusCode < 200 || res.statusCode >= 300) {
             const detail = (body as { error?: { message?: string } })?.error
-            reject(new Error(detail?.message || `上传失败：${res.statusCode}`))
+            reject(new Error(detail?.message || t('services.uploadFailedWithStatus', { status: res.statusCode })))
             return
           }
           resolve(body as ApiUserTheme)
         } catch (error) {
-          reject(new Error(error instanceof Error ? error.message : '上传响应解析失败'))
+          reject(new Error(error instanceof Error ? error.message : t('services.uploadResponseParseFailed')))
         }
       },
-      fail: (err) => reject(new Error(err.errMsg || '上传失败')),
+      fail: (err) => reject(new Error(err.errMsg || t('services.uploadFailed'))),
     })
   })
   // #endif

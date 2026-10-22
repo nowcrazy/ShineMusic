@@ -6,6 +6,7 @@
  */
 import { computed, ref } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
+import { useI18n } from 'vue-i18n'
 import {
   Mail,
   Plus,
@@ -25,6 +26,7 @@ import {
   type Invitation,
 } from '@/services/admin-invitation'
 
+const { t } = useI18n()
 const email = ref('')
 const invitations = ref<readonly Invitation[]>([])
 const loading = ref(false)
@@ -49,7 +51,7 @@ async function loadInvitations() {
     const result = await getInvitations()
     invitations.value = result.items
   } catch {
-    loadError.value = '邀请列表加载失败，请稍后重试。'
+    loadError.value = t('invitationAdmin.loadError')
   } finally {
     loading.value = false
   }
@@ -60,17 +62,17 @@ async function handleCreate() {
   if (!email.value.trim() || creating.value) return
   const trimmed = email.value.trim()
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
-    uni.showToast({ title: '请输入有效的邮箱地址', icon: 'none' })
+    uni.showToast({ title: t('invitationAdmin.invalidEmail'), icon: 'none' })
     return
   }
   creating.value = true
   try {
     await createInvitation(trimmed)
-    uni.showToast({ title: '邀请已发送', icon: 'success' })
+    uni.showToast({ title: t('invitationAdmin.sent'), icon: 'success' })
     email.value = ''
     await loadInvitations()
   } catch (err: any) {
-    const msg = err?.message || '邀请发送失败'
+    const msg = err?.message || t('invitationAdmin.sendFailed')
     uni.showToast({ title: msg, icon: 'none' })
   } finally {
     creating.value = false
@@ -84,14 +86,14 @@ async function handleCreateCode() {
   try {
     const result = await createInvitationCode()
     uni.showModal({
-      title: '注册码已生成',
-      content: `${result.code}\n\n注册码仅在本次展示，请立即复制保存。`,
+      title: t('invitationAdmin.codeTitle'),
+      content: t('invitationAdmin.codeModalContent', { code: result.code }),
       showCancel: false,
-      confirmText: '我已保存',
+      confirmText: t('invitationAdmin.done'),
     })
     await loadInvitations()
   } catch (err: any) {
-    const msg = err?.message || '注册码生成失败'
+    const msg = err?.message || t('invitationAdmin.codeCreateFailed')
     uni.showToast({ title: msg, icon: 'none' })
   } finally {
     generating.value = false
@@ -102,28 +104,28 @@ async function handleCreateCode() {
 async function handleResend(id: string) {
   try {
     await resendInvitation(id)
-    uni.showToast({ title: '邀请已重发', icon: 'success' })
+    uni.showToast({ title: t('invitationAdmin.resent'), icon: 'success' })
     await loadInvitations()
   } catch {
-    uni.showToast({ title: '重发失败', icon: 'none' })
+    uni.showToast({ title: t('invitationAdmin.resendFailed'), icon: 'none' })
   }
 }
 
 /** 撤销邀请 */
 async function handleRevoke(id: string) {
   uni.showModal({
-    title: '撤销邀请',
-    content: '确定要撤销这条邀请吗？',
-    confirmText: '撤销',
+    title: t('invitationAdmin.revokeTitle'),
+    content: t('invitationAdmin.revokeConfirm'),
+    confirmText: t('invitationAdmin.revoke'),
     confirmColor: '#d0553a',
     success: async ({ confirm }) => {
       if (!confirm) return
       try {
         await revokeInvitation(id)
-        uni.showToast({ title: '已撤销', icon: 'success' })
+        uni.showToast({ title: t('invitationAdmin.revoked'), icon: 'success' })
         await loadInvitations()
       } catch {
-        uni.showToast({ title: '撤销失败', icon: 'none' })
+        uni.showToast({ title: t('invitationAdmin.revokeFailed'), icon: 'none' })
       }
     },
   })
@@ -132,13 +134,13 @@ async function handleRevoke(id: string) {
 /** 状态标签 */
 function statusLabel(status: string): string {
   const map: Record<string, string> = {
-    created: '已创建',
-    sent: '已发送',
-    issued: '已生成',
-    delivery_failed: '发送失败',
-    redeemed: '已注册',
-    expired: '已过期',
-    revoked: '已撤销',
+    created: t('invitationAdmin.statusCreated'),
+    sent: t('invitationAdmin.statusSent'),
+    issued: t('invitationAdmin.statusIssuedGenerated'),
+    delivery_failed: t('invitationAdmin.statusDeliveryFailed'),
+    redeemed: t('invitationAdmin.statusRedeemed'),
+    expired: t('invitationAdmin.statusExpired'),
+    revoked: t('invitationAdmin.statusRevoked'),
   }
   return map[status] || status
 }
@@ -169,8 +171,8 @@ function formatDate(dateStr: string): string {
     <view class="page-heading">
       <view class="heading-icon"><ShieldCheck :size="20" /></view>
       <view class="heading-copy">
-        <text class="heading-title">邀请管理</text>
-        <text class="heading-subtitle">发送注册邀请 · 管理邀请状态</text>
+        <text class="heading-title">{{ $t('invitationAdmin.pageTitle') }}</text>
+        <text class="heading-subtitle">{{ $t('invitationAdmin.subtitle') }}</text>
       </view>
     </view>
 
@@ -179,48 +181,48 @@ function formatDate(dateStr: string): string {
       <view class="form-row">
         <view class="email-input">
           <Mail :size="16" />
-          <input v-model="email" placeholder="输入被邀请人的邮箱地址" confirm-type="done" @confirm="handleCreate" />
+          <input v-model="email" :placeholder="$t('invitationAdmin.emailPlaceholder')" confirm-type="done" @confirm="handleCreate" />
         </view>
         <view class="create-btn" :class="{ disabled: creating }" @tap="handleCreate">
           <Plus :size="16" />
-          <text>{{ creating ? '发送中…' : '发送邀请' }}</text>
+          <text>{{ creating ? $t('invitationAdmin.sending') : $t('invitationAdmin.send') }}</text>
         </view>
       </view>
       <view class="form-row code-row">
         <view class="code-btn" :class="{ disabled: generating }" @tap="handleCreateCode">
           <KeyRound :size="16" />
-          <text>{{ generating ? '生成中…' : '生成注册码' }}</text>
+          <text>{{ generating ? $t('invitationAdmin.generating') : $t('invitationAdmin.generateCode') }}</text>
         </view>
       </view>
     </view>
 
     <!-- 邀请列表 -->
     <view class="list-header">
-      <text class="list-title">邀请记录</text>
+      <text class="list-title">{{ $t('invitationAdmin.listTitle') }}</text>
       <view class="refresh-btn" @tap="loadInvitations">
         <RefreshCw :size="14" />
       </view>
     </view>
 
-    <view v-if="loading" class="state-message">正在加载…</view>
+    <view v-if="loading" class="state-message">{{ $t('adminCommon.loading') }}</view>
     <view v-else-if="loadError" class="state-message error">{{ loadError }}</view>
     <view v-else-if="!invitations.length" class="state-message">
       <Mail :size="28" />
-      <text>暂无邀请记录</text>
+      <text>{{ $t('invitationAdmin.empty') }}</text>
     </view>
 
     <view v-else class="invite-list">
       <view v-for="inv in invitations" :key="inv.id" class="invite-card">
         <view class="invite-main">
-          <text class="invite-email">{{ inv.email || '注册码（未绑定邮箱）' }}</text>
+          <text class="invite-email">{{ inv.email || $t('invitationAdmin.codeNoEmail') }}</text>
           <text class="invite-status" :class="statusClass(inv.status)">{{ statusLabel(inv.status) }}</text>
         </view>
         <view class="invite-meta">
-          <text>创建：{{ formatDate(inv.createdAt) }}</text>
-          <text>过期：{{ formatDate(inv.expiresAt) }}</text>
+          <text>{{ $t('invitationAdmin.createdAt', { date: formatDate(inv.createdAt) }) }}</text>
+          <text>{{ $t('invitationAdmin.expiresAt', { date: formatDate(inv.expiresAt) }) }}</text>
         </view>
         <view v-if="inv.redeemedAt" class="invite-meta">
-          <text>注册时间：{{ formatDate(inv.redeemedAt) }}</text>
+          <text>{{ $t('invitationAdmin.redeemedAt', { date: formatDate(inv.redeemedAt) }) }}</text>
         </view>
         <view class="invite-actions">
           <view
@@ -228,14 +230,14 @@ function formatDate(dateStr: string): string {
             class="action-btn resend"
             @tap="handleResend(inv.id)"
           >
-            <RefreshCw :size="13" /><text>重发</text>
+            <RefreshCw :size="13" /><text>{{ $t('invitationAdmin.resend') }}</text>
           </view>
           <view
             v-if="inv.status === 'created' || inv.status === 'sent' || inv.status === 'issued' || inv.status === 'delivery_failed'"
             class="action-btn revoke"
             @tap="handleRevoke(inv.id)"
           >
-            <Trash2 :size="13" /><text>撤销</text>
+            <Trash2 :size="13" /><text>{{ $t('invitationAdmin.revoke') }}</text>
           </view>
         </view>
       </view>

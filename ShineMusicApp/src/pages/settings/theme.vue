@@ -10,6 +10,7 @@
  * - 启用/停用开关同步服务端 enabled（账号同步的事实源）；删除会清空服务端配置。
  */
 import { computed, onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { Check, ImagePlus, LogIn, Palette, RefreshCw, Trash2 } from 'lucide-vue-next'
 import {
   applyCustomTheme,
@@ -34,6 +35,9 @@ import {
   uploadWallpaper,
 } from '@/services/user-theme'
 import { isAuthenticated, requireLogin } from '@/services/session'
+
+// 文案多语言
+const { t } = useI18n()
 
 /** 取色中（选图后到色板生成为止） */
 const extracting = ref(false)
@@ -105,7 +109,8 @@ async function selectTheme(id: ThemeId) {
       // 停用失败不阻断本地切换：下次登录同步时远端状态仍会生效
     }
   }
-  uni.showToast({ title: `已切换为「${THEMES.find((theme) => theme.id === id)?.name}」`, icon: 'none' })
+  const switchedTheme = THEMES.find((theme) => theme.id === id)
+  uni.showToast({ title: t('themePage.switchedTo', { name: switchedTheme ? t(switchedTheme.nameKey) : '' }), icon: 'none' })
 }
 
 /** 裁剪编辑器打开时的原图路径（null = 关闭） */
@@ -158,10 +163,10 @@ async function onImagePicked(path: string) {
   try {
     await uploadWallpaper(path)
     await updateThemeConfig(config)
-    uni.showToast({ title: '自定义主题已生成', icon: 'none' })
+    uni.showToast({ title: t('themePage.customThemeCreated'), icon: 'none' })
   } catch (error) {
     uni.showToast({
-      title: error instanceof Error ? error.message : '保存失败，请稍后重试',
+      title: error instanceof Error ? error.message : t('themePage.saveFailedRetry'),
       icon: 'none',
     })
   } finally {
@@ -237,7 +242,7 @@ async function toggleCustom() {
     await updateThemeConfig({ ...config, enabled: true })
   } catch (error) {
     uni.showToast({
-      title: error instanceof Error ? error.message : '启用失败，请先上传壁纸',
+      title: error instanceof Error ? error.message : t('themePage.enableFailedNeedWallpaper'),
       icon: 'none',
     })
   }
@@ -246,9 +251,9 @@ async function toggleCustom() {
 /** 删除自定义主题（服务端壁纸 + 配置一并清除，需二次确认） */
 function removeCustom() {
   uni.showModal({
-    title: '删除自定义主题',
-    content: '壁纸与配色将被清除，回到预设主题。该操作不可恢复。',
-    confirmText: '删除',
+    title: t('themePage.deleteCustomTitle'),
+    content: t('themePage.deleteCustomConfirm'),
+    confirmText: t('app.delete'),
     confirmColor: '#d05a40',
     success: async ({ confirm }) => {
       if (!confirm) return
@@ -260,7 +265,7 @@ function removeCustom() {
       localWallpaperPath.value = null
       remoteWallpaperPreview.value = null
       applyTheme(DEFAULT_THEME)
-      uni.showToast({ title: '已删除自定义主题', icon: 'none' })
+      uni.showToast({ title: t('themePage.customThemeDeleted'), icon: 'none' })
     },
   })
 }
@@ -272,16 +277,16 @@ function removeCustom() {
     <view class="page-heading">
       <view class="heading-icon"><Palette :size="20" /></view>
       <view class="heading-copy">
-        <text class="heading-title">主题外观</text>
-        <text class="heading-subtitle">选择喜欢的界面风格，或用一张图片生成专属主题</text>
+        <text class="heading-title">{{ $t('theme.title') }}</text>
+        <text class="heading-subtitle">{{ $t('themePage.intro') }}</text>
       </view>
     </view>
 
     <!-- ===== 自定义图片主题 ===== -->
     <view class="section-title-row">
-      <text class="section-title">自定义图片主题</text>
+      <text class="section-title">{{ $t('themePage.customSectionTitle') }}</text>
       <text v-if="hasCustom" class="section-badge" :class="{ on: isCustomActive }">
-        {{ isCustomActive ? '启用中' : '已停用' }}
+        {{ isCustomActive ? $t('themePage.statusActive') : $t('themePage.statusInactive') }}
       </text>
     </view>
 
@@ -289,10 +294,10 @@ function removeCustom() {
     <view v-if="!isAuthenticated" class="custom-card login-hint">
       <view class="hint-icon"><LogIn :size="22" /></view>
       <view class="hint-copy">
-        <text class="hint-title">登录后上传图片，生成专属主题</text>
-        <text class="hint-desc">自动取色染遍全局界面，多设备登录同步生效</text>
+        <text class="hint-title">{{ $t('themePage.loginHintTitle') }}</text>
+        <text class="hint-desc">{{ $t('themePage.loginHintDesc') }}</text>
       </view>
-      <view class="hint-button" @tap="chooseWallpaper">去登录</view>
+      <view class="hint-button" @tap="chooseWallpaper">{{ $t('themePage.goLogin') }}</view>
     </view>
 
     <!-- 未配置：上传区 -->
@@ -303,8 +308,8 @@ function removeCustom() {
       @tap="chooseWallpaper"
     >
       <view class="upload-icon"><ImagePlus :size="26" /></view>
-      <text class="upload-title">{{ extracting ? '正在取色…' : saving ? '正在保存…' : '上传一张图片' }}</text>
-      <text class="upload-desc">支持 JPG / PNG / WebP，≤8MB · 自动提取主题色</text>
+      <text class="upload-title">{{ extracting ? $t('themePage.extracting') : saving ? $t('themePage.saving') : $t('themePage.uploadImage') }}</text>
+      <text class="upload-desc">{{ $t('themePage.uploadFormatHint') }}</text>
     </view>
 
     <!-- 已配置：预览 + 调色 -->
@@ -318,12 +323,12 @@ function removeCustom() {
           mode="aspectFill"
         />
         <view class="preview-shade" :style="{ opacity: maskPercent / 100 }"></view>
-        <text class="preview-label">壁纸预览</text>
+        <text class="preview-label">{{ $t('themePage.wallpaperPreview') }}</text>
       </view>
 
       <!-- 色板：点选换主色 -->
       <view class="palette-row">
-        <text class="palette-label">主题色</text>
+        <text class="palette-label">{{ $t('themePage.accentColor') }}</text>
         <view class="palette-dots">
           <view
             v-for="(color, index) in paletteDots"
@@ -336,13 +341,13 @@ function removeCustom() {
             <Check v-if="index === 0" :size="12" color="#fff" />
           </view>
         </view>
-        <text class="palette-hint">点选换主色</text>
+        <text class="palette-hint">{{ $t('themePage.paletteHint') }}</text>
       </view>
 
       <!-- 遮罩深浅滑杆 -->
       <view class="mask-row">
         <view class="mask-head">
-          <text class="palette-label">遮罩深浅</text>
+          <text class="palette-label">{{ $t('themePage.maskOpacity') }}</text>
           <text class="mask-value">{{ maskPercent }}%</text>
         </view>
         <slider
@@ -357,28 +362,28 @@ function removeCustom() {
           @changing="onMaskChanging"
           @change="onMaskChange"
         />
-        <text class="mask-hint">越深文字越清晰，越浅壁纸越透亮</text>
+        <text class="mask-hint">{{ $t('themePage.maskHint') }}</text>
       </view>
 
       <!-- 操作行 -->
       <view class="custom-actions">
         <view class="action-button primary" @tap="toggleCustom">
-          {{ isCustomActive ? '停用' : '启用' }}
+          {{ isCustomActive ? $t('themePage.disableBtn') : $t('themePage.enableBtn') }}
         </view>
         <view class="action-button" :class="{ disabled: extracting || saving }" @tap="chooseWallpaper">
           <RefreshCw :size="13" />
-          <text>更换图片</text>
+          <text>{{ $t('themePage.changeImage') }}</text>
         </view>
         <view class="action-button danger" @tap="removeCustom">
           <Trash2 :size="13" />
-          <text>删除</text>
+          <text>{{ $t('app.delete') }}</text>
         </view>
       </view>
     </view>
 
     <!-- ===== 预设主题 ===== -->
     <view class="section-title-row">
-      <text class="section-title">预设主题</text>
+      <text class="section-title">{{ $t('themePage.presetSectionTitle') }}</text>
     </view>
 
     <!-- 主题卡片列表 -->
@@ -405,10 +410,10 @@ function removeCustom() {
         <!-- 主题信息 -->
         <view class="theme-copy">
           <view class="theme-name-row">
-            <text class="theme-name">{{ theme.name }}</text>
-            <text class="theme-tone">{{ theme.tone }}</text>
+            <text class="theme-name">{{ $t(theme.nameKey) }}</text>
+            <text class="theme-tone">{{ $t(theme.toneKey) }}</text>
           </view>
-          <text class="theme-desc">{{ theme.description }}</text>
+          <text class="theme-desc">{{ $t(theme.descKey) }}</text>
         </view>
 
         <!-- 选中标记 -->

@@ -15,6 +15,7 @@
  * - 网络层错误（`status === 0`）在这里统一为「无法连接服务器」。
  */
 
+import { t } from '@/locale'
 import { ApiError } from './http'
 
 /**
@@ -75,34 +76,35 @@ export const NETWORK_ERROR_CODE = 'network_error'
 export const FALLBACK_ERROR_CODE = 'internal_error'
 
 /**
- * 错误码 → 中文文案。未覆盖的码走通用回落，不在此表中吐默认文案。
+ * 错误码 → 语言包 key。describeError 出口处统一 t() 求值（不能在模块加载时求值，
+ * 否则语言切换后文案不更新）。未覆盖的码走通用回落，不在此表中吐默认 key。
  */
-const MESSAGES: Record<string, string> = {
-  [ErrorCodes.AuthenticationRequired]: '邮箱或密码不正确',
-  [ErrorCodes.EmailOrPasswordInvalid]: '邮箱或密码不正确',
-  [ErrorCodes.InvitationInvalid]: '邀请令牌无效',
-  [ErrorCodes.InvitationExpired]: '邀请链接已过期',
-  [ErrorCodes.InvitationRedeemed]: '邀请链接已经被使用',
-  [ErrorCodes.InvitationRequired]: '注册需要邀请链接，请联系管理员获取',
-  [ErrorCodes.PasswordTooWeak]: '新密码强度不足，请使用更复杂的密码',
-  [ErrorCodes.ResourceNotFound]: '内容不存在或已被删除',
-  [ErrorCodes.ResourceConflict]: '操作冲突，请刷新后重试',
-  [ErrorCodes.PermissionDenied]: '没有权限执行此操作',
-  [ErrorCodes.RateLimited]: '操作太频繁了，请稍后再试',
-  [ErrorCodes.ValidationError]: '填写内容有误，请检查后重试',
-  [ErrorCodes.UploadTooLarge]: '文件超出大小上限',
-  [ErrorCodes.AvatarTooLarge]: '头像不能超过 2MB',
-  [ErrorCodes.UnsupportedMediaFormat]: '文件格式不受支持',
-  [ErrorCodes.MediaParseFailed]: '文件无法解析，可能已损坏或格式不对',
-  [ErrorCodes.TranscodeFailed]: '音频转码失败，请换一个文件重试',
-  [ErrorCodes.LyricsSourceFailed]: '歌词匹配失败，可稍后手动补充',
-  [ErrorCodes.PrivateTrackOfAnotherUser]: '这是其他用户的私有曲目，无法引用',
-  [ErrorCodes.TrackNotAccessible]: '该曲目暂不可播放',
-  [ErrorCodes.SongRequestMismatch]: '与需求信息不一致',
-  [ErrorCodes.SongRequestMismatchOverrideRequired]: '与需求信息不一致，需修正元数据后才能发布',
-  [ErrorCodes.StorageError]: '存储服务异常，请稍后再试',
-  [ErrorCodes.EmailDeliveryFailed]: '邮件发送失败，请稍后重试或联系管理员',
-  [ErrorCodes.InternalError]: '服务开小差了，请稍后再试',
+const MESSAGE_KEYS: Record<string, string> = {
+  [ErrorCodes.AuthenticationRequired]: 'errors.authenticationRequired',
+  [ErrorCodes.EmailOrPasswordInvalid]: 'errors.emailOrPasswordInvalid',
+  [ErrorCodes.InvitationInvalid]: 'errors.invitationInvalid',
+  [ErrorCodes.InvitationExpired]: 'errors.invitationExpired',
+  [ErrorCodes.InvitationRedeemed]: 'errors.invitationRedeemed',
+  [ErrorCodes.InvitationRequired]: 'errors.invitationRequired',
+  [ErrorCodes.PasswordTooWeak]: 'errors.passwordTooWeak',
+  [ErrorCodes.ResourceNotFound]: 'errors.resourceNotFound',
+  [ErrorCodes.ResourceConflict]: 'errors.resourceConflict',
+  [ErrorCodes.PermissionDenied]: 'errors.permissionDenied',
+  [ErrorCodes.RateLimited]: 'errors.rateLimited',
+  [ErrorCodes.ValidationError]: 'errors.validationError',
+  [ErrorCodes.UploadTooLarge]: 'errors.uploadTooLarge',
+  [ErrorCodes.AvatarTooLarge]: 'errors.avatarTooLarge',
+  [ErrorCodes.UnsupportedMediaFormat]: 'errors.unsupportedMediaFormat',
+  [ErrorCodes.MediaParseFailed]: 'errors.mediaParseFailed',
+  [ErrorCodes.TranscodeFailed]: 'errors.transcodeFailed',
+  [ErrorCodes.LyricsSourceFailed]: 'errors.lyricsSourceFailed',
+  [ErrorCodes.PrivateTrackOfAnotherUser]: 'errors.privateTrackOfAnotherUser',
+  [ErrorCodes.TrackNotAccessible]: 'errors.trackNotAccessible',
+  [ErrorCodes.SongRequestMismatch]: 'errors.songRequestMismatch',
+  [ErrorCodes.SongRequestMismatchOverrideRequired]: 'errors.songRequestMismatchOverrideRequired',
+  [ErrorCodes.StorageError]: 'errors.storageError',
+  [ErrorCodes.EmailDeliveryFailed]: 'errors.emailDeliveryFailed',
+  [ErrorCodes.InternalError]: 'errors.internalError',
 }
 
 /**
@@ -114,42 +116,43 @@ const MESSAGES: Record<string, string> = {
  * @param fallback 完全无法识别时展示的兜底文案，默认按场景给通用语
  * @returns 面向用户的中文提示
  */
-export function describeError(error: unknown, fallback = '操作失败，请稍后再试'): string {
+export function describeError(error: unknown, fallback = t('errors.operationFailed')): string {
   if (!(error instanceof ApiError)) return fallback
 
   // 网络层：status 0 表示请求没到达后端，message 是 uni.app 的底层 errMsg，不适合展示
   if (error.status === 0 || error.code === NETWORK_ERROR_CODE) {
-    return '无法连接服务器，请检查网络或 API 配置'
+    return t('errors.networkUnreachable')
   }
-  if (error.status === 429) return MESSAGES[ErrorCodes.RateLimited]
+  if (error.status === 429) return t(MESSAGE_KEYS[ErrorCodes.RateLimited])
 
   // 带字段名的校验错误（message 形如 "title: Title is required..."）保留原文，便于定位表单项
   if (error.code === ErrorCodes.ValidationError) {
     return fieldNameToChinese(error.message)
   }
 
-  return MESSAGES[error.code] ?? error.message ?? fallback
+  const key = MESSAGE_KEYS[error.code]
+  return (key ? t(key) : error.message) ?? fallback
 }
 
-/** 后端校验错误的字段名 → 中文字段名，便于用户看懂 "title: ..." 这类提示。 */
-const FIELD_LABELS: Record<string, string> = {
-  title: '标题',
-  artistName: '艺人',
-  albumTitle: '专辑',
-  email: '邮箱',
-  password: '密码',
-  displayName: '昵称',
-  avatar: '头像',
-  artworkId: '封面',
-  genres: '流派',
-  trackNumber: '曲序',
-  discNumber: '碟号',
-  releaseYear: '发行年份',
-  page: '页码',
-  pageSize: '每页条数',
-  status: '状态',
-  songRequestId: '关联需求',
-  request: '请求体',
+/** 后端校验错误的字段名 → 语言包 key，便于用户看懂 "title: ..." 这类提示。 */
+const FIELD_LABEL_KEYS: Record<string, string> = {
+  title: 'errors.fields.title',
+  artistName: 'errors.fields.artistName',
+  albumTitle: 'errors.fields.albumTitle',
+  email: 'errors.fields.email',
+  password: 'errors.fields.password',
+  displayName: 'errors.fields.displayName',
+  avatar: 'errors.fields.avatar',
+  artworkId: 'errors.fields.artworkId',
+  genres: 'errors.fields.genres',
+  trackNumber: 'errors.fields.trackNumber',
+  discNumber: 'errors.fields.discNumber',
+  releaseYear: 'errors.fields.releaseYear',
+  page: 'errors.fields.page',
+  pageSize: 'errors.fields.pageSize',
+  status: 'errors.fields.status',
+  songRequestId: 'errors.fields.songRequestId',
+  request: 'errors.fields.request',
 }
 
 /**
@@ -159,8 +162,8 @@ const FIELD_LABELS: Record<string, string> = {
 function fieldNameToChinese(message: string): string {
   const match = /^([A-Za-z_][A-Za-z0-9_]*):\s*/.exec(message)
   if (!match) return message
-  const label = FIELD_LABELS[match[1]]
-  return label ? `${label}：${message.slice(match[0].length)}` : message
+  const key = FIELD_LABEL_KEYS[match[1]]
+  return key ? `${t(key)}：${message.slice(match[0].length)}` : message
 }
 
 /**

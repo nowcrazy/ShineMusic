@@ -4,12 +4,59 @@
 // 支持语言、默认语言等全局配置见 locale/config.ts（唯一定义处）。
 import { createI18n, type Composer, type DefineLocaleMessage, type I18n } from 'vue-i18n'
 import { allMessages } from './messages'
+import { componentsMessages } from './messages/components'
+import { homeMessages } from './messages/home'
+import { browseMessages } from './messages/browse'
+import { socialMessages } from './messages/social'
+import { adminImportMessages } from './messages/adminImport'
+import { adminManageMessages } from './messages/adminManage'
+import { platformMessages } from './messages/platform'
 import { loadLocale, saveLocale, isSupported } from './utils'
 import { DEFAULT_LOCALE, SUPPORTED, type Locale } from './config'
 
 export type { Locale }
 
 let _i18n: I18n | null = null
+
+type MessageTree = Record<string, unknown>
+
+/** 递归合并普通语言包树（值只有字符串与纯对象），source 里的值优先。 */
+function mergeTrees(target: MessageTree, source: MessageTree): MessageTree {
+  const out: MessageTree = { ...target }
+  for (const [key, value] of Object.entries(source)) {
+    const prev = out[key]
+    out[key] =
+      prev && value && typeof prev === 'object' && typeof value === 'object'
+        ? mergeTrees(prev as MessageTree, value as MessageTree)
+        : value
+  }
+  return out
+}
+
+/**
+ * 主语言包（messages.ts）+ 各域补充模块合并。
+ * 域模块（locale/messages/*.ts）扩展既有命名空间时逐层合并而非整体覆盖，
+ * 与 messages.ts 既有 key 冲突时以域模块（逐字对齐源码）为准。
+ */
+function buildAllMessages(): Record<string, unknown> {
+  const domains: Record<string, MessageTree>[] = [
+    componentsMessages,
+    homeMessages,
+    browseMessages,
+    socialMessages,
+    adminImportMessages,
+    adminManageMessages,
+    platformMessages,
+  ]
+  const out: Record<string, unknown> = {}
+  for (const [locale, tree] of Object.entries(allMessages)) {
+    out[locale] = domains.reduce(
+      (merged, domain) => mergeTrees(merged, domain[locale] ?? {}),
+      tree as MessageTree,
+    )
+  }
+  return out
+}
 
 /**
  * 取 global 作用域。createI18n(legacy: false) 返回的 I18n 泛型里 global
@@ -31,7 +78,7 @@ export function createAppI18n(): I18n {
     // vue-i18n@9.14 的 messages 选项是 schema 品牌类型，且其 d.ts 引用的 LocaleMessage
     // 在提升的 @intlify/core-base 副本中缺失（skipLibCheck 掩盖），自定义 LocaleMessages
     // 与它无类型重叠（TS2352/TS2769），经 unknown 中转到默认 schema DefineLocaleMessage。
-    messages: allMessages as unknown as Record<string, DefineLocaleMessage>,
+    messages: buildAllMessages() as unknown as Record<string, DefineLocaleMessage>,
     missingWarn: import.meta.env.DEV, // 只有 dev 告警缺失 key
     fallbackWarn: false,
   })

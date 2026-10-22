@@ -8,6 +8,7 @@
  */
 import { computed, ref } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
+import { useI18n } from 'vue-i18n'
 import { ChevronDown, ChevronUp, Clock3, Inbox, Plus, X } from 'lucide-vue-next'
 import {
   createSongRequest,
@@ -29,12 +30,14 @@ import { ApiError } from '@/services/http'
 // tab 标识：votes=投票优先排序，createdAt=最新提交排序，mine=我提交/投过票的
 type Tab = 'votes' | 'createdAt' | 'mine'
 
-// tab 切换核心状态与固定 tab 配置
+const { t } = useI18n()
+
+// tab 切换核心状态与固定 tab 配置（labelKey 为展示层 i18n key，tab 值本身仍是切换逻辑用的英文标识）
 const tab = ref<Tab>('votes')
-const tabs: { key: Tab; label: string }[] = [
-  { key: 'votes', label: '投票优先' },
-  { key: 'createdAt', label: '最新提交' },
-  { key: 'mine', label: '我的' },
+const tabs: { key: Tab; labelKey: string }[] = [
+  { key: 'votes', labelKey: 'requestsPage.tabVotes' },
+  { key: 'createdAt', labelKey: 'requestsPage.tabLatest' },
+  { key: 'mine', labelKey: 'requestsPage.tabMine' },
 ]
 
 // —— 列表与分页状态 ——
@@ -122,7 +125,7 @@ async function handleVote(item: ApiSongRequest) {
   if (!requireLogin()) return
   // 已点过：不再发请求，也不允许取消（产品规则：点赞不可撤销）
   if (item.myVote) {
-    uni.showToast({ title: '你已经点过赞了', icon: 'none' })
+    uni.showToast({ title: t('requestsPage.alreadyVoted'), icon: 'none' })
     return
   }
   // 同一需求的请求还在路上：忽略连点，避免重复 +1
@@ -140,9 +143,9 @@ async function handleVote(item: ApiSongRequest) {
     item.myVote = false
     item.voteCount -= 1
     if (error instanceof ApiError && error.code === ErrorCodes.ResourceConflict) {
-      uni.showToast({ title: '该需求已关闭投票', icon: 'none' })
+      uni.showToast({ title: t('requestsPage.voteClosed'), icon: 'none' })
     } else {
-      uni.showToast({ title: describeError(error, '操作失败，请稍后再试'), icon: 'none' })
+      uni.showToast({ title: describeError(error, t('requestsPage.operationFailed')), icon: 'none' })
     }
   } finally {
     const cleared = new Set(pendingVotes.value)
@@ -174,7 +177,7 @@ async function submitRequest() {
   const artistName = formArtist.value.trim()
   // 表单校验：歌曲名与艺人均为必填
   if (!title || !artistName) {
-    uni.showToast({ title: '歌曲名和艺人必填', icon: 'none' })
+    uni.showToast({ title: t('requestsPage.titleArtistRequired'), icon: 'none' })
     return
   }
   submitting.value = true
@@ -184,7 +187,7 @@ async function submitRequest() {
       artistName,
       albumTitle: formAlbum.value.trim() || undefined,
     })
-    uni.showToast({ title: '需求已提交', icon: 'none' })
+    uni.showToast({ title: t('requestsPage.submitted'), icon: 'none' })
     closeForm()
     tab.value = 'mine'
     void load()
@@ -193,10 +196,10 @@ async function submitRequest() {
       error instanceof ApiError
         ? error.code === ErrorCodes.ResourceConflict
           ? error.message.includes('library')
-            ? '这首歌已在曲库中'
-            : '已有相同的需求，去投一票吧'
+            ? t('requestsPage.inLibrary')
+            : t('requestsPage.duplicateRequest')
           : error.message
-        : '提交失败，请稍后再试'
+        : t('requestsPage.submitFailed')
     uni.showToast({ title: message, icon: 'none' })
   } finally {
     submitting.value = false
@@ -245,11 +248,11 @@ function handleFulfill(item: ApiSongRequest) {
 async function doWithdraw(item: ApiSongRequest) {
   try {
     await withdrawSongRequest(item.id)
-    uni.showToast({ title: '已撤回', icon: 'none' })
+    uni.showToast({ title: t('requestsPage.withdrawnToast'), icon: 'none' })
     void load()
   } catch (error) {
     uni.showToast({
-      title: error instanceof ApiError ? error.message : '撤回失败，请稍后再试',
+      title: error instanceof ApiError ? error.message : t('requestsPage.withdrawFailed'),
       icon: 'none',
     })
   }
@@ -258,9 +261,9 @@ async function doWithdraw(item: ApiSongRequest) {
 /** 撤回需求：二次确认后调用接口 */
 function handleWithdraw(item: ApiSongRequest) {
   uni.showModal({
-    title: '撤回需求',
-    content: `确定撤回《${item.title}》吗？撤回后不可恢复。`,
-    confirmText: '撤回',
+    title: t('requestsPage.withdrawTitle'),
+    content: t('requestsPage.withdrawConfirm', { title: item.title }),
+    confirmText: t('requestsPage.withdrawBtn'),
     success: (res) => {
       if (res.confirm) void doWithdraw(item)
     },
@@ -275,15 +278,15 @@ async function handleResubmit(item: ApiSongRequest) {
       artistName: item.artistName,
       albumTitle: item.albumTitle ?? undefined,
     })
-    uni.showToast({ title: '已重新提交', icon: 'none' })
+    uni.showToast({ title: t('requestsPage.resubmitted'), icon: 'none' })
     void load()
   } catch (error) {
     const message =
       error instanceof ApiError
         ? error.code === ErrorCodes.ResourceConflict
-          ? '已有相同的有效需求'
+          ? t('requestsPage.duplicateActive')
           : error.message
-        : '提交失败，请稍后再试'
+        : t('requestsPage.submitFailed')
     uni.showToast({ title: message, icon: 'none' })
   }
 }
@@ -320,7 +323,7 @@ async function toggleTimeline(item: ApiSongRequest) {
     timelines.value = { ...timelines.value, [requestId]: await getSongRequestTimeline(requestId) }
   } catch {
     expandedTimelines.value = { ...expandedTimelines.value, [requestId]: false }
-    uni.showToast({ title: '进度加载失败，请稍后再试', icon: 'none' })
+    uni.showToast({ title: t('requestsPage.timelineLoadFailed'), icon: 'none' })
   } finally {
     timelineLoading.value = { ...timelineLoading.value, [requestId]: false }
   }
@@ -359,8 +362,8 @@ function formatCount(n: number): string {
   <view class="requests-page">
     <!-- 页头说明 -->
     <view class="head">
-      <text class="head-title">歌曲需求池</text>
-      <text class="head-sub">想听什么歌？提交需求并投票，管理员会优先安排呼声高的歌曲。</text>
+      <text class="head-title">{{ $t('requestsPage.title') }}</text>
+      <text class="head-sub">{{ $t('requestsPage.subtitle') }}</text>
     </view>
 
     <!-- 排序 / 我的 tab 切换 -->
@@ -372,21 +375,21 @@ function formatCount(n: number): string {
         :class="{ active: tab === entry.key }"
         @tap="switchTab(entry.key)"
       >
-        <text>{{ entry.label }}</text>
+        <text>{{ $t(entry.labelKey) }}</text>
       </view>
     </view>
 
     <!-- “我的”tab 未登录：登录引导 -->
     <view v-if="tab === 'mine' && !isAuthenticated" class="login-tip">
       <Inbox :size="26" />
-      <text class="login-tip-title">登录后查看你的需求与投票</text>
-      <view class="login-tip-button" @tap="goLogin"><text>去登录</text></view>
+      <text class="login-tip-title">{{ $t('requestsPage.loginToView') }}</text>
+      <view class="login-tip-button" @tap="goLogin"><text>{{ $t('auth.goLogin') }}</text></view>
     </view>
 
-    <view v-else-if="loading" class="state-text">正在加载…</view>
-    <view v-else-if="loadError" class="state-text">暂时无法连接服务器，请稍后重试。</view>
+    <view v-else-if="loading" class="state-text">{{ $t('requestsPage.loading') }}</view>
+    <view v-else-if="loadError" class="state-text">{{ $t('requestsPage.loadFailed') }}</view>
     <view v-else-if="!items.length" class="state-text">
-      {{ tab === 'mine' ? '你还没有提交或投过票的需求。' : '还没有歌曲需求，来提交第一首吧。' }}
+      {{ tab === 'mine' ? $t('requestsPage.emptyMine') : $t('requestsPage.emptyAll') }}
     </view>
 
     <!-- 需求列表：左侧投票栏 + 需求信息与状态徽章；底部为分页加载区 -->
@@ -408,7 +411,7 @@ function formatCount(n: number): string {
             <!-- 处理进度：展开查看时间线（提交 → 计划 → 处理中 → 已入库） -->
             <view class="timeline-toggle" @tap.stop="toggleTimeline(item)">
               <Clock3 :size="13" />
-              <text>{{ isTimelineOpen(item.id) ? '收起进度' : '处理进度' }}</text>
+              <text>{{ isTimelineOpen(item.id) ? $t('requestsPage.collapseTimeline') : $t('requestsPage.timelineToggle') }}</text>
               <ChevronDown v-if="!isTimelineOpen(item.id)" :size="13" />
               <ChevronUp v-else :size="13" />
             </view>
@@ -416,7 +419,7 @@ function formatCount(n: number): string {
 
           <!-- 时间线：按时间正序展示每次状态变化；备注（拒绝原因等）仅本人/管理员可见 -->
           <view v-if="isTimelineOpen(item.id)" class="timeline">
-            <view v-if="timelineLoading[item.id]" class="timeline-hint">正在加载进度…</view>
+            <view v-if="timelineLoading[item.id]" class="timeline-hint">{{ $t('requestsPage.timelineLoading') }}</view>
             <view v-else class="timeline-list">
               <view
                 v-for="(event, index) in timelines[item.id] ?? []"
@@ -444,44 +447,44 @@ function formatCount(n: number): string {
             class="request-actions"
           >
             <view v-if="canWithdraw(item)" class="action-btn" @tap.stop="handleWithdraw(item)">
-              <text>撤回</text>
+              <text>{{ $t('requestsPage.withdrawBtn') }}</text>
             </view>
             <view v-if="canResubmit(item)" class="action-btn primary" @tap.stop="handleResubmit(item)">
-              <text>重新提交</text>
+              <text>{{ $t('requestsPage.resubmitBtn') }}</text>
             </view>
             <view v-if="canFulfill(item)" class="action-btn primary" @tap.stop="handleFulfill(item)">
-              <text>上传并满足</text>
+              <text>{{ $t('requestsPage.fulfillBtn') }}</text>
             </view>
           </view>
         </view>
       </view>
       <!-- 分页尾部：加载中 / 到底 / 手动加载更多 -->
-      <view v-if="loadingMore" class="state-text">加载中…</view>
-      <view v-else-if="!hasMore" class="list-end">已经到底了</view>
-      <view v-else class="load-more" @tap="loadMore"><text>加载更多</text></view>
+      <view v-if="loadingMore" class="state-text">{{ $t('requestsPage.loadingMore') }}</view>
+      <view v-else-if="!hasMore" class="list-end">{{ $t('requestsPage.endOfList') }}</view>
+      <view v-else class="load-more" @tap="loadMore"><text>{{ $t('requestsPage.loadMore') }}</text></view>
     </view>
 
     <!-- 提交需求底部 sheet：点击遮罩关闭，内容区阻止冒泡 -->
     <view v-if="showForm" class="form-mask" @tap="closeForm">
       <view class="form-sheet" @tap.stop="swallow">
         <view class="form-head">
-          <text class="form-title">提交歌曲需求</text>
+          <text class="form-title">{{ $t('requestsPage.formTitle') }}</text>
           <view class="form-close" @tap="closeForm"><X :size="18" /></view>
         </view>
         <view class="field">
-          <text class="field-label">歌曲名 *</text>
-          <input v-model="formTitle" class="field-input" maxlength="200" placeholder="例如：潮汐之间" />
+          <text class="field-label">{{ $t('requestsPage.fieldTitle') }}</text>
+          <input v-model="formTitle" class="field-input" maxlength="200" :placeholder="$t('requestsPage.placeholderTitle')" />
         </view>
         <view class="field">
-          <text class="field-label">艺人 *</text>
-          <input v-model="formArtist" class="field-input" maxlength="200" placeholder="例如：林间回声" />
+          <text class="field-label">{{ $t('requestsPage.fieldArtist') }}</text>
+          <input v-model="formArtist" class="field-input" maxlength="200" :placeholder="$t('requestsPage.placeholderArtist')" />
         </view>
         <view class="field">
-          <text class="field-label">专辑（可选）</text>
-          <input v-model="formAlbum" class="field-input" maxlength="200" placeholder="帮助管理员更快定位版本" />
+          <text class="field-label">{{ $t('requestsPage.fieldAlbum') }}</text>
+          <input v-model="formAlbum" class="field-input" maxlength="200" :placeholder="$t('requestsPage.placeholderAlbumHint')" />
         </view>
         <view class="form-submit" :class="{ disabled: submitting }" @tap="submitRequest">
-          <text>{{ submitting ? '提交中…' : '提交需求' }}</text>
+          <text>{{ submitting ? $t('requestsPage.submitting') : $t('requestsPage.submitBtn') }}</text>
         </view>
       </view>
     </view>

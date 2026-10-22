@@ -12,6 +12,7 @@
  * - DELETE /import-items/{id}             （拒绝，删除隔离区文件）
  */
 import type { ApiPageResult } from '@/types/music'
+import { t } from '@/locale'
 import { getAccessToken } from './tokens'
 import { API_PREFIX, http, resolveUrl } from './http'
 
@@ -104,28 +105,28 @@ export const ImportItemStatus = {
   ProcessingFailed: 'processing_failed',
 } as const
 
-/** 状态中文标签，用于界面展示 */
+/** 状态标签（值为 importStatus.* i18n key，界面用 t() 实时本地化） */
 export const ImportItemStatusLabel: Record<string, string> = {
-  uploaded: '已上传',
-  validating: '校验中',
-  parsing_metadata: '解析元数据',
-  transcoding: '转码中',
-  pending_review: '待审核',
-  ready_to_publish: '可发布',
-  pending_publication: '待审核转公开',
-  published: '已发布',
-  rejected: '已拒绝',
-  processing_failed: '处理失败',
+  uploaded: 'importStatus.uploaded',
+  validating: 'importStatus.validating',
+  parsing_metadata: 'importStatus.parsingMetadata',
+  transcoding: 'importStatus.transcoding',
+  pending_review: 'importStatus.pendingReview',
+  ready_to_publish: 'importStatus.readyToPublish',
+  pending_publication: 'importStatus.pendingPublication',
+  published: 'importStatus.published',
+  rejected: 'importStatus.rejected',
+  processing_failed: 'importStatus.processingFailed',
 }
 
-/** 批次状态中文标签 */
+/** 批次状态标签（值为 importStatus.* i18n key，界面用 t() 实时本地化） */
 export const ImportBatchStatusLabel: Record<string, string> = {
-  queued: '排队中',
-  processing: '处理中',
-  completed: '已完成',
-  completed_with_errors: '已完成（有错误）',
-  failed: '失败',
-  cancelled: '已取消',
+  queued: 'importStatus.queued',
+  processing: 'importStatus.processing',
+  completed: 'importStatus.completed',
+  completed_with_errors: 'importStatus.completedWithErrors',
+  failed: 'importStatus.failed',
+  cancelled: 'importStatus.cancelled',
 }
 
 /**
@@ -137,7 +138,7 @@ export const ImportBatchStatusLabel: Record<string, string> = {
  * @returns 新建的导入批次
  */
 export async function uploadImportFiles(filePaths: string[], songRequestId?: string): Promise<LibraryImportBatch> {
-  if (filePaths.length === 0) throw new Error('至少选择一个音频文件')
+  if (filePaths.length === 0) throw new Error(t('services.selectAtLeastOneAudioFile'))
   // uni.uploadFile 仅支持单文件，逐个上传会产生多个批次；
   // 这里取第一个文件上传，后续可扩展为多文件分批或后端支持多文件。
   // 实际上后端一次请求可接收多文件，但 uni.uploadFile 限制单文件，
@@ -157,13 +158,13 @@ export async function uploadImportFiles(filePaths: string[], songRequestId?: str
             resolve(body as LibraryImportBatch)
           } else {
             const detail = body?.error ?? {}
-            reject(new Error(detail.message || `上传失败：${res.statusCode}`))
+            reject(new Error(detail.message || t('services.uploadFailedWithStatus', { status: res.statusCode })))
           }
         } catch {
-          reject(new Error('上传响应解析失败'))
+          reject(new Error(t('services.uploadResponseParseFailed')))
         }
       },
-      fail: (err) => reject(new Error(err.errMsg || '网络错误')),
+      fail: (err) => reject(new Error(err.errMsg || t('importReview.networkError'))),
     })
   })
 }
@@ -180,7 +181,7 @@ export async function uploadImportFiles(filePaths: string[], songRequestId?: str
  * @returns 新建的导入批次
  */
 export async function uploadImportFilesBatch(files: File[], songRequestId?: string): Promise<LibraryImportBatch> {
-  if (files.length === 0) throw new Error('至少选择一个文件')
+  if (files.length === 0) throw new Error(t('services.selectAtLeastOneFile'))
   const form = new FormData()
   for (const file of files) form.append('files', file, file.name)
   if (songRequestId) form.append('songRequestId', songRequestId)
@@ -193,7 +194,7 @@ export async function uploadImportFilesBatch(files: File[], songRequestId?: stri
   })
   const body = await response.json().catch(() => null)
   if (!response.ok) {
-    throw new Error(body?.error?.message ?? `上传失败：${response.status}`)
+    throw new Error(body?.error?.message ?? t('services.uploadFailedWithStatus', { status: response.status }))
   }
   return body as LibraryImportBatch
 }
@@ -257,13 +258,13 @@ export function uploadLyricsFile(itemId: string, filePath: string): Promise<Libr
             resolve(body as LibraryImportItem)
           } else {
             const detail = body?.error ?? {}
-            reject(new Error(detail.message || `上传失败：${res.statusCode}`))
+            reject(new Error(detail.message || t('services.uploadFailedWithStatus', { status: res.statusCode })))
           }
         } catch {
-          reject(new Error('上传响应解析失败'))
+          reject(new Error(t('services.uploadResponseParseFailed')))
         }
       },
-      fail: (err) => reject(new Error(err.errMsg || '网络错误')),
+      fail: (err) => reject(new Error(err.errMsg || t('importReview.networkError'))),
     })
   })
 }

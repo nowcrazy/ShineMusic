@@ -12,6 +12,7 @@
  */
 import { computed, ref, onUnmounted } from 'vue'
 import { onLoad, onShow } from '@dcloudio/uni-app'
+import { useI18n } from 'vue-i18n'
 import {
   AlertCircle,
   Check,
@@ -43,6 +44,7 @@ import {
 } from '@/services/admin-import'
 
 // —— 列表 / 选择状态 ——
+const { t } = useI18n()
 const batches = ref<readonly LibraryImportBatch[]>([])
 const selectedItemId = ref('')
 const loading = ref(false)
@@ -101,9 +103,9 @@ const publishCheck = computed<PublishCheck>(() => {
   if (!item) return { ok: false, missing: [] }
   if (item.status === ImportItemStatus.PendingPublication) return { ok: true, missing: [] }
   const missing: string[] = []
-  if (!item.metadata.title?.trim()) missing.push('歌名')
-  if (!item.metadata.artists.length) missing.push('艺人')
-  if (!item.metadata.durationMs) missing.push('时长')
+  if (!item.metadata.title?.trim()) missing.push(t('importReview.requiredTitle'))
+  if (!item.metadata.artists.length) missing.push(t('importReview.requiredArtist'))
+  if (!item.metadata.durationMs) missing.push(t('importReview.requiredDuration'))
   return { ok: missing.length === 0, missing }
 })
 
@@ -112,10 +114,10 @@ const lyricsSourceLabel = computed(() => {
   const source = selectedItem.value?.metadata.lyricsSource
   if (!source) return null
   const labels: Record<string, string> = {
-    embedded: '内嵌标签',
-    sidecar: '同名歌词文件',
-    lrclib: '自动匹配',
-    manual: '人工填写',
+    embedded: t('importReview.lyricsSourceEmbedded'),
+    sidecar: t('importReview.lyricsSourceSidecar'),
+    lrclib: t('importReview.lyricsSourceAuto'),
+    manual: t('importReview.lyricsSourceManual'),
   }
   const confidence = selectedItem.value?.metadata.lyricsConfidence
   const suffix = confidence != null && confidence < 1 ? ` · ${Math.round(confidence * 100)}%` : ''
@@ -202,7 +204,7 @@ async function loadBatches() {
       selectedItemId.value = ''
     }
   } catch {
-    loadError.value = '导入列表加载失败，请稍后重试。'
+    loadError.value = t('importReview.loadFailed')
   } finally {
     loading.value = false
   }
@@ -285,11 +287,11 @@ async function doUpload(files: PickedFile[]) {
       const batch = await uploadImportFilesBatch(nativeFiles, targetRequest.value?.id)
       successCount = batch.items.length
     } catch (err) {
-      uni.showToast({ title: `上传失败：${(err as Error).message}`, icon: 'none' })
+      uni.showToast({ title: t('importReview.uploadFailedWith', { message: (err as Error).message }), icon: 'none' })
     }
     uploading.value = false
     if (successCount > 0) {
-      uni.showToast({ title: `已上传 ${successCount} 首`, icon: 'success' })
+      uni.showToast({ title: t('importReview.uploadedCount', { count: successCount }), icon: 'success' })
       await loadBatches()
     }
     return
@@ -302,12 +304,12 @@ async function doUpload(files: PickedFile[]) {
       await uploadImportFiles([entry.path], targetRequest.value?.id)
       successCount++
     } catch (err) {
-      uni.showToast({ title: `上传失败：${(err as Error).message}`, icon: 'none' })
+      uni.showToast({ title: t('importReview.uploadFailedWith', { message: (err as Error).message }), icon: 'none' })
     }
   }
   uploading.value = false
   if (successCount > 0) {
-    uni.showToast({ title: `已上传 ${successCount} 个文件`, icon: 'success' })
+    uni.showToast({ title: t('importReview.uploadedFilesCount', { count: successCount }), icon: 'success' })
     await loadBatches()
   }
 }
@@ -343,7 +345,7 @@ async function saveMetadata() {
   const item = selectedItem.value
   if (!item || saving.value) return
   if (!title.value.trim() || !artists.value.trim()) {
-    uni.showToast({ title: '歌曲名和艺人不能为空', icon: 'none' })
+    uni.showToast({ title: t('importReview.titleArtistRequired'), icon: 'none' })
     return
   }
   saving.value = true
@@ -366,9 +368,9 @@ async function saveMetadata() {
         break
       }
     }
-    uni.showToast({ title: '元数据已保存', icon: 'success' })
+    uni.showToast({ title: t('importReview.metadataSaved'), icon: 'success' })
   } catch {
-    uni.showToast({ title: '保存失败，请重试', icon: 'none' })
+    uni.showToast({ title: t('importReview.saveFailed'), icon: 'none' })
   } finally {
     saving.value = false
   }
@@ -392,9 +394,9 @@ function handleUploadLyrics() {
           if (idx >= 0) { batch.items.splice(idx, 1, updated); break }
         }
         lyrics.value = updated.metadata.lyrics ?? ''
-        uni.showToast({ title: '歌词已导入', icon: 'success' })
+        uni.showToast({ title: t('importReview.lyricsImported'), icon: 'success' })
       } catch (err) {
-        uni.showToast({ title: `歌词上传失败：${(err as Error).message}`, icon: 'none' })
+        uni.showToast({ title: t('importReview.lyricsUploadFailed', { message: (err as Error).message }), icon: 'none' })
       }
     },
   })
@@ -414,9 +416,9 @@ function handleUploadLyrics() {
           if (idx >= 0) { batch.items.splice(idx, 1, updated); break }
         }
         lyrics.value = updated.metadata.lyrics ?? ''
-        uni.showToast({ title: '歌词已导入', icon: 'success' })
+        uni.showToast({ title: t('importReview.lyricsImported'), icon: 'success' })
       } catch (err) {
-        uni.showToast({ title: `歌词上传失败：${(err as Error).message}`, icon: 'none' })
+        uni.showToast({ title: t('importReview.lyricsUploadFailed', { message: (err as Error).message }), icon: 'none' })
       }
     },
   })
@@ -429,18 +431,18 @@ async function handlePublish() {
   if (!item || publishing.value) return
   // 用户上传的私有曲目：待审核转公开；管理员导入：可发布
   if (item.status !== ImportItemStatus.ReadyToPublish && item.status !== ImportItemStatus.PendingPublication) {
-    uni.showToast({ title: '请先保存元数据使状态变为"可发布"', icon: 'none' })
+    uni.showToast({ title: t('importReview.saveMetadataFirst'), icon: 'none' })
     return
   }
   if (!publishCheck.value.ok) {
-    uni.showToast({ title: `缺少：${publishCheck.value.missing.join('、')}`, icon: 'none' })
+    uni.showToast({ title: t('importReview.missingFields', { fields: publishCheck.value.missing.join(t('importReview.valueSeparator')) }), icon: 'none' })
     return
   }
   const promoting = item.status === ImportItemStatus.PendingPublication
   publishing.value = true
   try {
     await publishImportItem(item.id)
-    uni.showToast({ title: promoting ? '已转公开，进入公共曲库' : '已发布入库，可在曲库中播放', icon: 'success' })
+    uni.showToast({ title: promoting ? t('importReview.promotedToPublic') : t('importReview.publishedToast'), icon: 'success' })
     await loadBatches()
     selectedItemId.value = ''
     targetRequest.value = null
@@ -454,7 +456,7 @@ async function handlePublish() {
       promptForceFulfill(item)
     } else {
       uni.showToast({
-        title: describeError(error, '发布失败，请重试'),
+        title: describeError(error, t('importReview.publishFailed')),
         icon: 'none',
       })
     }
@@ -468,24 +470,24 @@ function promptForceFulfill(item: LibraryImportItem) {
   const target = targetRequest.value
   if (!target) return
   uni.showModal({
-    title: '曲目与需求不一致',
-    content: `当前曲目与需求《${target.title} - ${target.artistName}》不一致。若确认是同一首，请填写强制关联原因：`,
+    title: t('importReview.mismatchTitle'),
+    content: t('importReview.mismatchContent', { title: target.title, artist: target.artistName }),
     editable: true,
-    placeholderText: '例如：同曲不同版本 / 译名差异',
-    confirmText: '强制关联',
+    placeholderText: t('importReview.mismatchPlaceholder'),
+    confirmText: t('importReview.forceLinkBtn'),
     success: async (res) => {
       if (!res.confirm) return
       const raw = (res as unknown as { content?: string }).content ?? ''
-      const reason = raw.trim() || '管理员确认强制关联'
+      const reason = raw.trim() || t('importReview.forceLinkDefaultReason')
       publishing.value = true
       try {
         await publishImportItem(item.id, { forceFulfill: true, overrideReason: reason })
-        uni.showToast({ title: '已强制关联并发布', icon: 'success' })
+        uni.showToast({ title: t('importReview.forceLinkPublished'), icon: 'success' })
         await loadBatches()
         selectedItemId.value = ''
         targetRequest.value = null
       } catch (err) {
-        uni.showToast({ title: err instanceof ApiError ? err.message : '强制关联失败', icon: 'none' })
+        uni.showToast({ title: err instanceof ApiError ? err.message : t('importReview.forceLinkFailed'), icon: 'none' })
       } finally {
         publishing.value = false
       }
@@ -498,19 +500,19 @@ async function handleReject() {
   const item = selectedItem.value
   if (!item) return
   uni.showModal({
-    title: '拒绝导入',
-    content: `确定要拒绝「${item.metadata.title || item.sourceFile.displayName}」吗？隔离文件将被删除。`,
-    confirmText: '拒绝',
+    title: t('importReview.rejectTitle'),
+    content: t('importReview.rejectContent', { name: item.metadata.title || item.sourceFile.displayName }),
+    confirmText: t('importReview.rejectBtn'),
     confirmColor: '#d0553a',
     success: async ({ confirm }) => {
       if (!confirm) return
       try {
         await rejectImportItem(item.id)
-        uni.showToast({ title: '已拒绝', icon: 'success' })
+        uni.showToast({ title: t('importReview.rejectedToast'), icon: 'success' })
         await loadBatches()
         selectedItemId.value = ''
       } catch {
-        uni.showToast({ title: '操作失败，请稍后再试', icon: 'none' })
+        uni.showToast({ title: t('importReview.operationFailed'), icon: 'none' })
       }
     },
   })
@@ -521,17 +523,17 @@ function handleUnlinkRequest() {
   const item = selectedItem.value
   if (!item || !item.songRequestId) return
   uni.showModal({
-    title: '解除需求关联',
-    content: '解除后，发布该曲目不会自动满足对应的点歌需求。确定解除吗？',
-    confirmText: '解除',
+    title: t('importReview.unlinkTitle'),
+    content: t('importReview.unlinkContent'),
+    confirmText: t('importReview.unlinkConfirm'),
     success: async ({ confirm }) => {
       if (!confirm) return
       try {
         await unlinkImportItemSongRequest(item.id)
-        uni.showToast({ title: '已解除关联', icon: 'success' })
+        uni.showToast({ title: t('importReview.unlinkedToast'), icon: 'success' })
         await loadBatches()
       } catch {
-        uni.showToast({ title: '操作失败，请稍后再试', icon: 'none' })
+        uni.showToast({ title: t('importReview.operationFailed'), icon: 'none' })
       }
     },
   })
@@ -539,7 +541,7 @@ function handleUnlinkRequest() {
 
 /** 格式化时长 */
 function formatDuration(ms: number | null): string {
-  if (!ms) return '未知'
+  if (!ms) return t('importReview.unknown')
   const totalSec = Math.round(ms / 1000)
   const min = Math.floor(totalSec / 60)
   const sec = totalSec % 60
@@ -551,6 +553,12 @@ function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+/** 状态标签：按 importStatus.* i18n key 实时本地化，未知状态原样返回 */
+function statusLabel(labels: Record<string, string>, status: string): string {
+  const key = labels[status]
+  return key ? t(key) : status
 }
 
 /** 状态样式映射 */
@@ -579,34 +587,34 @@ function statusClass(status: string): string {
     <view class="page-heading">
       <view class="heading-icon"><ShieldCheck :size="20" /></view>
       <view class="heading-copy">
-        <text class="heading-title">曲库导入审核</text>
-        <text class="heading-subtitle">上传音频 · 审核元数据 · 发布入库</text>
+        <text class="heading-title">{{ $t('importReview.pageTitle') }}</text>
+        <text class="heading-subtitle">{{ $t('importReview.headingSubtitle') }}</text>
       </view>
     </view>
 
     <!-- 从需求池跳转：显示目标需求，发布后自动满足 -->
     <view v-if="targetRequest" class="target-banner">
-      <view class="target-banner-title">正在为需求上传</view>
-      <view class="target-banner-body">《{{ targetRequest.title }}》· {{ targetRequest.artistName }}</view>
-      <view class="target-banner-hint">上传并发布后，会自动把该需求标记为「已满足」</view>
+      <view class="target-banner-title">{{ $t('importReview.targetBannerTitle') }}</view>
+      <view class="target-banner-body">{{ $t('importReview.targetBannerBody', { title: targetRequest.title, artist: targetRequest.artistName }) }}</view>
+      <view class="target-banner-hint">{{ $t('importReview.targetBannerHint') }}</view>
     </view>
 
     <!-- 上传按钮 -->
     <view class="upload-row">
       <view class="upload-button" :class="{ disabled: uploading }" @tap="handleUpload">
         <CloudUpload :size="18" />
-        <text>{{ uploading ? '上传中…' : '选择音频文件上传' }}</text>
+        <text>{{ uploading ? $t('importReview.uploading') : $t('importReview.chooseAudioToUpload') }}</text>
       </view>
       <view class="refresh-button" @tap="loadBatches">
         <RefreshCw :size="17" />
       </view>
     </view>
 
-    <view v-if="loading" class="state-message">正在加载导入记录…</view>
+    <view v-if="loading" class="state-message">{{ $t('importReview.loadingRecords') }}</view>
     <view v-else-if="loadError" class="state-message error"><AlertCircle :size="17" /><text>{{ loadError }}</text></view>
     <view v-else-if="!activeBatches.length" class="state-message">
       <Music2 :size="28" />
-      <text>暂无待处理的导入记录</text>
+      <text>{{ $t('importReview.noRecords') }}</text>
     </view>
 
     <!-- 批次列表 -->
@@ -614,11 +622,11 @@ function statusClass(status: string): string {
       <view v-for="batch in activeBatches" :key="batch.id" class="batch-card">
         <view class="batch-header">
           <view class="batch-title">
-            <text class="batch-name">导入批次 {{ batch.items.length }} 个文件</text>
+            <text class="batch-name">{{ $t('importReview.batchTitle', { count: batch.items.length }) }}</text>
             <text class="batch-time">{{ new Date(batch.createdAt).toLocaleString() }}</text>
           </view>
           <text class="batch-status" :class="statusClass(batch.status)">
-            {{ ImportBatchStatusLabel[batch.status] || batch.status }}
+            {{ statusLabel(ImportBatchStatusLabel, batch.status) }}
           </text>
         </view>
 
@@ -641,15 +649,15 @@ function statusClass(status: string): string {
               <view v-else class="thumb-placeholder"><Music2 :size="18" /></view>
             </view>
             <view class="item-copy">
-              <text class="item-title">{{ item.metadata.title || '(未命名)' }}</text>
+              <text class="item-title">{{ item.metadata.title || $t('importReview.untitled') }}</text>
               <text class="item-meta">
-                {{ item.metadata.artists.join('、') || '缺少艺人' }}
+                {{ item.metadata.artists.join($t('importReview.valueSeparator')) || $t('importReview.missingArtist') }}
                 <text v-if="item.metadata.durationMs"> · {{ formatDuration(item.metadata.durationMs) }}</text>
               </text>
             </view>
             <view class="item-right">
               <text class="item-status" :class="statusClass(item.status)">
-                {{ ImportItemStatusLabel[item.status] || item.status }}
+                {{ statusLabel(ImportItemStatusLabel, item.status) }}
               </text>
               <!-- 与目标需求不匹配时提前提示，避免传完才发现传错歌 -->
               <text
@@ -657,7 +665,7 @@ function statusClass(status: string): string {
                 class="match-flag"
                 :class="item.songRequestMatch.kind"
               >
-                {{ item.songRequestMatch.kind === 'fuzzy' ? '有差异' : '不匹配' }}
+                {{ item.songRequestMatch.kind === 'fuzzy' ? $t('importReview.matchFuzzy') : $t('importReview.matchMismatch') }}
               </text>
               <view
                 v-if="item.status === ImportItemStatus.Uploaded || item.status === ImportItemStatus.Validating || item.status === ImportItemStatus.ParsingMetadata || item.status === ImportItemStatus.Transcoding"
@@ -672,36 +680,36 @@ function statusClass(status: string): string {
     <!-- 审核详情面板 -->
     <view v-if="selectedItem" class="detail-panel">
       <view class="detail-heading">
-        <text class="detail-title">审核详情</text>
+        <text class="detail-title">{{ $t('importReview.reviewDetail') }}</text>
         <text class="detail-status" :class="statusClass(selectedItem.status)">
-          {{ ImportItemStatusLabel[selectedItem.status] || selectedItem.status }}
+          {{ statusLabel(ImportItemStatusLabel, selectedItem.status) }}
         </text>
       </view>
 
       <!-- 元数据概览 -->
       <view class="meta-grid">
         <view class="meta-cell">
-          <text class="meta-label">文件</text>
+          <text class="meta-label">{{ $t('importReview.fileLabel') }}</text>
           <text class="meta-value">{{ selectedItem.sourceFile.displayName }}</text>
         </view>
         <view class="meta-cell">
-          <text class="meta-label">大小</text>
+          <text class="meta-label">{{ $t('importReview.sizeLabel') }}</text>
           <text class="meta-value">{{ formatSize(selectedItem.sourceFile.sizeBytes) }}</text>
         </view>
         <view class="meta-cell">
-          <text class="meta-label">格式</text>
+          <text class="meta-label">{{ $t('importReview.formatLabel') }}</text>
           <text class="meta-value">{{ selectedItem.metadata.container || '?' }} / {{ selectedItem.metadata.codec || '?' }}</text>
         </view>
         <view class="meta-cell">
-          <text class="meta-label">码率</text>
+          <text class="meta-label">{{ $t('importReview.bitrateLabel') }}</text>
           <text class="meta-value">{{ selectedItem.metadata.bitrateKbps ? selectedItem.metadata.bitrateKbps + ' kbps' : '?' }}</text>
         </view>
         <view class="meta-cell">
-          <text class="meta-label">时长</text>
+          <text class="meta-label">{{ $t('importReview.durationLabel') }}</text>
           <text class="meta-value">{{ formatDuration(selectedItem.metadata.durationMs) }}</text>
         </view>
         <view class="meta-cell">
-          <text class="meta-label">转码</text>
+          <text class="meta-label">{{ $t('importReview.transcodeLabel') }}</text>
           <text class="meta-value">{{ selectedItem.transcode.status || '-' }}</text>
         </view>
       </view>
@@ -709,12 +717,12 @@ function statusClass(status: string): string {
       <!-- 告警 -->
       <view v-if="selectedItem.warnings.length" class="warning-box">
         <AlertCircle :size="16" />
-        <text>{{ selectedItem.warnings.join('、') }}</text>
+        <text>{{ selectedItem.warnings.join($t('importReview.valueSeparator')) }}</text>
       </view>
 
       <!-- 试听播放器 -->
       <view v-if="selectedItem.status === ImportItemStatus.PendingReview || selectedItem.status === ImportItemStatus.ReadyToPublish || selectedItem.status === ImportItemStatus.PendingPublication" class="player-box">
-        <text class="player-label">试听（转码后）</text>
+        <text class="player-label">{{ $t('importReview.previewLabel') }}</text>
         <audio
           :src="getPreviewUrl(selectedItem.id)"
           controls
@@ -724,36 +732,36 @@ function statusClass(status: string): string {
 
       <!-- 元数据编辑表单 -->
       <view class="edit-form">
-        <text class="form-heading">修正元数据</text>
-        <label class="form-field"><text>歌曲名 *</text><input v-model="title" maxlength="300" placeholder="歌曲标题" /></label>
-        <label class="form-field"><text>艺人 *</text><input v-model="artists" placeholder="多个艺人用顿号分隔" maxlength="2000" /></label>
-        <label class="form-field"><text>专辑</text><input v-model="albumTitle" maxlength="300" placeholder="专辑名称" /></label>
+        <text class="form-heading">{{ $t('importReview.fixMetadata') }}</text>
+        <label class="form-field"><text>{{ $t('importReview.fieldTitleRequired') }}</text><input v-model="title" maxlength="300" :placeholder="$t('importReview.titlePlaceholder')" /></label>
+        <label class="form-field"><text>{{ $t('importReview.fieldArtistRequired') }}</text><input v-model="artists" :placeholder="$t('importReview.artistsPlaceholder')" maxlength="2000" /></label>
+        <label class="form-field"><text>{{ $t('importReview.fieldAlbum') }}</text><input v-model="albumTitle" maxlength="300" :placeholder="$t('importReview.albumPlaceholder')" /></label>
         <view class="number-grid">
-          <label class="form-field"><text>曲序</text><input v-model="trackNumber" type="number" /></label>
-          <label class="form-field"><text>碟序</text><input v-model="discNumber" type="number" /></label>
-          <label class="form-field"><text>年份</text><input v-model="releaseYear" type="number" /></label>
+          <label class="form-field"><text>{{ $t('importReview.trackNumberLabel') }}</text><input v-model="trackNumber" type="number" /></label>
+          <label class="form-field"><text>{{ $t('importReview.discNumberLabel') }}</text><input v-model="discNumber" type="number" /></label>
+          <label class="form-field"><text>{{ $t('importReview.yearLabel') }}</text><input v-model="releaseYear" type="number" /></label>
         </view>
-        <label class="form-field"><text>风格</text><input v-model="genres" placeholder="多个风格用顿号分隔" maxlength="3000" /></label>
+        <label class="form-field"><text>{{ $t('importReview.fieldGenre') }}</text><input v-model="genres" :placeholder="$t('importReview.genresPlaceholder')" maxlength="3000" /></label>
         <label class="form-field">
           <view class="field-label-row">
             <view class="lyrics-label">
-              <text>歌词</text>
+              <text>{{ $t('importReview.lyricsLabel') }}</text>
               <text v-if="lyricsSourceLabel" class="lyrics-source" :class="{ auto: lyricsAutoMatched }">
                 {{ lyricsSourceLabel }}
               </text>
             </view>
             <view v-if="!lyrics?.trim()" class="upload-lyrics-btn" @tap="handleUploadLyrics">
-              <FileUp :size="13" /><text>自动匹配未命中，上传歌词文件</text>
+              <FileUp :size="13" /><text>{{ $t('importReview.uploadLyricsFile') }}</text>
             </view>
           </view>
-          <textarea v-model="lyrics" placeholder="歌词自动匹配中（内嵌标签 / 外部源），未找到时可手动粘贴" class="lyrics-textarea" />
+          <textarea v-model="lyrics" :placeholder="$t('importReview.lyricsPlaceholder')" class="lyrics-textarea" />
         </label>
 
         <!-- 发布前完整性校验提示 -->
         <view v-if="selectedItem.status === ImportItemStatus.ReadyToPublish || selectedItem.status === ImportItemStatus.PendingPublication" class="publish-check">
-          <view v-if="selectedItem.status === ImportItemStatus.PendingPublication" class="check-ok"><Check :size="14" /><text>用户上传的私有曲目，审核后可转公开</text></view>
-          <view v-else-if="publishCheck.ok" class="check-ok"><Check :size="14" /><text>元数据完整，可发布</text></view>
-          <view v-else class="check-missing"><AlertCircle :size="14" /><text>缺少：{{ publishCheck.missing.join('、') }}，无法发布</text></view>
+          <view v-if="selectedItem.status === ImportItemStatus.PendingPublication" class="check-ok"><Check :size="14" /><text>{{ $t('importReview.pendingPublicationHint') }}</text></view>
+          <view v-else-if="publishCheck.ok" class="check-ok"><Check :size="14" /><text>{{ $t('importReview.publishCheckOk') }}</text></view>
+          <view v-else class="check-missing"><AlertCircle :size="14" /><text>{{ $t('importReview.publishCheckMissing', { fields: publishCheck.missing.join($t('importReview.valueSeparator')) }) }}</text></view>
         </view>
 
         <!-- 与目标需求的匹配校验结果：一致=绿、有差异=黄、不一致=红（红且 blocking 时发布必被拒） -->
@@ -769,13 +777,13 @@ function statusClass(status: string): string {
 
         <!-- 已关联点歌需求：可解绑（批量上传误挂时使用） -->
         <view v-if="selectedItem.songRequestId" class="linked-request">
-          <text class="linked-request-text">已关联一条点歌需求，发布后自动标记为已满足</text>
-          <view class="unlink-button" @tap="handleUnlinkRequest"><text>解绑</text></view>
+          <text class="linked-request-text">{{ $t('importReview.linkedRequestHint') }}</text>
+          <view class="unlink-button" @tap="handleUnlinkRequest"><text>{{ $t('importReview.unlinkBtn') }}</text></view>
         </view>
 
         <view class="action-row">
           <view class="save-button" :class="{ disabled: saving }" @tap="saveMetadata">
-            <Check :size="17" /><text>{{ saving ? '保存中…' : '保存元数据' }}</text>
+            <Check :size="17" /><text>{{ saving ? $t('importReview.saving') : $t('importReview.saveMetadata') }}</text>
           </view>
           <view
             v-if="selectedItem.status === ImportItemStatus.ReadyToPublish || selectedItem.status === ImportItemStatus.PendingPublication"
@@ -783,14 +791,14 @@ function statusClass(status: string): string {
             :class="{ disabled: publishing || !publishCheck.ok }"
             @tap="handlePublish"
           >
-            <Check :size="17" /><text>{{ publishing ? '发布中…' : (selectedItem.status === ImportItemStatus.PendingPublication ? '转公开入库' : '发布入库') }}</text>
+            <Check :size="17" /><text>{{ publishing ? $t('importReview.publishing') : (selectedItem.status === ImportItemStatus.PendingPublication ? $t('importReview.promoteToLibrary') : $t('importReview.publishToLibrary')) }}</text>
           </view>
           <view
             v-if="selectedItem.status !== ImportItemStatus.Published"
             class="reject-button"
             @tap="handleReject"
           >
-            <X :size="17" /><text>拒绝</text>
+            <X :size="17" /><text>{{ $t('importReview.rejectBtn') }}</text>
           </view>
         </view>
       </view>

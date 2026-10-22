@@ -7,6 +7,7 @@
  */
 import { computed, ref } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
+import { useI18n } from 'vue-i18n'
 import { Camera, ChevronLeft, KeyRound, Trash2, UserRound } from 'lucide-vue-next'
 import { currentUser, isAuthenticated, loadCurrentUser } from '@/services/session'
 import { changePassword, deleteAvatar, updateDisplayName, uploadAvatar } from '@/services/profile'
@@ -14,6 +15,8 @@ import { ApiError, resolveUrl } from '@/services/http'
 import { describeError } from '@/services/errors'
 import { estimatePasswordStrength, passwordStrengthFill } from '@/utils/password-strength'
 import { useCapabilities } from '@/services/capabilities'
+
+const { t } = useI18n()
 
 // —— 昵称修改 ——
 const displayName = ref('')
@@ -36,7 +39,13 @@ const capabilities = useCapabilities()
 const minimumPasswordStrength = computed(() => capabilities.capabilities.minimumPasswordStrength)
 const passwordStrengthLevel = computed(() => estimatePasswordStrength(newPassword.value))
 const passwordStrengthWidth = computed(() => `${passwordStrengthFill(newPassword.value)}%`)
-const STRENGTH_LABELS = ['很弱', '较弱', '一般', '较强', '很强']
+const STRENGTH_LABELS = computed(() => [
+  t('profilePage.strengthLevel0'),
+  t('profilePage.strengthLevel1'),
+  t('profilePage.strengthLevel2'),
+  t('profilePage.strengthLevel3'),
+  t('profilePage.strengthLevel4'),
+])
 const STRENGTH_COLORS = ['#e05a3f', '#e08a3f', '#e0c23f', '#8fc93f', '#3fc96a']
 const passwordStrengthColor = computed(() => STRENGTH_COLORS[passwordStrengthLevel.value] ?? STRENGTH_COLORS[0])
 
@@ -56,11 +65,11 @@ onShow(() => {
 async function handleSaveName() {
   const name = displayName.value.trim()
   if (!name) {
-    nameMessage.value = '昵称不能为空'
+    nameMessage.value = t('profilePage.nicknameRequired')
     return
   }
   if (name.length > 100) {
-    nameMessage.value = '昵称最多 100 个字符'
+    nameMessage.value = t('profilePage.nicknameTooLong')
     return
   }
   savingName.value = true
@@ -68,7 +77,7 @@ async function handleSaveName() {
   try {
     await updateDisplayName(name)
     await loadCurrentUser()
-    uni.showToast({ title: '昵称已更新', icon: 'none' })
+    uni.showToast({ title: t('profilePage.nicknameUpdated'), icon: 'none' })
   } catch (error) {
     nameMessage.value = friendlyError(error)
   } finally {
@@ -91,7 +100,7 @@ function handleChangeAvatar() {
       try {
         await uploadAvatar(filePath)
         await loadCurrentUser()
-        uni.showToast({ title: '头像已更新', icon: 'none' })
+        uni.showToast({ title: t('profilePage.avatarUpdated'), icon: 'none' })
       } catch (error) {
         avatarMessage.value = friendlyError(error)
       } finally {
@@ -104,16 +113,16 @@ function handleChangeAvatar() {
 /** 删除头像（二次确认） */
 function handleDeleteAvatar() {
   uni.showModal({
-    title: '删除头像',
-    content: '删除后将恢复为字母头像，确定继续？',
-    confirmText: '删除',
+    title: t('profilePage.deleteAvatarTitle'),
+    content: t('profilePage.deleteAvatarConfirm'),
+    confirmText: t('profilePage.deleteBtn'),
     success: async ({ confirm }) => {
       if (!confirm) return
       avatarMessage.value = ''
       try {
         await deleteAvatar()
         await loadCurrentUser()
-        uni.showToast({ title: '头像已删除', icon: 'none' })
+        uni.showToast({ title: t('profilePage.avatarDeleted'), icon: 'none' })
       } catch (error) {
         avatarMessage.value = friendlyError(error)
       }
@@ -124,19 +133,21 @@ function handleDeleteAvatar() {
 /** 保存新密码 */
 async function handleSavePassword() {
   if (!currentPassword.value || !newPassword.value || !confirmPassword.value) {
-    passwordMessage.value = '请填写完整的密码信息'
+    passwordMessage.value = t('profilePage.passwordRequired')
     return
   }
   if (newPassword.value !== confirmPassword.value) {
-    passwordMessage.value = '两次输入的新密码不一致'
+    passwordMessage.value = t('profilePage.passwordsNotMatch')
     return
   }
   if (newPassword.value.length < 8) {
-    passwordMessage.value = '新密码至少 8 个字符'
+    passwordMessage.value = t('profilePage.passwordTooShort')
     return
   }
   if (passwordStrengthLevel.value < minimumPasswordStrength.value) {
-    passwordMessage.value = `密码强度不足，需达到「${STRENGTH_LABELS[minimumPasswordStrength.value]}」以上`
+    passwordMessage.value = t('profilePage.passwordStrengthBelow', {
+      level: STRENGTH_LABELS.value[minimumPasswordStrength.value],
+    })
     return
   }
   savingPassword.value = true
@@ -146,7 +157,7 @@ async function handleSavePassword() {
     currentPassword.value = ''
     newPassword.value = ''
     confirmPassword.value = ''
-    uni.showToast({ title: '密码已修改', icon: 'none' })
+    uni.showToast({ title: t('profilePage.passwordUpdated'), icon: 'none' })
   } catch (error) {
     passwordMessage.value = friendlyError(error)
   } finally {
@@ -157,10 +168,10 @@ async function handleSavePassword() {
 /** 统一错误文案转换：映射表集中在 services/errors，本页只补头像专属的状态码提示 */
 function friendlyError(error: unknown): string {
   if (error instanceof ApiError) {
-    if (error.status === 413) return '头像图片过大（上限 2MB）'
-    if (error.status === 415) return '仅支持 JPEG / PNG / WebP 图片'
+    if (error.status === 413) return t('profilePage.avatarTooLarge')
+    if (error.status === 415) return t('profilePage.avatarFormatInvalid')
   }
-  return describeError(error, '操作失败，请稍后再试')
+  return describeError(error, t('profilePage.operationFailed'))
 }
 
 /** 返回上一页（无上一页时回首页） */
@@ -179,11 +190,11 @@ function goBack() {
     <!-- 顶部返回栏 -->
     <view class="page-head">
       <view class="back-button" @tap="goBack"><ChevronLeft :size="20" /></view>
-      <text class="page-title">个人资料</text>
+      <text class="page-title">{{ $t('profile.title') }}</text>
     </view>
 
     <!-- 未登录兜底（理论上由抽屉入口保证已登录，防御性处理） -->
-    <view v-if="!isAuthenticated" class="login-hint">请先登录后管理个人资料</view>
+    <view v-if="!isAuthenticated" class="login-hint">{{ $t('profilePage.loginHint') }}</view>
 
     <template v-else>
       <!-- 头像区 -->
@@ -195,52 +206,52 @@ function goBack() {
           </view>
           <view class="avatar-actions">
             <view class="pill-button" @tap="handleChangeAvatar">
-              <Camera :size="16" /><text>{{ uploadingAvatar ? '上传中…' : '更换头像' }}</text>
+              <Camera :size="16" /><text>{{ uploadingAvatar ? $t('profilePage.uploading') : $t('profilePage.changeAvatar') }}</text>
             </view>
             <view v-if="hasAvatar" class="pill-button danger" @tap="handleDeleteAvatar">
-              <Trash2 :size="16" /><text>删除</text>
+              <Trash2 :size="16" /><text>{{ $t('profilePage.deleteBtn') }}</text>
             </view>
           </view>
         </view>
         <text v-if="avatarMessage" class="field-message">{{ avatarMessage }}</text>
-        <text class="section-hint">支持 JPEG / PNG / WebP，不超过 2MB</text>
+        <text class="section-hint">{{ $t('profilePage.avatarHint') }}</text>
       </view>
 
       <!-- 昵称 -->
       <view class="section">
-        <text class="section-title"><UserRound :size="17" /> 昵称</text>
-        <input v-model="displayName" class="field-input" type="text" placeholder="展示昵称" maxlength="100" />
+        <text class="section-title"><UserRound :size="17" /> {{ $t('auth.displayName') }}</text>
+        <input v-model="displayName" class="field-input" type="text" :placeholder="$t('profilePage.displayNamePlaceholder')" maxlength="100" />
         <view class="save-row">
           <text v-if="nameMessage" class="field-message">{{ nameMessage }}</text>
           <view class="save-button" :class="{ disabled: savingName }" @tap="handleSaveName">
-            <text>{{ savingName ? '保存中…' : '保存' }}</text>
+            <text>{{ savingName ? $t('profilePage.saving') : $t('profilePage.saveBtn') }}</text>
           </view>
         </view>
       </view>
 
       <!-- 账号邮箱（只读） -->
       <view class="section">
-        <text class="section-title">账号邮箱</text>
+        <text class="section-title">{{ $t('profilePage.accountEmail') }}</text>
         <view class="readonly-field">{{ currentUser?.email }}</view>
-        <text class="section-hint">邮箱为邀请注册时绑定，暂不支持修改</text>
+        <text class="section-hint">{{ $t('profilePage.emailReadonly') }}</text>
       </view>
 
       <!-- 修改密码 -->
       <view class="section">
-        <text class="section-title"><KeyRound :size="17" /> 修改密码</text>
-        <input v-model="currentPassword" class="field-input" password placeholder="当前密码" />
-        <input v-model="newPassword" class="field-input" password placeholder="新密码（至少 8 位）" />
+        <text class="section-title"><KeyRound :size="17" /> {{ $t('profilePage.changePassword') }}</text>
+        <input v-model="currentPassword" class="field-input" password :placeholder="$t('profilePage.currentPassword')" />
+        <input v-model="newPassword" class="field-input" password :placeholder="$t('profilePage.newPasswordPlaceholder')" />
         <view class="strength-row">
           <view class="strength-track">
             <view class="strength-fill" :style="{ width: passwordStrengthWidth, background: passwordStrengthColor }"></view>
           </view>
           <text class="strength-label">{{ STRENGTH_LABELS[passwordStrengthLevel] }}</text>
         </view>
-        <input v-model="confirmPassword" class="field-input" password placeholder="确认新密码" />
+        <input v-model="confirmPassword" class="field-input" password :placeholder="$t('profilePage.confirmPassword')" />
         <view class="save-row">
           <text v-if="passwordMessage" class="field-message">{{ passwordMessage }}</text>
           <view class="save-button" :class="{ disabled: savingPassword }" @tap="handleSavePassword">
-            <text>{{ savingPassword ? '提交中…' : '修改密码' }}</text>
+            <text>{{ savingPassword ? $t('profilePage.submitting') : $t('profilePage.changePassword') }}</text>
           </view>
         </view>
       </view>

@@ -28,6 +28,7 @@ import type {
   Track,
 } from '@/types/music'
 import { API_PREFIX, http, resolveUrl } from './http'
+import { t } from '@/locale'
 
 /**
  * 把后端曲目 DTO 映射为界面扁平视图模型 Track（纯函数）。
@@ -45,7 +46,7 @@ export function mapTrack(track: ApiTrack): Track {
   return {
     id: track.id,
     title: track.title,
-    artist: track.artists.map((artist) => artist.name).join(', ') || '未知艺人',
+    artist: track.artists.map((artist) => artist.name).join(', ') || t('catalog.unknownArtist'),
     album: track.album?.title ?? '',
     albumId: track.album?.id ?? null,
     cover: track.artworkUrl ? resolveUrl(track.artworkUrl) : '',

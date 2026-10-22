@@ -14,6 +14,7 @@
  */
 import { getAccessToken } from './tokens'
 import { API_PREFIX, http, resolveUrl } from './http'
+import { t } from '@/locale'
 import type { ApiMe } from '@/types/music'
 
 /** 修改展示昵称（1-100 字符）。返回更新后的用户资料。 */
@@ -41,15 +42,15 @@ export function uploadAvatar(filePath: string): Promise<{ avatarUrl: string }> {
           const body = typeof res.data === 'string' ? JSON.parse(res.data) : res.data
           if (res.statusCode < 200 || res.statusCode >= 300) {
             const detail = (body as { error?: { message?: string } })?.error
-            reject(new Error(detail?.message || `上传失败：${res.statusCode}`))
+            reject(new Error(detail?.message || t('services.uploadFailedWithStatus', { status: res.statusCode })))
             return
           }
           resolve(body as { avatarUrl: string })
         } catch (error) {
-          reject(new Error(error instanceof Error ? error.message : '上传响应解析失败'))
+          reject(new Error(error instanceof Error ? error.message : t('services.uploadResponseParseFailed')))
         }
       },
-      fail: (err) => reject(new Error(err.errMsg || '上传失败')),
+      fail: (err) => reject(new Error(err.errMsg || t('socialErrors.uploadFailed'))),
     })
   })
 }

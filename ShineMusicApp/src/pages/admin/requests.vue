@@ -11,6 +11,7 @@
  */
 import { ref } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
+import { useI18n } from 'vue-i18n'
 import { ChevronUp, Inbox, Play, RotateCcw, ShieldCheck, Upload, X } from 'lucide-vue-next'
 import { isAdmin } from '@/services/session'
 import { getAdminSongRequests, reopenSongRequest, updateSongRequestStatus } from '@/services/admin-requests'
@@ -19,16 +20,17 @@ import { ApiError } from '@/services/http'
 import { formatDate } from '@/utils/format'
 import type { ApiSongRequest, SongRequestStatus } from '@/types/music'
 
-// 状态筛选：空字符串表示全部
+// 状态筛选：空字符串表示全部（labelKey 为展示层 i18n key，key 仍是过滤逻辑用的状态枚举）
+const { t } = useI18n()
 type Filter = '' | SongRequestStatus
-const filters: { key: Filter; label: string }[] = [
-  { key: '', label: '全部' },
-  { key: 'open', label: '待处理' },
-  { key: 'planned', label: '已计划' },
-  { key: 'in_progress', label: '处理中' },
-  { key: 'fulfilled', label: '已入库' },
-  { key: 'declined', label: '已拒绝' },
-  { key: 'withdrawn', label: '已撤回' },
+const filters: { key: Filter; labelKey: string }[] = [
+  { key: '', labelKey: 'requestsAdmin.filterAll' },
+  { key: 'open', labelKey: 'requestsAdmin.filterOpen' },
+  { key: 'planned', labelKey: 'requestsAdmin.filterPlanned' },
+  { key: 'in_progress', labelKey: 'requestsAdmin.filterInProgress' },
+  { key: 'fulfilled', labelKey: 'requestsAdmin.filterFulfilled' },
+  { key: 'declined', labelKey: 'requestsAdmin.filterDeclined' },
+  { key: 'withdrawn', labelKey: 'requestsAdmin.filterWithdrawn' },
 ]
 
 const filter = ref<Filter>('')
@@ -75,10 +77,10 @@ async function patchStatus(item: ApiSongRequest, status: SongRequestStatus, admi
   busyId.value = item.id
   try {
     await updateSongRequestStatus(item.id, { status, adminNote })
-    uni.showToast({ title: '已更新', icon: 'none' })
+    uni.showToast({ title: t('requestsAdmin.updated'), icon: 'none' })
     await load()
   } catch (error) {
-    uni.showToast({ title: error instanceof ApiError ? error.message : '操作失败', icon: 'none' })
+    uni.showToast({ title: error instanceof ApiError ? error.message : t('requestsAdmin.actionFailed'), icon: 'none' })
   } finally {
     busyId.value = ''
   }
@@ -95,17 +97,17 @@ function handleStart(item: ApiSongRequest) {
 /** 拒绝：必须填写原因（后端同样强制） */
 function handleDecline(item: ApiSongRequest) {
   uni.showModal({
-    title: '拒绝需求',
-    content: `确定拒绝《${item.title}》吗？请填写原因（会记录并通知提交人）：`,
+    title: t('requestsAdmin.declineTitle'),
+    content: t('requestsAdmin.declineConfirm', { title: item.title }),
     editable: true,
-    placeholderText: '例如：版权受限 / 音源暂缺',
-    confirmText: '拒绝',
+    placeholderText: t('requestsAdmin.declinePlaceholder'),
+    confirmText: t('requestsAdmin.decline'),
     confirmColor: '#d0553a',
     success: (res) => {
       if (!res.confirm) return
       const note = ((res as unknown as { content?: string }).content ?? '').trim()
       if (!note) {
-        uni.showToast({ title: '拒绝必须填写原因', icon: 'none' })
+        uni.showToast({ title: t('requestsAdmin.declineReasonRequired'), icon: 'none' })
         return
       }
       void patchStatus(item, 'declined', note)
@@ -131,25 +133,25 @@ function handleFulfill(item: ApiSongRequest) {
 function handleReopen(item: ApiSongRequest) {
   if (busyId.value) return
   uni.showModal({
-    title: '重新开启需求',
-    content: `确定重新受理《${item.title}》吗？请填写原因（会通知提交人）：`,
+    title: t('requestsAdmin.reopenTitle'),
+    content: t('requestsAdmin.reopenConfirm', { title: item.title }),
     editable: true,
-    placeholderText: '例如：已补到正版音源',
-    confirmText: '重新开启',
+    placeholderText: t('requestsAdmin.reopenPlaceholder'),
+    confirmText: t('requestsAdmin.reopen'),
     success: async (res) => {
       if (!res.confirm) return
       const reason = ((res as unknown as { content?: string }).content ?? '').trim()
       if (!reason) {
-        uni.showToast({ title: '请填写重新开启的原因', icon: 'none' })
+        uni.showToast({ title: t('requestsAdmin.reopenReasonRequired'), icon: 'none' })
         return
       }
       busyId.value = item.id
       try {
         await reopenSongRequest(item.id, reason)
-        uni.showToast({ title: '已重新开启', icon: 'none' })
+        uni.showToast({ title: t('requestsAdmin.reopened'), icon: 'none' })
         await load()
       } catch (error) {
-        uni.showToast({ title: error instanceof ApiError ? error.message : '操作失败', icon: 'none' })
+        uni.showToast({ title: error instanceof ApiError ? error.message : t('requestsAdmin.actionFailed'), icon: 'none' })
       } finally {
         busyId.value = ''
       }
@@ -164,8 +166,8 @@ function handleReopen(item: ApiSongRequest) {
     <view class="page-heading">
       <view class="heading-icon"><ShieldCheck :size="20" /></view>
       <view class="heading-copy">
-        <text class="heading-title">需求管理</text>
-        <text class="heading-subtitle">纳入计划 · 上传满足 · 拒绝（附原因）</text>
+        <text class="heading-title">{{ $t('requestsAdmin.pageTitle') }}</text>
+        <text class="heading-subtitle">{{ $t('requestsAdmin.subtitle') }}</text>
       </view>
     </view>
 
@@ -178,15 +180,15 @@ function handleReopen(item: ApiSongRequest) {
         :class="{ active: filter === entry.key }"
         @tap="switchFilter(entry.key)"
       >
-        <text>{{ entry.label }}</text>
+        <text>{{ $t(entry.labelKey) }}</text>
       </view>
     </view>
 
-    <view v-if="loading" class="state-text">正在加载…</view>
-    <view v-else-if="loadError" class="state-text">加载失败，请稍后重试。</view>
+    <view v-if="loading" class="state-text">{{ $t('adminCommon.loading') }}</view>
+    <view v-else-if="loadError" class="state-text">{{ $t('requestsAdmin.loadError') }}</view>
     <view v-else-if="!items.length" class="state-empty">
       <Inbox :size="28" />
-      <text>暂无需求</text>
+      <text>{{ $t('requestsAdmin.empty') }}</text>
     </view>
 
     <view v-else class="request-list">
@@ -214,23 +216,23 @@ function handleReopen(item: ApiSongRequest) {
           class="card-actions"
         >
           <view v-if="item.status === 'open'" class="act-btn" @tap="handlePlan(item)">
-            <Play :size="14" /><text>纳入计划</text>
+            <Play :size="14" /><text>{{ $t('requestsAdmin.plan') }}</text>
           </view>
           <view v-if="item.status === 'planned'" class="act-btn" @tap="handleStart(item)">
-            <Play :size="14" /><text>开始处理</text>
+            <Play :size="14" /><text>{{ $t('requestsAdmin.start') }}</text>
           </view>
           <view class="act-btn primary" @tap="handleFulfill(item)">
-            <Upload :size="14" /><text>上传并满足</text>
+            <Upload :size="14" /><text>{{ $t('requestsAdmin.fulfill') }}</text>
           </view>
           <view class="act-btn danger" @tap="handleDecline(item)">
-            <X :size="14" /><text>拒绝</text>
+            <X :size="14" /><text>{{ $t('requestsAdmin.decline') }}</text>
           </view>
         </view>
 
         <!-- 已拒绝/已撤回的需求可重新开启（补到音源后回补 / 误撤回恢复） -->
         <view v-else-if="item.status === 'declined' || item.status === 'withdrawn'" class="card-actions">
           <view class="act-btn primary" @tap="handleReopen(item)">
-            <RotateCcw :size="14" /><text>重新开启</text>
+            <RotateCcw :size="14" /><text>{{ $t('requestsAdmin.reopen') }}</text>
           </view>
         </view>
       </view>

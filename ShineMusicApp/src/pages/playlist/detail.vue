@@ -6,6 +6,7 @@
  */
 import { ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
+import { useI18n } from 'vue-i18n'
 import { ListMusic, Pencil, Play, Plus, Trash2, X } from 'lucide-vue-next'
 import TrackRow from '@/components/TrackRow.vue'
 import PlayerBar from '@/components/PlayerBar.vue'
@@ -18,6 +19,8 @@ import {
 import { playQueue } from '@/services/player'
 import { resolveUrl } from '@/services/http'
 import type { ApiPlaylistDetail, Track } from '@/types/music'
+
+const { t } = useI18n()
 
 // 页面状态：歌单 ID / 歌单详情 / 曲目列表 / 加载中 / 加载失败
 const playlistId = ref('')
@@ -67,23 +70,23 @@ function playAll() {
  */
 function handleRename() {
   uni.showModal({
-    title: '修改歌单',
+    title: t('playlistPage.renameTitle'),
     editable: true,
     content: detail.value?.name,
-    placeholderText: '歌单名称',
+    placeholderText: t('playlistPage.namePlaceholder'),
     success: async ({ confirm, content }) => {
       if (!confirm) return
       const name = (content ?? '').trim()
       if (!name) {
-        uni.showToast({ title: '名字不能为空', icon: 'none' })
+        uni.showToast({ title: t('playlistPage.nameRequired'), icon: 'none' })
         return
       }
       try {
         await renamePlaylist(playlistId.value, name)
-        uni.showToast({ title: '已保存', icon: 'none' })
+        uni.showToast({ title: t('playlistPage.saved'), icon: 'none' })
         void load()
       } catch {
-        uni.showToast({ title: '保存失败', icon: 'none' })
+        uni.showToast({ title: t('playlistPage.saveFailed'), icon: 'none' })
       }
     },
   })
@@ -94,18 +97,18 @@ function handleRename() {
  */
 function handleDelete() {
   uni.showModal({
-    title: '删除歌单',
-    content: `确定删除“${detail.value?.name ?? ''}”吗？此操作不可恢复。`,
-    confirmText: '删除',
+    title: t('playlistPage.deleteTitle'),
+    content: t('playlistPage.deleteConfirm', { name: detail.value?.name ?? '' }),
+    confirmText: t('playlistPage.delete'),
     confirmColor: '#d0553a',
     success: async ({ confirm }) => {
       if (!confirm) return
       try {
         await deletePlaylist(playlistId.value)
-        uni.showToast({ title: '歌单已删除', icon: 'none' })
+        uni.showToast({ title: t('playlistPage.deleted'), icon: 'none' })
         setTimeout(() => uni.navigateBack(), 400)
       } catch {
-        uni.showToast({ title: '删除失败', icon: 'none' })
+        uni.showToast({ title: t('playlistPage.deleteFailed'), icon: 'none' })
       }
     },
   })
@@ -126,7 +129,7 @@ async function handleRemove(track: Track) {
     await removePlaylistTrack(playlistId.value, track.id)
     tracks.value = tracks.value.filter((item) => item.id !== track.id) // 成功后本地移除
   } catch {
-    uni.showToast({ title: '移除失败', icon: 'none' })
+    uni.showToast({ title: t('playlistPage.removeFailed'), icon: 'none' })
   }
 }
 </script>
@@ -134,8 +137,8 @@ async function handleRemove(track: Track) {
 <template>
   <scroll-view class="detail-page" scroll-y :show-scrollbar="false">
     <!-- 加载中 / 失败或不存在 的状态提示 -->
-    <view v-if="loading" class="state-text">正在加载…</view>
-    <view v-else-if="loadError || !detail" class="state-text">歌单不存在或暂时无法打开。</view>
+    <view v-if="loading" class="state-text">{{ t('playlistPage.loading') }}</view>
+    <view v-else-if="loadError || !detail" class="state-text">{{ t('playlistPage.notFound') }}</view>
     <template v-else>
       <!-- 歌单头部：封面、名称、简介与操作组（播放/添加/重命名/删除） -->
       <view class="detail-header">
@@ -145,9 +148,9 @@ async function handleRemove(track: Track) {
         </view>
         <text class="detail-title">{{ detail.name }}</text>
         <text v-if="detail.description" class="detail-sub">{{ detail.description }}</text>
-        <text class="detail-meta">{{ tracks.length }} 首</text>
+        <text class="detail-meta">{{ t('catalog.trackCount', { count: tracks.length }) }}</text>
         <view class="header-actions">
-          <view class="play-all" @tap="playAll"><Play :size="16" fill="currentColor" /><text>播放全部</text></view>
+          <view class="play-all" @tap="playAll"><Play :size="16" fill="currentColor" /><text>{{ t('playlistPage.playAll') }}</text></view>
           <view class="icon-action" @tap="goPickTracks"><Plus :size="20" /></view>
           <view class="icon-action" @tap="handleRename"><Pencil :size="18" /></view>
           <view class="icon-action danger" @tap="handleDelete"><Trash2 :size="18" /></view>
@@ -162,8 +165,8 @@ async function handleRemove(track: Track) {
           <view class="remove-button" @tap.stop="handleRemove(track)"><X :size="15" /></view>
         </view>
         <view v-if="!tracks.length" class="empty-tip">
-          <text>歌单还是空的</text>
-          <view class="add-button" @tap="goPickTracks"><Plus :size="15" /><text>添加歌曲</text></view>
+          <text>{{ t('playlistPage.empty') }}</text>
+          <view class="add-button" @tap="goPickTracks"><Plus :size="15" /><text>{{ t('playlistPage.addTracks') }}</text></view>
         </view>
       </view>
       <view class="page-bottom-spacer"></view>
