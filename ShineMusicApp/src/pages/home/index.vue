@@ -39,7 +39,7 @@ import PlayerBar from '@/components/PlayerBar.vue'
 import CoverArt from '@/components/CoverArt.vue'
 import ProfileDrawer from '@/components/ProfileDrawer.vue'
 import QuickPanel from '@/components/QuickPanel.vue'
-import { getGenres, getHomeFeed, peekGenresCache, peekHomeFeedCache, searchTracks } from '@/services/catalog'
+import { getGenres, getHomeFeed, getTracks, peekGenresCache, peekHomeFeedCache, searchTracks } from '@/services/catalog'
 import { resolveUrl } from '@/services/http'
 import { getDailyRecommendations, peekDailyCache } from '@/services/recommend'
 import { playQueue, playTrack } from '@/services/player'
@@ -132,6 +132,86 @@ const canUserUpload = computed(() => capabilities.capabilities.userUploads)
 
 // 后端功能开关（用户歌单、歌曲需求、用户上传等能力是否开放）
 const capabilities = useCapabilities()
+
+// —— “曲库”页匿名态：公开曲库（GET /tracks 匿名可读，后端只返回已发布曲目） ——
+// 未登录也能浏览并播放，收藏/歌单/评论等互动仍由各组件的 requireLogin() 拦截。
+const publicLibraryItems = ref<Track[]>([])
+const publicLibraryPage = ref(1)
+const publicLibraryTotal = ref(0)
+const publicLibraryLoading = ref(false)
+const publicLibraryFinished = ref(false)
+const publicLibraryGenre = ref('全部')
+const publicLibrarySort = ref<'recent' | 'title'>('recent')
+// 请求序号：切风格/排序时丢弃过期响应，避免旧页数据覆盖新筛选结果
+let publicLibrarySeq = 0
+
+/**
+ * 加载公开曲库（仅未登录时生效，20 条/页追加）。
+ * @param reset true 表示从第一页重新拉取（切换风格/排序）
+ */
+async function loadPublicLibrary(reset = false) {
+  if (isAuthenticated.value) return
+  if (!reset && (publicLibraryLoading.value || publicLibraryFinished.value)) return
+  const seq = ++publicLibrarySeq
+  if (reset) {
+    publicLibraryPage.value = 1
+    publicLibraryFinished.value = false
+  }
+  publicLibraryLoading.value = true
+  try {
+    const result = await getTracks({
+      genre: publicLibraryGenre.value === '全部' ? undefined : publicLibraryGenre.value,
+      sort: publicLibrarySort.value,
+      page: publicLibraryPage.value,
+      pageSize: 20,
+    })
+    if (seq !== publicLibrarySeq) return
+    publicLibraryItems.value = reset
+      ? [...result.items]
+      : [...publicLibraryItems.value, ...result.items]
+    publicLibraryTotal.value = result.total
+    publicLibraryFinished.value =
+      publicLibraryItems.value.length >= result.total || result.items.length === 0
+    if (!publicLibraryFinished.value) publicLibraryPage.value += 1
+  } catch {
+    if (seq === publicLibrarySeq) {
+      uni.showToast({ title: t('homePage.publicLibraryLoadFailed'), icon: 'none' })
+    }
+  } finally {
+    if (seq === publicLibrarySeq) publicLibraryLoading.value = false
+  }
+}
+
+/** 切换公开曲库风格筛选 */
+function selectPublicGenre(genre: string) {
+  if (publicLibraryGenre.value === genre) return
+  publicLibraryGenre.value = genre
+  void loadPublicLibrary(true)
+}
+
+/** 切换公开曲库排序方式 */
+function selectPublicSort(sort: 'recent' | 'title') {
+  if (publicLibrarySort.value === sort) return
+  publicLibrarySort.value = sort
+  void loadPublicLibrary(true)
+}
+
+/** 页面滚动触底：仅匿名曲库 tab 需要继续分页 */
+function onScrollLower() {
+  if (activeTab.value === '曲库' && !isAuthenticated.value) void loadPublicLibrary()
+}
+
+// 登录态变化：匿名公开曲库与「我的曲库」互斥，清空匿名列表避免切换时闪现旧数据
+// 在「曲库」tab 退出登录时立即拉取公开曲库（登出发生在同一页，不会触发 onShow）
+watch(isAuthenticated, (authed) => {
+  publicLibrarySeq += 1
+  publicLibraryItems.value = []
+  publicLibraryPage.value = 1
+  publicLibraryTotal.value = 0
+  publicLibraryFinished.value = false
+  publicLibraryLoading.value = false
+  if (!authed && activeTab.value === '曲库') void loadPublicLibrary(true)
+})
 
 /**
  * 把曲库条目映射为播放器所需的 Track 结构。
@@ -433,7 +513,10 @@ watch(query, (value) => {
 function setTab(tab: string) {
   activeTab.value = tab
   if (tab === '我的') void loadLibrary()
-  if (tab === '曲库' && isAuthenticated.value) void loadMyLibrary(true)
+  if (tab === '曲库') {
+    if (isAuthenticated.value) void loadMyLibrary(true)
+    else if (!publicLibraryItems.value.length) void loadPublicLibrary(true)
+  }
 }
 
 /** 点击顶部搜索框：聚焦即跳到“发现”tab（搜索词仍由输入框双向绑定） */
@@ -462,7 +545,10 @@ async function loadLibrary() {
 // 保证上传完成、登录状态变化后列表立即更新
 onShow(() => {
   if (activeTab.value === '我的') void loadLibrary()
-  if (activeTab.value === '曲库' && isAuthenticated.value) void loadMyLibrary(true)
+  if (activeTab.value === '曲库') {
+    if (isAuthenticated.value) void loadMyLibrary(true)
+    else if (!publicLibraryItems.value.length) void loadPublicLibrary(true)
+  }
   void refreshUnreadCount() // 从消息页返回/登录返回时刷新角标；未登录时内部静默失败
 })
 
@@ -613,7 +699,7 @@ function coverOf(collection: ApiCollectionSummary) {
       <view class="sm-glow purple" style="width: 200px; height: 200px; bottom: 70px; left: -70px;"></view>
     </view>
 
-    <scroll-view class="page-scroll" scroll-y :show-scrollbar="false">
+    <scroll-view class="page-scroll" scroll-y :show-scrollbar="false" @scrolltolower="onScrollLower">
       <!-- 顶部品牌栏：Logo + 头像（点击滑出个人抽屉） -->
       <view class="topbar">
         <view class="brand-lockup">
@@ -857,16 +943,78 @@ function coverOf(collection: ApiCollectionSummary) {
         </view>
       </template>
 
-      <!-- 曲库：我的上传/引用曲目（含私有与公开） -->
+      <!-- 曲库：匿名态为公开曲库（可听歌），登录后为我的上传/引用曲目（含私有与公开） -->
       <template v-else-if="activeTab === '曲库'">
         <view class="library-wrap">
-          <!-- 未登录：登录引导卡 -->
-          <view v-if="!isAuthenticated" class="login-card">
-            <view class="login-icon"><Library :size="22" /></view>
-            <text class="login-title">{{ $t('homePage.libraryLoginTitle') }}</text>
-            <text class="login-copy">{{ $t('homePage.libraryLoginCopy') }}</text>
-            <view class="login-button" @tap="goLogin"><text>{{ $t('homePage.loginOrRegister') }}</text></view>
-          </view>
+          <!-- 未登录：温和登录提示 + 公开曲库列表（互动操作由各组件的 requireLogin 拦截） -->
+          <template v-if="!isAuthenticated">
+            <view class="public-hint">
+              <text class="public-hint-title">{{ $t('homePage.publicLibraryHint') }}</text>
+              <view class="public-hint-action" @tap="goLogin">
+                <text>{{ $t('homePage.publicLibraryLoginAction') }}</text>
+              </view>
+            </view>
+
+            <view class="section-heading public-heading">
+              <view>
+                <text class="section-kicker">PUBLIC LIBRARY</text>
+                <text class="section-title">{{ $t('homePage.publicLibraryTitle') }}</text>
+              </view>
+              <text class="library-count">{{ $t('homePage.publicLibraryTotal', { count: publicLibraryTotal }) }}</text>
+            </view>
+
+            <!-- 风格筛选 -->
+            <scroll-view class="public-chips" scroll-x :show-scrollbar="false">
+              <view class="public-chips-row">
+                <view
+                  v-for="genre in genreChips"
+                  :key="genre"
+                  class="public-chip"
+                  :class="{ on: publicLibraryGenre === genre }"
+                  @tap="selectPublicGenre(genre)"
+                >
+                  <text>{{ genreLabel(genre) }}</text>
+                </view>
+              </view>
+            </scroll-view>
+
+            <!-- 排序切换 -->
+            <view class="public-sort">
+              <view
+                class="public-sort-item"
+                :class="{ on: publicLibrarySort === 'recent' }"
+                @tap="selectPublicSort('recent')"
+              >
+                <text>{{ $t('homePage.publicLibrarySortRecent') }}</text>
+              </view>
+              <view
+                class="public-sort-item"
+                :class="{ on: publicLibrarySort === 'title' }"
+                @tap="selectPublicSort('title')"
+              >
+                <text>{{ $t('homePage.publicLibrarySortTitle') }}</text>
+              </view>
+            </view>
+
+            <view v-if="publicLibraryLoading && !publicLibraryItems.length" class="inline-error">{{ $t('homePage.loading') }}</view>
+            <view v-else-if="!publicLibraryItems.length" class="empty-state">
+              <view class="empty-icon"><Library :size="23" /></view>
+              <text class="empty-title">{{ $t('homePage.publicLibraryEmpty') }}</text>
+            </view>
+            <template v-else>
+              <view class="track-list">
+                <TrackRow
+                  v-for="(track, index) in publicLibraryItems"
+                  :key="track.id"
+                  :track="track"
+                  :index="index"
+                  :queue="publicLibraryItems"
+                />
+              </view>
+              <view v-if="publicLibraryLoading" class="public-more">{{ $t('homePage.loading') }}</view>
+              <view v-else-if="publicLibraryFinished" class="public-more">{{ $t('homePage.publicLibraryFinished') }}</view>
+            </template>
+          </template>
 
           <!-- 已登录：标题行（上传入口受开关控制）/ 加载 / 空态 / 列表 -->
           <template v-else>
@@ -1227,6 +1375,19 @@ function coverOf(collection: ApiCollectionSummary) {
 .genre-chip :deep(svg), .genre-chip :deep(.lucide-shim) { color: var(--sm-text-3); }
 .search-results { margin-top: 40rpx; }
 .library-wrap { padding-top: 40rpx; }
+/* 曲库 tab · 匿名态：温和登录提示条 + 风格/排序筛选 + 公开曲目列表 */
+.public-hint { display: flex; align-items: center; gap: 18rpx; margin-top: 4rpx; padding: 20rpx 24rpx; border: 1rpx solid var(--sm-border); border-radius: 20rpx; background: var(--sm-surface); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); }
+.public-hint-title { flex: 1; min-width: 0; color: var(--sm-text-2); font-size: 18rpx; line-height: 1.5; }
+.public-hint-action { flex: none; padding: 10rpx 22rpx; border-radius: 30rpx; background: var(--sm-accent-soft); color: var(--sm-accent); font-size: 18rpx; font-weight: 700; }
+.public-heading { margin-top: 34rpx; }
+.public-chips { width: calc(100% + 40rpx); margin-top: 24rpx; }
+.public-chips-row { display: flex; gap: 13rpx; padding-right: 40rpx; }
+.public-chip { display: flex; flex: none; align-items: center; height: 62rpx; padding: 0 22rpx; border: 1rpx solid var(--sm-border); border-radius: 34rpx; background: var(--sm-surface); color: var(--sm-text-2); font-size: 19rpx; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+.public-chip.on { border-color: transparent; background: var(--sm-accent); color: var(--sm-accent-ink); font-weight: 700; }
+.public-sort { display: flex; gap: 12rpx; margin: 22rpx 0 20rpx; padding: 5rpx; border: 1rpx solid var(--sm-border); border-radius: 18rpx; background: var(--sm-surface); }
+.public-sort-item { display: flex; flex: 1; align-items: center; justify-content: center; height: 58rpx; border-radius: 14rpx; color: var(--sm-text-2); font-size: 18rpx; }
+.public-sort-item.on { background: var(--sm-surface-3); color: var(--sm-text); font-weight: 700; }
+.public-more { padding: 30rpx 0 10rpx; color: var(--sm-text-3); font-size: 17rpx; text-align: center; }
 .library-block { margin-top: 44rpx; }
 .profile-card, .playlist-row, .request-banner, .login-card { display: flex; align-items: center; gap: 17rpx; margin-top: 12rpx; padding: 24rpx 26rpx; border: 1rpx solid var(--sm-border); border-radius: 20rpx; background: var(--sm-surface); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); }
 .profile-avatar { display: grid; flex: none; place-items: center; width: 80rpx; height: 80rpx; border-radius: 50%; background: var(--sm-avatar-bg); color: var(--sm-cover-ink); font-size: 28rpx; font-weight: 700; }

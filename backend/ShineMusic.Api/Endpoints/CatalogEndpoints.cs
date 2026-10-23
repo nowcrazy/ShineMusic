@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Microsoft.Net.Http.Headers;
 using ShineMusic.Api.Contracts;
 using ShineMusic.Api.Data;
 using ShineMusic.Api.Extensions;
@@ -127,7 +128,13 @@ public sealed class CatalogController : ControllerBase
                 statusCode: StatusCodes.Status415UnsupportedMediaType);
         }
 
-        return Results.File(filePath, contentType, enableRangeProcessing: true);
+        // ETag + Last-Modified + 短缓存：重复播放/回拖进度可命中客户端缓存（弱网下少一次整段重下）。
+        // 已发布曲目的音频文件是不可变的，1 小时缓存不会出现明显陈旧。
+        var fileInfo = new FileInfo(filePath);
+        var lastModified = new DateTimeOffset(fileInfo.LastWriteTimeUtc);
+        var entityTag = new EntityTagHeaderValue($"\"{fileInfo.Length:x}-{fileInfo.LastWriteTimeUtc.Ticks:x}\"");
+        HttpContext.Response.Headers.CacheControl = "public, max-age=3600";
+        return Results.File(filePath, contentType, lastModified: lastModified, entityTag: entityTag, enableRangeProcessing: true);
     }
 
     [HttpGet("albums", Name = "GetAlbums")]

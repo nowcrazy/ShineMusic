@@ -179,47 +179,6 @@ public sealed class CatalogManagementController : ControllerBase
         return Results.Ok(new ArtistSummaryDto(artist.Id, artist.Name));
     }
 
-    [HttpPut("collections/{collectionId:guid}", Name = "ReplaceAdminCollection")]
-    [FeatureGate(nameof(FeatureOptions.EditorialCollections))]
-    public async Task<IResult> ReplaceCollection(
-        Guid collectionId,
-        ReplaceAdminCollectionRequest update,
-        MusicDbContext db,
-        CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrWhiteSpace(update.Title) || update.Title.Trim().Length > 200)
-            return ApiResults.ValidationError(HttpContext, "title", "Title is required and must be at most 200 characters.");
-        if (update.Description?.Length > 2000 || update.TrackIds is null || update.TrackIds.Count > 500)
-            return ApiResults.ValidationError(HttpContext, "collection", "Description or track list exceeds its limit.");
-        if (update.TrackIds.Distinct().Count() != update.TrackIds.Count)
-            return ApiResults.ValidationError(HttpContext, "trackIds", "Track IDs must be unique.");
-
-        var collection = await db.EditorialCollections.Include(item => item.CollectionTracks)
-            .FirstOrDefaultAsync(item => item.Id == collectionId, cancellationToken);
-        if (collection is null)
-            return ApiResults.NotFound(HttpContext);
-        if (update.ArtworkId.HasValue && !await db.Artworks.AnyAsync(item => item.Id == update.ArtworkId.Value, cancellationToken))
-            return ApiResults.NotFound(HttpContext);
-        var publishedTrackIds = await db.Tracks.Where(track => track.PublishedAt != null && update.TrackIds.Contains(track.Id))
-            .Select(track => track.Id).ToListAsync(cancellationToken);
-        if (publishedTrackIds.Count != update.TrackIds.Count)
-            return ApiResults.ValidationError(HttpContext, "trackIds", "Every collection track must be published.");
-
-        collection.Title = update.Title.Trim();
-        collection.Description = string.IsNullOrWhiteSpace(update.Description) ? null : update.Description.Trim();
-        collection.ArtworkId = update.ArtworkId;
-        collection.SortOrder = update.SortOrder;
-        collection.IsPublished = update.IsPublished;
-        db.Set<CollectionTrack>().RemoveRange(collection.CollectionTracks);
-        for (var index = 0; index < update.TrackIds.Count; index++)
-            db.Set<CollectionTrack>().Add(new CollectionTrack { CollectionId = collection.Id, TrackId = update.TrackIds[index], SortOrder = index });
-
-        AdminAudit.Add(HttpContext, db, "collection.replaced", "collection", collection.Id, new { update.IsPublished, trackCount = update.TrackIds.Count });
-        await db.SaveChangesAsync(cancellationToken);
-        return Results.Ok(new CollectionSummaryDto(collection.Id, collection.Title, collection.Description,
-            collection.ArtworkId is null ? null : $"/api/v1/artwork/{collection.ArtworkId}", update.TrackIds.Count));
-    }
-
     private static async Task<Artist> FindOrCreateArtistAsync(MusicDbContext db, string name, CancellationToken cancellationToken)
     {
         var artist = await db.Artists.FirstOrDefaultAsync(item => item.Name.ToUpper() == name.ToUpper(), cancellationToken);
@@ -413,10 +372,3 @@ public sealed record UpdateAdminTrackRequest(
 
 public sealed record UpdateAdminAlbumRequest(string? Title, IReadOnlyList<string>? Artists, int? ReleaseYear, Guid? ArtworkId);
 public sealed record UpdateAdminArtistRequest(string? Name, string? Biography);
-public sealed record ReplaceAdminCollectionRequest(
-    string Title,
-    string? Description,
-    Guid? ArtworkId,
-    int SortOrder,
-    bool IsPublished,
-    IReadOnlyList<Guid>? TrackIds);

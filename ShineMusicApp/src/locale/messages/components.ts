@@ -76,6 +76,7 @@ export const componentsMessages = {
       loading: '图片加载中…',
       gestureHint: '拖动调整位置 · 双指或滚轮缩放',
       reset: '重置',
+      exportFailed: '裁剪导出失败，请重试',
     },
   },
   en: {
@@ -150,6 +151,7 @@ export const componentsMessages = {
       loading: 'Loading image…',
       gestureHint: 'Drag to reposition · Pinch or scroll to zoom',
       reset: 'Reset',
+      exportFailed: 'Failed to export the cropped image, please retry',
     },
   },
   ja: {
@@ -224,6 +226,7 @@ export const componentsMessages = {
       loading: '画像を読み込んでいます…',
       gestureHint: 'ドラッグで位置調整 · ピンチまたはスクロールで拡大縮小',
       reset: 'リセット',
+      exportFailed: '切り抜きの書き出しに失敗しました。再試行してください',
     },
   },
 }

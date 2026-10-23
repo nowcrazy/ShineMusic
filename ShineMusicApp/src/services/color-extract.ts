@@ -136,83 +136,95 @@ export async function extractPalette(imageSrc: string): Promise<ExtractedPalette
     if (!ctx) return { ...FALLBACK_PALETTE }
     ctx.drawImage(image, 0, 0, width, height)
     const { data } = ctx.getImageData(0, 0, width, height)
-
-    // 24 个色相桶（每桶 15°）：聚合出现频次与饱和度均值，同时记录整体平均色。
-    interface HueBin {
-      count: number
-      hueSum: number
-      satSum: number
-      lightSum: number
-    }
-    const bins: HueBin[] = Array.from({ length: 24 }, () => ({ count: 0, hueSum: 0, satSum: 0, lightSum: 0 }))
-    let baseR = 0
-    let baseG = 0
-    let baseB = 0
-    let baseCount = 0
-
-    for (let i = 0; i < data.length; i += 4) {
-      const alpha = data[i + 3]
-      if (alpha < 128) continue
-      const r = data[i]
-      const g = data[i + 1]
-      const b = data[i + 2]
-      baseR += r
-      baseG += g
-      baseB += b
-      baseCount++
-      const { h, s, l } = rgbToHsl(r, g, b)
-      // 过暗/过亮/灰阶像素无法充当强调色，跳过强调统计。
-      if (l < 0.1 || l > 0.95 || s < 0.15) continue
-      const bin = Math.floor(h / 15) % 24
-      bins[bin].count++
-      bins[bin].hueSum += h
-      bins[bin].satSum += s
-      bins[bin].lightSum += l
-    }
-
-    if (baseCount === 0) return { ...FALLBACK_PALETTE }
-
-    // 评分 = 频次 × (0.25 + 平均饱和度)：高饱和的主导色相优先。
-    const ranked = bins
-      .map((bin, index) => ({
-        index,
-        count: bin.count,
-        hue: bin.count > 0 ? bin.hueSum / bin.count : index * 15 + 7.5,
-        sat: bin.count > 0 ? bin.satSum / bin.count : 0,
-        light: bin.count > 0 ? bin.lightSum / bin.count : 0.5,
-      }))
-      .filter((bin) => bin.count >= Math.max(8, (width * height) * 0.008))
-      .sort((a, b) => b.count * (0.25 + b.sat) - a.count * (0.25 + a.sat))
-
-    const accent = tuneAccent(
-      ranked[0]?.hue ?? 110,
-      ranked[0]?.sat ?? 0.6,
-      ranked[0]?.light ?? 0.5,
-    )
-
-    // 第二/第三色：从剩余桶中找与已选颜色色相距离 > 40° 的最大桶；找不到就色相旋转兜底。
-    const accentHsl = hexToHsl(accent)!
-    const picked: number[] = [accentHsl.h]
-    const pickDistinct = (): string => {
-      const candidate = ranked.find(
-        (bin) => picked.every((hue) => hueDistance(hue, bin.hue) > 40),
-      )
-      if (candidate) {
-        picked.push(candidate.hue)
-        return tuneAccent(candidate.hue, candidate.sat, candidate.light)
-      }
-      const rotated = hueRotate(accent, 35 + picked.length * 40)
-      picked.push(hexToHsl(rotated)!.h)
-      return rotated
-    }
-    const accent2 = pickDistinct()
-    const accent3 = pickDistinct()
-
-    return { accent, accent2, accent3 }
+    return paletteFromPixels(data, width, height)
   } catch {
     // 图片解码失败/跨域污染/无 canvas：统一回退默认色板。
     return { ...FALLBACK_PALETTE }
   }
+}
+
+/**
+ * 由 RGBA 像素数据计算三色强调色板（H5 与 App 共用同一套算法）。
+ * App 端由 WallpaperCropper 在小画布上取到像素后调用（无 DOM canvas 可用）。
+ * @param data RGBA 顺序的像素数组（长度 = width × height × 4）
+ */
+export function paletteFromPixels(
+  data: ArrayLike<number>,
+  width: number,
+  height: number,
+): ExtractedPalette {
+  // 24 个色相桶（每桶 15°）：聚合出现频次与饱和度均值，同时记录整体平均色。
+  interface HueBin {
+    count: number
+    hueSum: number
+    satSum: number
+    lightSum: number
+  }
+  const bins: HueBin[] = Array.from({ length: 24 }, () => ({ count: 0, hueSum: 0, satSum: 0, lightSum: 0 }))
+  let baseR = 0
+  let baseG = 0
+  let baseB = 0
+  let baseCount = 0
+
+  for (let i = 0; i < data.length; i += 4) {
+    const alpha = data[i + 3]
+    if (alpha < 128) continue
+    const r = data[i]
+    const g = data[i + 1]
+    const b = data[i + 2]
+    baseR += r
+    baseG += g
+    baseB += b
+    baseCount++
+    const { h, s, l } = rgbToHsl(r, g, b)
+    // 过暗/过亮/灰阶像素无法充当强调色，跳过强调统计。
+    if (l < 0.1 || l > 0.95 || s < 0.15) continue
+    const bin = Math.floor(h / 15) % 24
+    bins[bin].count++
+    bins[bin].hueSum += h
+    bins[bin].satSum += s
+    bins[bin].lightSum += l
+  }
+
+  if (baseCount === 0) return { ...FALLBACK_PALETTE }
+
+  // 评分 = 频次 × (0.25 + 平均饱和度)：高饱和的主导色相优先。
+  const ranked = bins
+    .map((bin, index) => ({
+      index,
+      count: bin.count,
+      hue: bin.count > 0 ? bin.hueSum / bin.count : index * 15 + 7.5,
+      sat: bin.count > 0 ? bin.satSum / bin.count : 0,
+      light: bin.count > 0 ? bin.lightSum / bin.count : 0.5,
+    }))
+    .filter((bin) => bin.count >= Math.max(8, (width * height) * 0.008))
+    .sort((a, b) => b.count * (0.25 + b.sat) - a.count * (0.25 + a.sat))
+
+  const accent = tuneAccent(
+    ranked[0]?.hue ?? 110,
+    ranked[0]?.sat ?? 0.6,
+    ranked[0]?.light ?? 0.5,
+  )
+
+  // 第二/第三色：从剩余桶中找与已选颜色色相距离 > 40° 的最大桶；找不到就色相旋转兜底。
+  const accentHsl = hexToHsl(accent)!
+  const picked: number[] = [accentHsl.h]
+  const pickDistinct = (): string => {
+    const candidate = ranked.find(
+      (bin) => picked.every((hue) => hueDistance(hue, bin.hue) > 40),
+    )
+    if (candidate) {
+      picked.push(candidate.hue)
+      return tuneAccent(candidate.hue, candidate.sat, candidate.light)
+    }
+    const rotated = hueRotate(accent, 35 + picked.length * 40)
+    picked.push(hexToHsl(rotated)!.h)
+    return rotated
+  }
+  const accent2 = pickDistinct()
+  const accent3 = pickDistinct()
+
+  return { accent, accent2, accent3 }
 }
 
 /** 加载图片（blob URL / 同源地址），解码完成后 resolve */

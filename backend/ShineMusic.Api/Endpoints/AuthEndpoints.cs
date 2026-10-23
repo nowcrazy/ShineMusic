@@ -31,9 +31,26 @@ namespace ShineMusic.Api.Endpoints;
 [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
 public sealed class AuthController : ControllerBase
 {
-    private readonly ILogger<AuthController> _logger;
+    private readonly ILogger _logger;
 
-    public AuthController(ILogger<AuthController> logger) => _logger = logger;
+    public AuthController(ILoggerFactory loggerFactory)
+    {
+        // category 以 "Auth" 开头 → 文件日志提供器路由到 logs/auth/auth-YYYY-MM-DD.log。
+        _logger = loggerFactory.CreateLogger("Auth");
+    }
+
+    /// <summary>客户端 IP：反向代理后取值由 ForwardedHeaders 决定，未配置时即直连地址。</summary>
+    private string ClientIp => HttpContext?.Connection.RemoteIpAddress?.ToString() ?? "-";
+
+    /// <summary>客户端 User-Agent，空值时写占位符，便于日志对齐。</summary>
+    private string ClientAgent
+    {
+        get
+        {
+            var agent = HttpContext?.Request.Headers.UserAgent.ToString();
+            return string.IsNullOrWhiteSpace(agent) ? "-" : agent;
+        }
+    }
 
     // 【POST /api/v1/auth/invitations/validate】注册前校验邀请令牌（匿名）。
     // 请求体：ValidateInvitationRequest.InvitationToken（明文一次性令牌，可为邮件链接令牌或注册码/CDK）。
@@ -128,7 +145,11 @@ public sealed class AuthController : ControllerBase
             if (!TryNormalizeEmail(request.Email, out email!))
                 return ApiResults.ValidationError(HttpContext, "email", "A valid email address is required for this registration code."); // 400：CDK 自填邮箱非法
             if (await userManager.FindByEmailAsync(email) is not null)
+            {
+                _logger.LogWarning("Register rejected | Reason=email_conflict | Email={Email} | Ip={Ip}",
+                    email, ClientIp);
                 return Results.Conflict(new ApiErrorResponse(new ApiErrorDetail(ErrorCodes.ResourceConflict, "An account already exists for this email.", HttpContext.TraceIdentifier))); // 409：邮箱已被占用
+            }
         }
         else
         {
@@ -172,6 +193,8 @@ public sealed class AuthController : ControllerBase
         }
 
         await transaction.CommitAsync(cancellationToken);
+        _logger.LogInformation("Register succeeded | UserId={UserId} | Email={Email} | Channel={Channel} | Ip={Ip} | Ua={Ua}",
+            user.Id, user.Email, isCode ? "code" : "email", ClientIp, ClientAgent);
         return Results.Created("/api/v1/me", new { id = user.Id, email = user.Email, displayName = user.DisplayName, role = "user" });
     }
 
@@ -193,28 +216,35 @@ public sealed class AuthController : ControllerBase
             ? request.Username?.Trim()
             : request.Email.Trim();
         if (string.IsNullOrWhiteSpace(loginIdentifier) || string.IsNullOrWhiteSpace(request.Password))
+        {
+            _logger.LogWarning("Login rejected | Reason=missing_credentials | Ip={Ip} | Ua={Ua}", ClientIp, ClientAgent);
             return ApiResults.ValidationError(HttpContext, "credentials", "Email or username and password are required."); // 400
+        }
 
         var user = await userManager.FindByEmailAsync(loginIdentifier);
         user ??= await userManager.FindByNameAsync(loginIdentifier);
         if (user is null)
         {
             // 账号不存在：仅服务端记录（响应与密码错误保持一致，避免邮箱枚举）；带 TraceId 便于定位。
-            _logger.LogWarning("Login failed: account not found for {Login}. TraceId={TraceId}", loginIdentifier, HttpContext.TraceIdentifier);
+            _logger.LogWarning("Login failed | Reason=account_not_found | Login={Login} | Ip={Ip} | Ua={Ua}",
+                loginIdentifier, ClientIp, ClientAgent);
             return Unauthorized(HttpContext);
         }
 
         var signInResult = await signInManager.CheckPasswordSignInAsync(user, request.Password, lockoutOnFailure: true);
         if (!signInResult.Succeeded)
         {
-            // 密码错误或账号被锁定：记录原因 + 账号 + TraceId，出问题可快速排查某一账号的登录异常。
+            // 密码错误或账号被锁定：记录原因 + 账号 + IP/UA，出问题可快速排查某一账号的登录异常。
             var reason = signInResult.IsLockedOut ? "account_locked" : "bad_password";
-            _logger.LogWarning("Login failed: {Reason} for {Login}. TraceId={TraceId}", reason, loginIdentifier, HttpContext.TraceIdentifier);
+            _logger.LogWarning("Login failed | Reason={Reason} | Login={Login} | UserId={UserId} | Ip={Ip} | Ua={Ua}",
+                reason, loginIdentifier, user.Id, ClientIp, ClientAgent);
             return Unauthorized(HttpContext);
         }
 
         // 校验通过：签发 JWT 访问令牌并落库新的刷新令牌（仅存哈希）。
         var tokens = await IssueTokensAsync(user, userManager, tokenService, db, cancellationToken);
+        _logger.LogInformation("Login succeeded | Login={Login} | UserId={UserId} | Ip={Ip} | Ua={Ua}",
+            loginIdentifier, user.Id, ClientIp, ClientAgent);
         return Results.Ok(tokens);
     }
 
@@ -232,7 +262,10 @@ public sealed class AuthController : ControllerBase
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.RefreshToken))
+        {
+            _logger.LogWarning("Token refresh rejected | Reason=missing_token | Ip={Ip}", ClientIp);
             return ApiResults.ValidationError(HttpContext, "refreshToken", "Refresh token is required."); // 400
+        }
 
         var tokenHash = TokenService.HashToken(request.RefreshToken);
         var storedToken = await db.RefreshTokens.AsNoTracking()
@@ -241,7 +274,13 @@ public sealed class AuthController : ControllerBase
         var now = DateTime.UtcNow;
         // 401：哈希无匹配（伪造）、已被撤销（含已轮换/已登出）、或已过期。
         if (storedToken is null || storedToken.RevokedAtUtc is not null || storedToken.ExpiresAtUtc <= now)
+        {
+            var reason = storedToken is null ? "token_not_found"
+                : storedToken.RevokedAtUtc is not null ? "token_revoked"
+                : "token_expired";
+            _logger.LogWarning("Token refresh failed | Reason={Reason} | Ip={Ip}", reason, ClientIp);
             return Unauthorized(HttpContext);
+        }
 
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
         var replacement = tokenService.CreateRefreshToken();
@@ -254,6 +293,8 @@ public sealed class AuthController : ControllerBase
         if (revoked != 1)
         {
             await transaction.RollbackAsync(cancellationToken);
+            _logger.LogWarning("Token refresh failed | Reason=concurrent_rotation | UserId={UserId} | Ip={Ip}",
+                storedToken.UserId, ClientIp);
             return Unauthorized(HttpContext); // 401：已被另一个请求抢先轮换
         }
 
@@ -269,6 +310,7 @@ public sealed class AuthController : ControllerBase
         });
         await db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+        _logger.LogInformation("Token refreshed | UserId={UserId} | Ip={Ip}", storedToken.UserId, ClientIp);
         return Results.Ok(new AuthTokenResponse(accessToken.Token, replacement.Token, "Bearer", GetExpiresInSeconds(accessToken.ExpiresAtUtc)));
     }
 
@@ -286,8 +328,13 @@ public sealed class AuthController : ControllerBase
             var tokenHash = TokenService.HashToken(request.RefreshToken);
             var now = DateTime.UtcNow;
             // 仅撤销尚未撤销的令牌；匹配 0 行（不存在/已失效）同样视为登出成功。
-            await db.RefreshTokens.Where(token => token.TokenHash == tokenHash && token.RevokedAtUtc == null)
+            var revokedRows = await db.RefreshTokens.Where(token => token.TokenHash == tokenHash && token.RevokedAtUtc == null)
                 .ExecuteUpdateAsync(setters => setters.SetProperty(token => token.RevokedAtUtc, now), cancellationToken);
+            _logger.LogInformation("Logout | Revoked={Revoked} | Ip={Ip}", revokedRows > 0, ClientIp);
+        }
+        else
+        {
+            _logger.LogInformation("Logout | Revoked=False | Reason=no_token | Ip={Ip}", ClientIp);
         }
         return Results.NoContent();
     }

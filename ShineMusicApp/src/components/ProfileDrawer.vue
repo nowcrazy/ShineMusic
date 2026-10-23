@@ -18,7 +18,8 @@ import { resetFeedback } from '@/services/feedback'
 import { resetNotifications } from '@/services/notifications'
 import { resetMyLibrary } from '@/services/user-library'
 import { applyTheme, currentTheme, THEMES, type ThemeId } from '@/services/theme'
-import { currentApiBase, getApiBaseOverride, resolveUrl, setApiBaseOverride } from '@/services/http'
+import { currentApiBase, resolveUrl } from '@/services/http'
+import { promptServerBase } from '@/utils/server-base-dialog'
 import { useI18n } from 'vue-i18n'
 
 // 文案多语言
@@ -43,40 +44,10 @@ const loggingOut = ref(false)
 // 服务器地址：当前生效地址（用户自定义 > 构建期内置），设置抽屉里查看/修改
 const serverBase = ref(currentApiBase())
 
-/**
- * 修改服务器地址：弹窗输入 → 保存立即生效并持久化 → 测试连通性。
- * 留空确认即清除自定义、恢复 APK 内置地址；连不通也会保存，便于提前填好新地址。
- */
+/** 修改服务器地址：弹窗输入 → 保存立即生效并持久化 → 测试连通性（与登录页共用同一实现） */
 function editServerBase() {
-  uni.showModal({
-    title: t('drawer.serverAddress'),
-    editable: true,
-    content: getApiBaseOverride(),
-    placeholderText: t('drawer.serverPlaceholder'),
-    confirmText: t('drawer.serverSaveTest'),
-    success: ({ confirm, content }) => {
-      if (!confirm) return
-      setApiBaseOverride(content ?? '')
-      serverBase.value = currentApiBase()
-      if (!getApiBaseOverride()) {
-        uni.showToast({ title: t('drawer.serverRestored'), icon: 'none' })
-        return
-      }
-      uni.showLoading({ title: t('drawer.serverTesting') })
-      uni.request({
-        url: `${currentApiBase()}/health`,
-        method: 'GET',
-        timeout: 8000,
-        complete: (result) => {
-          uni.hideLoading()
-          const code = (result as { statusCode?: number }).statusCode
-          uni.showToast({
-            title: code && code >= 200 && code < 300 ? t('drawer.serverConnected') : t('drawer.serverNotConnected'),
-            icon: 'none',
-          })
-        },
-      })
-    },
+  promptServerBase((key) => t(key), (base) => {
+    serverBase.value = base
   })
 }
 

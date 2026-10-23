@@ -40,7 +40,7 @@ if (File.Exists(Path.Combine(repoRoot, hostsRelativePath)))
         reloadOnChange: false);
 }
 
-// ===== 文件日志：操作日志(operations)与数据执行日志(data)按日期分离落盘 =====
+// ===== 文件日志：按分类（operations/auth/errors/debug/data/app）与日期分离落盘 =====
 builder.Logging.AddFileLogger(options =>
 {
     // 相对路径按内容根目录解析为绝对路径，避免随工作目录漂移。
@@ -68,9 +68,10 @@ builder.Services.AddSwaggerGen(c =>
         Description = "输入 JWT（含 Bearer 前缀），例如：Bearer <your-access-token>"
     });
     // 说明：Microsoft.OpenApi 2.x 将 OpenApiSecurityRequirement 的键类型改为
-    // OpenApiSecuritySchemeReference（无公开无参构造），手工拼装全局安全需求较繁琐；
-    // 这里保留 Bearer 安全定义供 Swagger UI 识别，如需“Authorize”按钮全局生效可后续加
-    // IDocumentFilter 适配。当前端到端联调仍以真实 JWT 为主。
+    // OpenApiSecuritySchemeReference（无公开无参构造），全局安全需求无法用旧写法拼装；
+    // 改为按操作注入：只有带 [Authorize] 的端点声明 Bearer 要求，Swagger UI 才会把
+    // Authorize 里粘贴的令牌带进请求，匿名端点不受影响。
+    c.OperationFilter<ShineMusic.Api.OpenApi.BearerSecurityOperationFilter>();
 });
 builder.Services.AddControllers();
 // ===== 统一 400 错误体（契约一致性） =====
@@ -360,6 +361,14 @@ builder.Services.AddTransient<IInvitationEmailSender, InvitationEmailSender>();
 
 var app = builder.Build();
 
+// 启动快照：把环境、监听地址、日志目录记到 logs/app，重启后排查“跑的是哪个环境/哪份配置”时先看这行。
+app.Logger.LogInformation(
+    "ShineMusic API starting | Environment={Environment} | ContentRoot={ContentRoot} | Urls={Urls} | LogsRoot={LogsRoot}",
+    app.Environment.EnvironmentName,
+    app.Environment.ContentRootPath,
+    builder.Configuration["Urls"] ?? "(default)",
+    Path.Combine(app.Environment.ContentRootPath, "logs"));
+
 // OpenAPI/Swagger 文档与可交互 UI 仅在开发环境暴露，生产环境不公开接口结构。
 if (app.Environment.IsDevelopment())
 {
@@ -385,10 +394,11 @@ app.UseExceptionHandler(exceptionHandler => exceptionHandler.Run(async context =
         context.Response.StatusCode = 499; // Client Closed Request（Nginx 约定状态码）
         return;
     }
-    // 未处理异常统一收敛为 500 JSON，先记录带 TraceId 的日志（落入 logs/app），再向客户端返回脱敏错误信息。
-    // 日志带方法/路径/TraceId，配合 operations/data 日志即可顺着 TraceId 还原整条请求链路。
+    // 未处理异常统一收敛为 500 JSON，先记录带 TraceId 的日志（category 以 Errors 开头 → logs/errors），
+    // 再向客户端返回脱敏错误信息。日志带方法/路径/TraceId，配合 operations/data/auth 日志即可顺
+    // TraceId 还原整条请求链路。
     context.RequestServices.GetRequiredService<ILoggerFactory>()
-        .CreateLogger("App.UnhandledException")
+        .CreateLogger("Errors.UnhandledException")
         .LogError(exception, "Unhandled exception on {Method} {Path} (TraceId={TraceId}).",
             context.Request.Method, context.Request.Path, context.TraceIdentifier);
     context.Response.StatusCode = StatusCodes.Status500InternalServerError;

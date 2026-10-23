@@ -9,11 +9,15 @@
  * - 确认后按可见区域导出位图：最长边 2560px、WebP（不支持时回退 JPEG），
  *   以 objectURL 交给上层，同时承担压缩职责（原图不再直接参与铺底与上传）。
  */
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, getCurrentInstance, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { paletteFromPixels, type ExtractedPalette } from '@/services/color-extract'
 
 const props = defineProps<{ src: string }>()
-const emit = defineEmits<{ (e: 'cancel'): void; (e: 'confirm', url: string): void }>()
+const emit = defineEmits<{
+  (e: 'cancel'): void
+  (e: 'confirm', url: string, palette?: ExtractedPalette): void
+}>()
 
 const { t } = useI18n()
 
@@ -86,7 +90,13 @@ function handleResize() {
   measureAndReset()
 }
 
+/** App 端屏幕旋转：重新量取景框并重置视图 */
+function handleAppResize() {
+  if (loaded.value) measureAppFrame()
+}
+
 onMounted(() => {
+  // #ifdef H5
   const img = new Image()
   img.onload = () => {
     decoded = img
@@ -97,9 +107,31 @@ onMounted(() => {
   img.onerror = () => emit('cancel')
   img.src = props.src
   window.addEventListener('resize', handleResize)
+  // #endif
+  // #ifdef APP-PLUS
+  // App 端无 DOM：用 uni.getImageInfo 取原图尺寸，用节点查询量取景框尺寸
+  uni.getImageInfo({
+    src: props.src,
+    success: (info) => {
+      natural.value = { w: info.width, h: info.height }
+      measureAppFrame(() => {
+        loaded.value = true
+      })
+    },
+    fail: () => emit('cancel'),
+  })
+  uni.onWindowResize(handleAppResize)
+  // #endif
 })
 
-onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
+onBeforeUnmount(() => {
+  // #ifdef H5
+  window.removeEventListener('resize', handleResize)
+  // #endif
+  // #ifdef APP-PLUS
+  uni.offWindowResize(handleAppResize)
+  // #endif
+})
 
 /* ---------- 手势：单指拖动 / 双指捏合 / 滚轮缩放 ---------- */
 
@@ -165,6 +197,196 @@ function resetView() {
   offset.value = { x: 0, y: 0 }
 }
 
+/* ---------- App 端：touch 手势 + uni canvas 导出 ---------- */
+
+/** 当前组件实例：App 端 canvas API 需要传入组件实例 */
+const instance = getCurrentInstance()?.proxy
+/** 导出画布尺寸（按可见区域计算，确认时写入） */
+const exportW = ref(1)
+const exportH = ref(1)
+/** 取色小画布尺寸（最长边 96px，与 H5 取色采样规格一致） */
+const paletteW = ref(1)
+const paletteH = ref(1)
+
+/**
+ * App 端取色：把原图缩绘到 96px 小画布，读像素后复用 H5 同一套色板算法
+ * （App 端无 document canvas，只能走 uni canvas）。失败返回 undefined 由上层兜底。
+ */
+async function extractPaletteApp(): Promise<ExtractedPalette | undefined> {
+  if (!instance || !natural.value.w) return undefined
+  try {
+    const scale = Math.min(1, 96 / Math.max(natural.value.w, natural.value.h))
+    const width = Math.max(8, Math.round(natural.value.w * scale))
+    const height = Math.max(8, Math.round(natural.value.h * scale))
+    paletteW.value = width
+    paletteH.value = height
+    await nextTick()
+    const ctx = uni.createCanvasContext('sm-palette-canvas', instance)
+    ctx.drawImage(props.src, 0, 0, width, height)
+    await new Promise<void>((resolve) => {
+      ctx.draw(false, () => resolve())
+    })
+    // 各端返回形态不一（Uint8ClampedArray / ArrayBuffer / number[]），统一成可索引的数组
+    const data = await new Promise<ArrayLike<number>>((resolve, reject) => {
+      uni.canvasGetImageData(
+        {
+          canvasId: 'sm-palette-canvas',
+          x: 0,
+          y: 0,
+          width,
+          height,
+          success: (res) => {
+            const raw = (res as unknown as { data: ArrayBuffer | ArrayLike<number> }).data
+            resolve(raw instanceof ArrayBuffer ? new Uint8ClampedArray(raw) : raw)
+          },
+          fail: reject,
+        },
+        instance,
+      )
+    })
+    return paletteFromPixels(data, width, height)
+  } catch {
+    return undefined
+  }
+}
+
+/** App 端 <image> 定位样式（与 H5 的 imgStyle 等价） */
+const appImgStyle = computed(() => ({
+  width: `${dispW.value}px`,
+  height: `${dispH.value}px`,
+  transform: `translate(calc(-50% + ${offset.value.x}px), calc(-50% + ${offset.value.y}px))`,
+}))
+
+/** 量取景框尺寸并重置视图（App 端无 clientWidth，用节点查询） */
+function measureAppFrame(done?: () => void) {
+  if (!instance || !natural.value.w) return
+  uni
+    .createSelectorQuery()
+    .in(instance)
+    .select('#crop-stage')
+    .boundingClientRect((rect) => {
+      const box = rect as { width?: number; height?: number } | null
+      if (!box?.width || !box.height) return
+      frame.value = { w: box.width, h: box.height }
+      baseScale = Math.max(frame.value.w / natural.value.w, frame.value.h / natural.value.h)
+      zoom.value = 1
+      offset.value = { x: 0, y: 0 }
+      done?.()
+    })
+    .exec()
+}
+
+interface TouchPoint {
+  clientX?: number
+  pageX?: number
+  clientY?: number
+  pageY?: number
+}
+
+function touchPoints(e: any): Array<{ x: number; y: number }> {
+  return (e?.touches ?? []).map((t: TouchPoint) => ({
+    x: Number(t.clientX ?? t.pageX ?? 0),
+    y: Number(t.clientY ?? t.pageY ?? 0),
+  }))
+}
+
+let appPanStart: { x: number; y: number; ox: number; oy: number } | null = null
+let appPinchStart: { dist: number; zoom: number } | null = null
+
+function onAppTouchStart(e: any) {
+  const pts = touchPoints(e)
+  if (pts.length >= 2) {
+    appPinchStart = {
+      dist: Math.max(1, Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y)),
+      zoom: zoom.value,
+    }
+    appPanStart = null
+  } else if (pts.length === 1) {
+    appPanStart = { x: pts[0].x, y: pts[0].y, ox: offset.value.x, oy: offset.value.y }
+    appPinchStart = null
+  }
+}
+
+function onAppTouchMove(e: any) {
+  const pts = touchPoints(e)
+  if (pts.length >= 2 && appPinchStart) {
+    const dist = Math.max(1, Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y))
+    setZoom(appPinchStart.zoom * clamp(dist / appPinchStart.dist, 0.2, 5))
+    return
+  }
+  if (pts.length === 1 && appPanStart) {
+    offset.value = { x: appPanStart.ox + (pts[0].x - appPanStart.x), y: appPanStart.oy + (pts[0].y - appPanStart.y) }
+    clampOffset()
+  }
+}
+
+function onAppTouchEnd(e: any) {
+  const pts = touchPoints(e)
+  if (pts.length >= 2) {
+    appPinchStart = {
+      dist: Math.max(1, Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y)),
+      zoom: zoom.value,
+    }
+    appPanStart = null
+  } else if (pts.length === 1) {
+    appPanStart = { x: pts[0].x, y: pts[0].y, ox: offset.value.x, oy: offset.value.y }
+    appPinchStart = null
+  } else {
+    appPanStart = null
+    appPinchStart = null
+  }
+}
+
+/** App 端确认裁剪：按可见区域在 uni canvas 上绘制，导出临时文件交给上层 */
+async function confirmCropApp() {
+  if (!loaded.value || exporting.value || !instance) return
+  exporting.value = true
+  try {
+    const k = natural.value.w / dispW.value
+    const sw = Math.min(natural.value.w, (frame.value.w / dispW.value) * natural.value.w)
+    const sh = Math.min(natural.value.h, (frame.value.h / dispH.value) * natural.value.h)
+    const sx = clamp(((frame.value.w - dispW.value) / 2 + offset.value.x) * k, 0, natural.value.w - sw)
+    const sy = clamp(((frame.value.h - dispH.value) / 2 + offset.value.y) * k, 0, natural.value.h - sh)
+    const scale = Math.min(1, MAX_EXPORT_EDGE / Math.max(sw, sh))
+    const outW = Math.max(1, Math.round(sw * scale))
+    const outH = Math.max(1, Math.round(sh * scale))
+    exportW.value = outW
+    exportH.value = outH
+    await nextTick()
+
+    const ctx = uni.createCanvasContext('sm-crop-canvas', instance)
+    ctx.drawImage(props.src, sx, sy, sw, sh, 0, 0, outW, outH)
+    await new Promise<void>((resolve) => {
+      ctx.draw(false, () => resolve())
+    })
+    const result = await new Promise<{ tempFilePath: string }>((resolve, reject) => {
+      uni.canvasToTempFilePath(
+        {
+          canvasId: 'sm-crop-canvas',
+          x: 0,
+          y: 0,
+          width: outW,
+          height: outH,
+          destWidth: outW,
+          destHeight: outH,
+          fileType: 'jpg',
+          quality: 0.85,
+          success: (res) => resolve(res),
+          fail: reject,
+        },
+        instance,
+      )
+    })
+    // 取色失败不阻断流程：返回 undefined 时上层走默认色板兜底
+    const palette = await extractPaletteApp()
+    emit('confirm', result.tempFilePath, palette)
+  } catch {
+    uni.showToast({ title: t('wallpaper.exportFailed'), icon: 'none' })
+  } finally {
+    exporting.value = false
+  }
+}
+
 /* ---------- 导出：按可见区域裁剪并压缩 ---------- */
 
 async function confirmCrop() {
@@ -211,7 +433,12 @@ async function confirmCrop() {
     <view class="cropper-top">
       <text class="cp-btn" @tap="emit('cancel')">{{ $t('wallpaper.cancel') }}</text>
       <text class="cp-title">{{ $t('wallpaper.title') }}</text>
+      <!-- #ifdef H5 -->
       <text class="cp-btn primary" @tap="confirmCrop">{{ exporting ? $t('wallpaper.processing') : $t('wallpaper.done') }}</text>
+      <!-- #endif -->
+      <!-- #ifdef APP-PLUS -->
+      <text class="cp-btn primary" @tap="confirmCropApp">{{ exporting ? $t('wallpaper.processing') : $t('wallpaper.done') }}</text>
+      <!-- #endif -->
     </view>
     <!-- #ifdef H5 -->
     <div
@@ -226,6 +453,33 @@ async function confirmCrop() {
       <img v-if="loaded" class="crop-img" :src="props.src" :style="imgStyle" draggable="false" alt="" />
       <view v-else class="crop-loading">{{ $t('wallpaper.loading') }}</view>
     </div>
+    <!-- #endif -->
+    <!-- #ifdef APP-PLUS -->
+    <view
+      id="crop-stage"
+      class="cropper-stage"
+      @touchstart.stop.prevent="onAppTouchStart"
+      @touchmove.stop.prevent="onAppTouchMove"
+      @touchend.stop.prevent="onAppTouchEnd"
+      @touchcancel.stop="onAppTouchEnd"
+    >
+      <image v-if="loaded" class="crop-img" :src="props.src" mode="scaleToFill" :style="appImgStyle" />
+      <view v-else class="crop-loading">{{ $t('wallpaper.loading') }}</view>
+    </view>
+    <!-- 导出画布：移出可视区域，仅用于 canvasToTempFilePath -->
+    <canvas
+      id="sm-crop-canvas"
+      canvas-id="sm-crop-canvas"
+      class="crop-canvas"
+      :style="{ width: exportW + 'px', height: exportH + 'px' }"
+    ></canvas>
+    <!-- 取色画布：缩绘到 96px 后读像素生成色板 -->
+    <canvas
+      id="sm-palette-canvas"
+      canvas-id="sm-palette-canvas"
+      class="crop-canvas"
+      :style="{ width: paletteW + 'px', height: paletteH + 'px' }"
+    ></canvas>
     <!-- #endif -->
     <view class="cropper-bottom">
       <text class="hint">{{ $t('wallpaper.gestureHint') }}</text>
@@ -305,6 +559,13 @@ async function confirmCrop() {
   place-items: center;
   color: rgba(255, 255, 255, 0.55);
   font-size: 24rpx;
+}
+
+/* 导出画布：必须在 DOM 中才可被 canvasToTempFilePath 读取，移出可视区域即可 */
+.crop-canvas {
+  position: fixed;
+  left: -9999px;
+  top: 0;
 }
 
 .cropper-bottom {

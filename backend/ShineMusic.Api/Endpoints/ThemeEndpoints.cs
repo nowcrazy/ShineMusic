@@ -55,9 +55,10 @@ public sealed class ThemeController : ControllerBase
     // 行为：先删除旧壁纸文件再写新文件（整体替换）；配置行不存在时创建默认行并启用。
     // 返回：200 更新后的主题配置；401 未登录；413/415 体积或格式不合规。
     [HttpPost("wallpaper", Name = "UploadMyThemeWallpaper")]
+    [Consumes("multipart/form-data")]
     [RequestFormLimits(MultipartBodyLengthLimit = MultipartBodyLimit)]
     public async Task<IResult> UploadWallpaper(
-        [FromForm] IFormFile? wallpaper,
+        IFormFile? wallpaper,
         MusicDbContext db,
         LibraryStoragePaths storagePaths,
         CancellationToken cancellationToken)

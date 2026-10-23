@@ -14,6 +14,7 @@ import { changePassword, deleteAvatar, updateDisplayName, uploadAvatar } from '@
 import { ApiError, resolveUrl } from '@/services/http'
 import { describeError } from '@/services/errors'
 import { estimatePasswordStrength, passwordStrengthFill } from '@/utils/password-strength'
+import { compressForUpload } from '@/utils/image-compress'
 import { useCapabilities } from '@/services/capabilities'
 
 const { t } = useI18n()
@@ -98,7 +99,8 @@ function handleChangeAvatar() {
       uploadingAvatar.value = true
       avatarMessage.value = ''
       try {
-        await uploadAvatar(filePath)
+        // 头像展示区很小：先缩到 512px 再传，避免原图几 MB 在慢速上行链路上传几分钟甚至被中断
+        await uploadAvatar(await compressForUpload(filePath, { maxEdge: 512 }))
         await loadCurrentUser()
         uni.showToast({ title: t('profilePage.avatarUpdated'), icon: 'none' })
       } catch (error) {

@@ -23,10 +23,8 @@ import {
   type CustomThemeConfig,
   type ThemeId,
 } from '@/services/theme'
-import { extractPalette } from '@/services/color-extract'
-// #ifdef H5
+import { extractPalette, type ExtractedPalette } from '@/services/color-extract'
 import WallpaperCropper from '@/components/WallpaperCropper.vue'
-// #endif
 import {
   deleteMyTheme,
   fetchMyTheme,
@@ -130,10 +128,13 @@ function chooseWallpaper() {
   })
 }
 
-/** 裁剪完成：拿到按可见区域导出（已压缩）的壁纸源，进入取色 → 预览 → 上传管线 */
-function onCropConfirmed(url: string) {
+/**
+ * 裁剪完成：拿到按可见区域导出（已压缩）的壁纸源，进入取色 → 预览 → 上传管线。
+ * App 端裁剪器已在小画布上取好色板（服务层无 DOM canvas），直接复用。
+ */
+function onCropConfirmed(url: string, palette?: ExtractedPalette) {
   croppingPath.value = null
-  void onImagePicked(url)
+  void onImagePicked(url, palette)
 }
 
 /** 取消裁剪：放弃本次选图 */
@@ -141,10 +142,13 @@ function onCropCancelled() {
   croppingPath.value = null
 }
 
-/** 裁剪确认后：本地取色 → 即时预览 → 上传壁纸 → 回填色板落库 */
-async function onImagePicked(path: string) {
+/**
+ * 裁剪确认后：取色 → 即时预览 → 上传壁纸 → 回填色板落库。
+ * @param providedPalette 裁剪器已算好的色板（App 端）；缺省时走 H5 的 DOM 取色
+ */
+async function onImagePicked(path: string, providedPalette?: ExtractedPalette) {
   extracting.value = true
-  const palette = await extractPalette(path)
+  const palette = providedPalette ?? (await extractPalette(path))
   localWallpaperPath.value = path
   const previous = currentCustomConfig.value
   const config: CustomThemeConfig = {
@@ -426,15 +430,13 @@ function removeCustom() {
     <view class="bottom-space"></view>
   </scroll-view>
 
-  <!-- 壁纸裁剪编辑器（仅 H5）：固定取景框 + 拖动/缩放，所见即所得 -->
-  <!-- #ifdef H5 -->
+  <!-- 壁纸裁剪编辑器：固定取景框 + 拖动/缩放，所见即所得（H5 与 App 双端） -->
   <WallpaperCropper
     v-if="croppingPath"
     :src="croppingPath"
     @confirm="onCropConfirmed"
     @cancel="onCropCancelled"
   />
-  <!-- #endif -->
 </template>
 
 <style lang="scss" scoped>

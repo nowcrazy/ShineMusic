@@ -412,16 +412,6 @@ export interface ApiReopenSongRequest {
   reason?: string | null
 }
 
-/** 来源：`backend/ShineMusic.Api/Endpoints/CatalogManagementEndpoints.cs` */
-export interface ApiReplaceAdminCollection {
-  title: string
-  description?: string | null
-  artworkId?: string | null
-  sortOrder: number
-  isPublished: boolean
-  trackIds?: readonly string[] | null
-}
-
 /** 来源：`backend/ShineMusic.Api/Endpoints/CollectionManagementEndpoints.cs` */
 export interface ApiReplaceCollectionTracks {
   trackIds: readonly string[]

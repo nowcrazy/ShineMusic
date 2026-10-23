@@ -21,6 +21,7 @@
  * 2. 在下方 THEMES 数组中追加一条主题元数据（含色卡预览色）。
  */
 import { ref } from 'vue'
+import { injectThemeCssOnApp, removeThemeCssOnApp, setThemeAttrOnApp } from '@/utils/app-theme-bridge'
 import { accentInk, hslToHex, hexToHsl, hueRotate, withAlpha } from './color-extract'
 
 /** 主题 id 联合类型（custom 为运行时生成的自定义图片主题，不在 THEMES 列表中） */
@@ -156,13 +157,17 @@ function isThemeId(value: unknown): value is ThemeId {
 
 /**
  * 把主题写入 <html data-sm-theme>。
- * 仅 H5 端可操作 document；其它端由各端自定义导航栏读取 currentTheme 自行适配。
+ * H5 直接操作 document；App 经视图层 evalJS 写入（service 层无 document）。
  */
 function writeToDocument(id: ThemeId) {
   // #ifdef H5
   if (typeof document !== 'undefined') {
     document.documentElement.setAttribute('data-sm-theme', id)
   }
+  // #endif
+  // #ifdef APP-PLUS
+  // App 端 service 层无 document：经视图层 evalJS 写入 <html data-sm-theme>
+  setThemeAttrOnApp(id)
   // #endif
 }
 
@@ -305,6 +310,9 @@ export function resetCustomTheme() {
   // #ifdef H5
   document.getElementById(CUSTOM_STYLE_ID)?.remove()
   // #endif
+  // #ifdef APP-PLUS
+  removeThemeCssOnApp()
+  // #endif
   try {
     uni.removeStorageSync(CUSTOM_STORAGE_KEY)
   } catch {
@@ -327,6 +335,7 @@ function revokeWallpaper() {
 
 /** 注入/替换自定义主题令牌样式块 */
 function injectCustomStyle(config: CustomThemeConfig, wallpaperUrl: string | null) {
+  const css = buildCustomTokenCss(config, wallpaperUrl ? toDisplaySrc(wallpaperUrl) : null)
   // #ifdef H5
   if (typeof document === 'undefined') return
   let style = document.getElementById(CUSTOM_STYLE_ID) as HTMLStyleElement | null
@@ -335,8 +344,31 @@ function injectCustomStyle(config: CustomThemeConfig, wallpaperUrl: string | nul
     style.id = CUSTOM_STYLE_ID
     document.head.appendChild(style)
   }
-  style.textContent = buildCustomTokenCss(config, wallpaperUrl)
+  style.textContent = css
   // #endif
+  // #ifdef APP-PLUS
+  // App 端没有 document：样式经视图层 evalJS 注入
+  injectThemeCssOnApp(css)
+  // #endif
+}
+
+/**
+ * 壁纸地址转可被 CSS 直接引用的形式：
+ * App 端 uni.downloadFile / canvas 导出返回的是本地路径（_doc/... 或 /storage/...），
+ * 需转成 file:// 绝对地址，视图层 <style> 才能加载。
+ */
+function toDisplaySrc(url: string): string {
+  if (/^(https?:|data:|blob:|file:)/i.test(url)) return url
+  // #ifdef APP-PLUS
+  try {
+    // service 层能直接访问全局 plus（与 app-file-picker 保持一致）
+    const abs = typeof plus !== 'undefined' ? plus.io.convertLocalFileSystemURL(url) : ''
+    if (typeof abs === 'string' && abs) return `file://${abs.startsWith('/') ? '' : '/'}${abs}`
+  } catch {
+    // 转换失败时退回原路径（视图层可能仍能解析相对路径）
+  }
+  // #endif
+  return url
 }
 
 /**

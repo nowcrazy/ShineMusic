@@ -11,6 +11,7 @@ import { useI18n } from 'vue-i18n'
 import { AlertCircle, Check, FileUp, ImageUp, Music, Plus, Search, ShieldCheck, Trash2 } from 'lucide-vue-next'
 import { createTrackLyric, deleteLyric, getAdminTracks, getTrackLyrics, updateAdminTrack, updateLyric } from '@/services/admin-catalog'
 import { resolveUrl } from '@/services/http'
+import { describeError } from '@/services/errors'
 import { uploadArtwork } from '@/services/admin-artwork'
 import { isAdmin } from '@/services/session'
 import type { ApiLyric, ApiTrack } from '@/types/music'
@@ -68,8 +69,9 @@ async function loadTracks() {
     } else if (selectedTrack.value) {
       selectTrack(selectedTrack.value)
     }
-  } catch {
-    loadError.value = t('catalogAdmin.loadFailed')
+  } catch (error) {
+    // 展示具体原因（网络不可达 / 权限不足 / 服务端错误），避免统一文案掩盖真实故障
+    loadError.value = describeError(error, t('catalogAdmin.loadFailed'))
   } finally {
     loading.value = false
   }

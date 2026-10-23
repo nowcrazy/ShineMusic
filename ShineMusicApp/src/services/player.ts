@@ -506,6 +506,49 @@ function createWebAudioEngine(cb: AudioEngineCallbacks): AudioEngine {
 /** 音频引擎单例；延迟到首次播放时构建，避免无谓占用系统音频资源 */
 let engine: AudioEngine | null = null
 
+/**
+ * 播放错误自动重连（弱网容错）。
+ * 公网链路抖动时底层播放器会直接抛 error 并停下；这里短暂延迟后从断点续播，
+ * 避免用户感知为「突然暂停且不再恢复」。每首曲目最多两次，续播稳定 5 秒后额度重置。
+ */
+const MAX_AUTO_RETRIES = 2
+let autoRetries = 0
+let autoRetryTimer: ReturnType<typeof setTimeout> | null = null
+/** 最近一次自动续播的起点（秒），用于判断是否已经稳定播放 */
+let autoRetryResumeAt = 0
+
+/** 清空自动重连状态（切歌时调用） */
+function resetAutoRetry() {
+  autoRetries = 0
+  autoRetryResumeAt = 0
+  if (autoRetryTimer) {
+    clearTimeout(autoRetryTimer)
+    autoRetryTimer = null
+  }
+}
+
+/** 安排一次自动续播；返回 true 表示错误已被接管（不再进入错误态） */
+function scheduleAutoRetry(): boolean {
+  const track = state.currentTrack
+  if (!track || autoRetries >= MAX_AUTO_RETRIES) return false
+  autoRetries += 1
+  autoRetryResumeAt = state.currentTime
+  const resumeAt = autoRetryResumeAt
+  const trackId = track.id
+  if (autoRetryTimer) clearTimeout(autoRetryTimer)
+  autoRetryTimer = setTimeout(() => {
+    autoRetryTimer = null
+    if (state.currentTrack?.id !== trackId) return
+    // 从断点重新装载媒体源：App 端 BGM 设置 src 会自动起播，InnerAudio/H5 靠随后的 play()
+    ensureEngine().setSrc(track.audioUrl, resumeAt)
+    ensureEngine().play()
+    state.isPlaying = true
+    state.audioError = false
+    persistState(true)
+  }, 1500)
+  return true
+}
+
 /** 懒构建音频引擎，并把当前音效预设对应的 EQ 波段预置进去 */
 function ensureEngine(): AudioEngine {
   if (engine) return engine
@@ -519,11 +562,15 @@ function ensureEngine(): AudioEngine {
     onTimeUpdate: (time, duration) => {
       state.currentTime = time
       if (duration) state.duration = duration
+      // 续播稳定播放 5 秒后重置重试额度：长曲目多次抖动仍可自动恢复
+      if (autoRetries > 0 && time > autoRetryResumeAt + 5) autoRetries = 0
       // 播放进度按节流回写本地，App 被杀后仍能恢复到上次位置
       persistState()
     },
     onEnded: handleEnded,
     onError: () => {
+      // 播放中（用户想看/想听）才自动续播；已暂停或到重试上限则进入错误态
+      if (state.isPlaying && scheduleAutoRetry()) return
       state.audioError = true
       state.isPlaying = false
       persistState(true)
@@ -630,6 +677,7 @@ export function playTrack(track: Track, queue?: readonly Track[]) {
   state.currentTime = 0
   state.duration = track.duration || 0
   state.audioError = false
+  resetAutoRetry()
   eng.setSrc(track.audioUrl)
   eng.play()
   state.isPlaying = true
@@ -662,6 +710,8 @@ export function togglePlayback() {
   const track = state.currentTrack
   if (!track) return
   if (state.isPlaying) {
+    // 用户主动暂停：取消可能待触发的自动续播，避免暂停后自己又响起来
+    resetAutoRetry()
     engine?.pause()
     state.isPlaying = false
     persistState(true)

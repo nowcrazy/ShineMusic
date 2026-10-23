@@ -39,6 +39,7 @@ public sealed class ArtworkUploadController : ControllerBase
     };
 
     [HttpPost("artwork", Name = "UploadAdminArtwork")]
+    [Consumes("multipart/form-data")]
     public async Task<IResult> UploadArtwork(
         IFormFile file,
         MusicDbContext db,

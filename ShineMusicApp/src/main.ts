@@ -9,6 +9,8 @@ import { createSSRApp } from 'vue'
 import * as VueRuntime from 'vue'
 import App from './App.vue'
 import { patchShowModal } from '@/utils/modal-patch'
+import { reapplyThemeOnApp } from '@/utils/app-theme-bridge'
+import { installWebApiShim } from '@/utils/web-api-shim'
 import { createAppI18n } from '@/locale'
 
 /**
@@ -22,6 +24,9 @@ import { createAppI18n } from '@/locale'
 type UniVueRuntime = typeof import('vue') & {
   createVueApp?: typeof createSSRApp
 }
+
+// App 端逻辑层没有浏览器全局对象，先补 URLSearchParams（H5 有原生实现，此处空操作）。
+installWebApiShim()
 
 // 在应用创建前修补 uni.showModal（仅 H5 端生效），修复点击按钮后模态框不关闭的 bug。
 patchShowModal()
@@ -37,5 +42,14 @@ export function createApp() {
   // 注册 vue-i18n（legacy: false），使组件内 useI18n()/模板 $t 可用；
   // 必须在返回 app 前完成注册，否则 PlayerBar / LanguageSwitcher 等使用 useI18n 的组件会注入失败。
   app.use(createAppI18n())
+  // #ifdef APP-PLUS
+  // App-vue 每个页面是独立 webview：新页面显示时把当前主题重放一次，
+  // 否则切过主题后再进入的页面仍停留在默认皮肤。
+  app.mixin({
+    onShow() {
+      reapplyThemeOnApp()
+    },
+  })
+  // #endif
   return { app }
 }

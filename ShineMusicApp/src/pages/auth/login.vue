@@ -12,6 +12,8 @@ import { login } from '@/services/session'
 import { loadFavorites } from '@/services/library'
 import { loadFeedback } from '@/services/feedback'
 import { describeError } from '@/services/errors'
+import { currentApiBase } from '@/services/http'
+import { promptServerBase } from '@/utils/server-base-dialog'
 import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 
 const { t } = useI18n()
@@ -23,6 +25,8 @@ const submitting = ref(false)
 const errorMessage = ref('')
 // 密码框聚焦标记：邮箱框回车后把光标送到密码框（uni 的 focus 属性只在变为 true 时生效）
 const passwordFocused = ref(false)
+// 服务器地址：当前生效地址（用户自定义 > 构建期内置），登录前可改，避免内置地址不可达时进不了设置自救
+const serverBase = ref(currentApiBase())
 
 /** 邮箱框回车：不直接提交，先把焦点移到密码框，少按一次 Tab */
 function focusPassword() {
@@ -84,6 +88,13 @@ async function handleLogin() {
 function goRegister() {
   uni.navigateTo({ url: '/pages/auth/register' })
 }
+
+/** 修改服务器地址：登录前即可改（与个人抽屉共用实现），保存即生效并测试连通性 */
+function editServerBase() {
+  promptServerBase((key) => t(key), (base) => {
+    serverBase.value = base
+  })
+}
 </script>
 
 <template>
@@ -130,6 +141,14 @@ function goRegister() {
     <view class="secondary-link" @tap="goRegister">
       <text>{{ $t('auth.inviteEmail') }}<text class="link">{{ $t('auth.useInviteToken') }}</text></text>
     </view>
+
+    <!-- 服务器地址：登录前也能修改（内置地址不可达时自救）；H5 走同域相对路径，无需此入口 -->
+    <!-- #ifdef APP-PLUS -->
+    <view class="server-entry" @tap="editServerBase">
+      <text class="server-entry-label">{{ $t('drawer.serverAddress') }}</text>
+      <text class="server-entry-value">{{ serverBase || $t('drawer.notConfigured') }}</text>
+    </view>
+    <!-- #endif -->
   </view>
 </template>
 
@@ -151,4 +170,8 @@ function goRegister() {
 .primary-button.disabled { opacity: .6; }
 .secondary-link { margin-top: 30rpx; color: var(--sm-text-2); font-size: 19rpx; text-align: center; }
 .link { color: var(--sm-accent); font-weight: 700; }
+/* 服务器地址：登录前自救入口，弱化展示但可点击 */
+.server-entry { display: flex; flex-direction: column; align-items: center; margin-top: 40rpx; padding: 14rpx 20rpx; }
+.server-entry-label { color: var(--sm-text-3); font-size: 17rpx; }
+.server-entry-value { margin-top: 8rpx; color: var(--sm-text-2); font-size: 16rpx; }
 </style>

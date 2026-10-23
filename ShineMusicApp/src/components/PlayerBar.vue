@@ -227,6 +227,48 @@ const activeLyricIndex = computed(() => {
   return idx
 })
 
+/** 当前行内的播放进度 0~1（按当前行到下一行的时间区间计算；末行取曲目时长） */
+const activeLineProgress = computed(() => {
+  if (state.currentLyric?.format !== 'lrc') return 0
+  const index = activeLyricIndex.value
+  const line = lyricLines.value[index]
+  if (!line) return 0
+  const start = line.time
+  const end = lyricLines.value[index + 1]?.time ?? (state.currentTrack?.duration ?? 0)
+  if (!(end > start)) return 0
+  return Math.min(1, Math.max(0, (state.currentTime - start) / (end - start)))
+})
+
+/** 扫光位置：仅当前行返回内联 CSS 变量，其余行走样式表默认值 */
+function lyricSweepStyle(index: number) {
+  if (index !== activeLyricIndex.value) return undefined
+  return { '--lyric-sweep': `${(activeLineProgress.value * 100).toFixed(2)}%` }
+}
+
+/** 与当前行的距离分级：仅横屏样式消费，竖屏不受影响 */
+function lyricDistanceClass(index: number): string {
+  if (activeLyricIndex.value < 0) return ''
+  const distance = Math.abs(index - activeLyricIndex.value)
+  if (distance === 0) return ''
+  if (distance <= 3) return `dist-${distance}`
+  return 'dist-far'
+}
+
+// —— 点击歌词行的一次性高亮反馈 ——
+const previewIndex = ref(-1)
+let previewTimer: ReturnType<typeof setTimeout> | undefined
+
+/** 点击 LRC 行：先闪一下该行，再跳转到行时间；非 LRC 行不响应 */
+function onLyricLineTap(line: LyricLine, index: number) {
+  if (line.time < 0) return
+  previewIndex.value = index
+  if (previewTimer) clearTimeout(previewTimer)
+  previewTimer = setTimeout(() => {
+    previewIndex.value = -1
+  }, 600)
+  seek(line.time)
+}
+
 // ===== 歌词滚动：让当前行始终垂直居中 =====
 // scroll-into-view 只会把目标行对齐到顶部，这里改为按“行中心 = 视口中心”计算 scroll-top。
 const lyricScrollTop = ref(0) // 绑定到 scroll-view 的 scroll-top
@@ -308,6 +350,7 @@ onMounted(() => {
 })
 onUnmounted(() => {
   uni.offWindowResize?.(onWindowResize)
+  if (previewTimer) clearTimeout(previewTimer)
 })
 
 // ===== 律动频谱条（视觉动效，非真实频谱；播放时律动、暂停时静置） =====
@@ -559,8 +602,16 @@ function onSeekMove(event: TouchEvent) {
             :key="index"
             :id="`lyric-line-${index}`"
             class="lyric-line"
-            :class="{ active: index === activeLyricIndex, clickable: line.time >= 0 }"
-            @tap="line.time >= 0 ? seek(line.time) : undefined"
+            :class="[
+              {
+                active: index === activeLyricIndex,
+                clickable: line.time >= 0,
+                flash: index === previewIndex,
+              },
+              lyricDistanceClass(index),
+            ]"
+            :style="lyricSweepStyle(index)"
+            @tap="onLyricLineTap(line, index)"
           >{{ line.text }}</view>
           <!-- 底部留白：保证最后一行也能滚到中间 -->
           <view class="lyric-spacer" :style="{ height: `${lyricPad}px` }"></view>
@@ -708,12 +759,15 @@ function onSeekMove(event: TouchEvent) {
 .lyric-view { flex: 1 1 auto; min-height: 0; margin-top: 20rpx; padding: 6rpx 6rpx; overflow: hidden; }
 .player-stage.immersive .lyric-view { margin-top: 0; }
 .lyric-spacer { width: 100%; }
-.lyric-line { padding: 10rpx 0; color: var(--sm-text-3); font-size: 17rpx; line-height: 1.7; text-align: center; transition: color .3s, transform .3s, opacity .3s; }
+/* --lyric-sweep：当前行扫光位置，由组件按行内播放进度内联覆盖，其余行保持 0% */
+.lyric-line { --lyric-sweep: 0%; padding: 10rpx 0; color: var(--sm-text-3); font-size: 17rpx; line-height: 1.7; text-align: center; transition: color .3s, transform .3s, opacity .3s; }
 .lyric-line.active { color: var(--sm-text); font-size: 20rpx; font-weight: 700; text-shadow: 0 0 18rpx var(--sm-accent-glow); transform: scale(1.04); }
 .player-stage.immersive .lyric-line { padding: 16rpx 0; font-size: 22rpx; }
 .player-stage.immersive .lyric-line.active { color: var(--sm-accent); font-size: 32rpx; text-shadow: 0 0 28rpx var(--sm-accent-glow); transform: scale(1.06); }
 .lyric-line.clickable { cursor: pointer; }
 .lyric-line.clickable:active { opacity: .6; }
+/* 点击行的一次性高亮反馈（跳转后 600ms 内淡出） */
+.lyric-line.flash { animation: lyric-flash .6s ease-out; border-radius: 10rpx; }
 .lyric-empty { margin-top: 26rpx; padding: 30rpx 0; color: var(--sm-text-3); font-size: 16rpx; text-align: center; }
 .player-stage.immersive .lyric-empty { margin-top: 0; }
 
@@ -846,20 +900,66 @@ function onSeekMove(event: TouchEvent) {
   .extra-button text { display: none; }
   .audio-notice { grid-column: 1 / -1; margin-top: 8px; font-size: 12px; }
 
-  /* —— 右栏：歌词面板常驻 —— */
+  /* —— 右栏：歌词面板常驻（A 诗页：静默毛玻璃 + 上下渐隐遮罩） —— */
   .lyric-view, .lyric-empty { grid-area: lyric; }
   .lyric-view {
-    margin-top: 0; padding: 14px 16px;
+    margin-top: 0; padding: 16px 18px;
     border: 1px solid var(--sm-border);
-    border-radius: 18px;
+    border-radius: 20px;
     background: var(--sm-surface-2);
     -webkit-backdrop-filter: blur(16px);
     backdrop-filter: blur(16px);
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 13%, #000 87%, transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0, #000 13%, #000 87%, transparent 100%);
   }
-  .lyric-line { padding: 6px 0 6px 10px; text-align: left; font-size: 15px; line-height: 1.85; }
-  .lyric-line.active { font-size: 18px; }
-  .player-stage.immersive .lyric-line { padding: 9px 0 9px 10px; font-size: 16px; }
-  .player-stage.immersive .lyric-line.active { font-size: 21px; }
+  .lyric-line { padding: 7px 0 7px 10px; text-align: left; font-size: 15px; line-height: 1.9; transform: none; }
+  /* 距离分级：越远离当前行越淡，形成诗页纵深 */
+  .lyric-line.dist-1 { opacity: .62; }
+  .lyric-line.dist-2 { opacity: .4; }
+  .lyric-line.dist-3 { opacity: .26; }
+  .lyric-line.dist-far { opacity: .16; }
+  /* B 扫光：当前行文字由 accent 逐渐扫成正文色（位置由行内进度驱动） */
+  .lyric-line.active {
+    position: relative;
+    font-size: 19px;
+    font-weight: 800;
+    text-shadow: none;
+    transform: none;
+    opacity: 1;
+    background-image: linear-gradient(
+      90deg,
+      var(--sm-accent) 0,
+      var(--sm-accent) var(--lyric-sweep),
+      var(--sm-text) var(--lyric-sweep),
+      var(--sm-text) 100%
+    );
+  }
+  /* A 的左光条 */
+  .lyric-line.active::before {
+    content: '';
+    position: absolute;
+    top: 50%; left: 0;
+    width: 3px; height: 1.15em;
+    border-radius: 2px;
+    background: var(--sm-accent);
+    box-shadow: 0 0 10px var(--sm-accent-glow);
+    transform: translateY(-50%);
+  }
+  @supports ((-webkit-background-clip: text) or (background-clip: text)) {
+    .lyric-line.active,
+    .player-stage.immersive .lyric-line.active {
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+  }
+  /* 不支持文字裁切的旧 webview：保持纯色，不出现透明字 */
+  @supports not ((-webkit-background-clip: text) or (background-clip: text)) {
+    .lyric-line.active { background-image: none; color: var(--sm-accent); }
+    .player-stage.immersive .lyric-line.active { background-image: none; color: var(--sm-accent); }
+  }
+  .player-stage.immersive .lyric-line { padding: 10px 0; text-align: center; font-size: 16px; }
+  .player-stage.immersive .lyric-line.active { font-size: 22px; text-shadow: none; }
   .lyric-empty { align-self: center; margin-top: 0; font-size: 14px; }
 
   /* —— 横屏沉浸歌词：左栏隐藏（v-if），歌词升为全幅主区 —— */
@@ -876,6 +976,7 @@ function onSeekMove(event: TouchEvent) {
   }
   .player-overlay.immersive .lyric-view { padding: 6px 0 0; border: 0; background: transparent; -webkit-backdrop-filter: none; backdrop-filter: none; }
   .player-overlay.immersive .lyric-line { text-align: center; }
+  .player-overlay.immersive .lyric-line.active::before { display: none; } /* 居中态不需要左光条 */
   .player-overlay.immersive .player-controls { max-width: 560px; }
 
   /* —— 横屏队列/音效抽屉：底部弹层 → 右侧滑入面板 —— */
@@ -906,7 +1007,11 @@ function onSeekMove(event: TouchEvent) {
   .control-secondary, .control-skip { width: 40px; height: 44px; }
   .player-extra { margin-top: 6px; gap: 10px; }
   .extra-button { width: 38px; height: 38px; }
+  /* 矮横屏可视行数少：歌词整体再收一档，避免一屏只剩两三行 */
+  .lyric-line { padding: 5px 0 5px 10px; font-size: 13px; line-height: 1.75; }
+  .lyric-line.active { font-size: 17px; }
 }
 
 @keyframes slide-in-right { from { transform: translateX(100%); } to { transform: translateX(0); } }
+@keyframes lyric-flash { 0% { background: var(--sm-accent-soft); } 100% { background: transparent; } }
 </style>

@@ -80,31 +80,42 @@ export async function uploadWallpaper(filePath: string): Promise<ApiUserTheme> {
   return body as ApiUserTheme
   // #endif
   // #ifndef H5
-  return new Promise((resolve, reject) => {
-    const token = getAccessToken()
-    const header: Record<string, string> = {}
-    if (token) header.Authorization = `Bearer ${token}`
-    uni.uploadFile({
-      url: resolveUrl(`${API_PREFIX}/me/theme/wallpaper`),
-      name: 'wallpaper',
-      filePath,
-      header,
-      success: (res) => {
-        try {
-          const body = typeof res.data === 'string' ? JSON.parse(res.data) : res.data
-          if (res.statusCode < 200 || res.statusCode >= 300) {
-            const detail = (body as { error?: { message?: string } })?.error
-            reject(new Error(detail?.message || t('services.uploadFailedWithStatus', { status: res.statusCode })))
-            return
+  // 401 时走单飞刷新后重试一次（与 http 层一致）：访问令牌过期时 uni.uploadFile 会静默失败
+  const sendOnce = () =>
+    new Promise<ApiUserTheme>((resolve, reject) => {
+      const token = getAccessToken()
+      const header: Record<string, string> = {}
+      if (token) header.Authorization = `Bearer ${token}`
+      uni.uploadFile({
+        url: resolveUrl(`${API_PREFIX}/me/theme/wallpaper`),
+        name: 'wallpaper',
+        filePath,
+        header,
+        success: (res) => {
+          try {
+            const body = typeof res.data === 'string' ? JSON.parse(res.data) : res.data
+            if (res.statusCode < 200 || res.statusCode >= 300) {
+              const detail = (body as { error?: { message?: string } })?.error
+              const error = new Error(detail?.message || t('services.uploadFailedWithStatus', { status: res.statusCode }))
+              ;(error as { status?: number }).status = res.statusCode
+              reject(error)
+              return
+            }
+            resolve(body as ApiUserTheme)
+          } catch (error) {
+            reject(new Error(error instanceof Error ? error.message : t('services.uploadResponseParseFailed')))
           }
-          resolve(body as ApiUserTheme)
-        } catch (error) {
-          reject(new Error(error instanceof Error ? error.message : t('services.uploadResponseParseFailed')))
-        }
-      },
-      fail: (err) => reject(new Error(err.errMsg || t('services.uploadFailed'))),
+        },
+        fail: (err) => reject(new Error(err.errMsg || t('services.uploadFailed'))),
+      })
     })
-  })
+  try {
+    return await sendOnce()
+  } catch (error) {
+    const status = (error as { status?: number }).status
+    if (status === 401 && (await refreshAccessToken())) return sendOnce()
+    throw error
+  }
   // #endif
 }
 
@@ -168,7 +179,26 @@ export async function fetchWallpaperObjectUrl(): Promise<string | null> {
   }
   // #endif
   // #ifndef H5
-  return null
+  // App 端无 blob/objectURL：带鉴权下载到本地临时文件，返回本地路径供 CSS/缩略图直接引用
+  try {
+    const downloadOnce = () =>
+      new Promise<{ statusCode: number; tempFilePath: string }>((resolve, reject) => {
+        const headers: Record<string, string> = {}
+        const token = getAccessToken()
+        if (token) headers.Authorization = `Bearer ${token}`
+        uni.downloadFile({
+          url: resolveUrl(`${API_PREFIX}/me/theme/wallpaper`),
+          header: headers,
+          success: (res) => resolve({ statusCode: res.statusCode, tempFilePath: res.tempFilePath }),
+          fail: reject,
+        })
+      })
+    let res = await downloadOnce()
+    if (res.statusCode === 401 && (await refreshAccessToken())) res = await downloadOnce()
+    return res.statusCode === 200 && res.tempFilePath ? res.tempFilePath : null
+  } catch {
+    return null
+  }
   // #endif
 }
 

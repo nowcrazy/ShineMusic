@@ -71,9 +71,10 @@ public sealed class ProfileController : ControllerBase
     // 行为：先删除该用户旧头像文件，再写入新文件（上传即整体替换）。
     // 返回：200 { avatarUrl }（带版本参数，前端可直接用作图片地址）；401 未登录。
     [HttpPost("avatar", Name = "UploadMyAvatar")]
+    [Consumes("multipart/form-data")]
     [RequestFormLimits(MultipartBodyLengthLimit = MultipartBodyLimit)]
     public async Task<IResult> UploadAvatar(
-        [FromForm] IFormFile? avatar,
+        IFormFile? avatar,
         UserManager<ApplicationUser> userManager,
         LibraryStoragePaths storagePaths,
         CancellationToken cancellationToken)

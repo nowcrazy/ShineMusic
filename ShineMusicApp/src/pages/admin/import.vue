@@ -24,6 +24,7 @@ import {
   X,
 } from 'lucide-vue-next'
 import { isAdmin } from '@/services/session'
+import { pickLocalFiles } from '@/utils/app-file-picker'
 import { ApiError } from '@/services/http'
 import { describeError, ErrorCodes } from '@/services/errors'
 import {
@@ -203,8 +204,9 @@ async function loadBatches() {
     if (selectedItemId.value && !selectedItem.value) {
       selectedItemId.value = ''
     }
-  } catch {
-    loadError.value = t('importReview.loadFailed')
+  } catch (error) {
+    // 展示具体原因（网络不可达 / 权限不足 / 服务端错误），避免统一文案掩盖真实故障
+    loadError.value = describeError(error, t('importReview.loadFailed'))
   } finally {
     loading.value = false
   }
@@ -255,7 +257,15 @@ function handleUpload() {
     },
   })
   // #endif
-  // #ifndef H5
+  // #ifdef APP-PLUS
+  // App 端没有 chooseFile：走原生 SAF 选择器（uni.chooseMessageFile 是小程序 API，App 上不弹任何界面）
+  pickLocalFiles()
+    .then((files) => doUpload(files.map((entry) => ({ path: entry.path, name: entry.name, file: undefined }))))
+    .catch((error) => {
+      uni.showToast({ title: t('importReview.uploadFailedWith', { message: (error as Error).message }), icon: 'none' })
+    })
+  // #endif
+  // #ifdef MP
   uni.chooseMessageFile({
     count: 10,
     type: 'file',
@@ -401,7 +411,28 @@ function handleUploadLyrics() {
     },
   })
   // #endif
-  // #ifndef H5
+  // #ifdef APP-PLUS
+  pickLocalFiles()
+    .then(async (files) => {
+      const path = files[0]?.path
+      if (!path) return
+      try {
+        const updated = await uploadLyricsFile(item.id, path)
+        for (const batch of batches.value) {
+          const idx = batch.items.findIndex((i) => i.id === updated.id)
+          if (idx >= 0) { batch.items.splice(idx, 1, updated); break }
+        }
+        lyrics.value = updated.metadata.lyrics ?? ''
+        uni.showToast({ title: t('importReview.lyricsImported'), icon: 'success' })
+      } catch (err) {
+        uni.showToast({ title: t('importReview.lyricsUploadFailed', { message: (err as Error).message }), icon: 'none' })
+      }
+    })
+    .catch((error) => {
+      uni.showToast({ title: t('importReview.lyricsUploadFailed', { message: (error as Error).message }), icon: 'none' })
+    })
+  // #endif
+  // #ifdef MP
   uni.chooseMessageFile({
     count: 1,
     type: 'file',
