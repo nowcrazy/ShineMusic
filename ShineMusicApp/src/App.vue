@@ -11,7 +11,7 @@
  * 主题切换只需改写 <html data-sm-theme="...">，所有页面样式均引用令牌变量，
  * 因此切换时无需重新渲染页面即可整体换肤。
  */
-import { onLaunch } from '@dcloudio/uni-app'
+import { onHide, onLaunch, onShow } from '@dcloudio/uni-app'
 // 引入全局 scss 变量与公共样式（uni.scss）
 import './uni.scss'
 import { isAuthenticated, restoreSession } from '@/services/session'
@@ -19,6 +19,7 @@ import { loadCapabilities } from '@/services/capabilities'
 import { loadFavorites } from '@/services/library'
 import { loadFeedback } from '@/services/feedback'
 import { initTheme } from '@/services/theme'
+import { flushPlayerState, syncFromBackgroundAudio } from '@/services/player'
 
 // 应用启动：先应用主题（避免首屏闪烁），再恢复登录态与能力开关
 onLaunch(() => {
@@ -31,6 +32,20 @@ onLaunch(() => {
     }
     loadCapabilities()
   })()
+})
+
+// 从后台切回前台：同步 BackgroundAudioManager 的真实播放状态
+// 可能的场景：Activity 重建（state 里 track 还是旧的但 BGM 已被锁屏切到 C），
+// 或者 state.currentTime 落后于 BGM 实际进度。syncFromBackgroundAudio
+// 会用 BGM 为权威源纠正 currentTrack / isPlaying / currentTime / duration，
+// PlayerBar 绑定 usePlayer().state，纠正后 UI 自动更新。
+onShow(() => {
+  syncFromBackgroundAudio()
+})
+
+// 切到后台/即将退出时立即落盘播放现场，冷启动后可恢复曲目与进度
+onHide(() => {
+  flushPlayerState()
 })
 </script>
 
@@ -648,7 +663,36 @@ page {
  * 左右留白透出主题背景色，观感自然且不偏移。折叠后的外屏（约 340~420px）走 rpx 等比缩放，
  * 无需额外处理即可正常显示。
  * ========================================================================== */
+/* #ifdef H5 */
+/* 仅 H5 宽屏限宽；App 端（手机/折叠屏/平板）铺满，避免出现两侧空白与分隔线 */
 @media (min-width: 700px) {
+  page {
+    max-width: 720px;
+    margin: 0 auto;
+  }
+}
+/* #endif */
+
+/* ============================================================================
+ * 宽视口适配（手机横持 / 折叠屏展开 / 平板）
+ * ----------------------------------------------------------------------------
+ * 触屏设备视口宽 ≥560px 时启用宽布局：手机横屏、折叠屏（双折/三折）展开、平板
+ * 竖屏均覆盖；手机竖屏与折叠屏外屏不受影响，桌面浏览器仍走 H5 限宽规则。
+ * 竖屏下额外要求宽高比 ≥ 2/3（视口接近方形）：折叠屏展开态约 0.83、平板约 0.69，
+ * 而手机竖屏即便 CSS 宽度较大（低密度设备可达 640px）仍是 0.56 的窄长形，据此排除，
+ * 保证「默认竖屏」不被宽布局误伤。
+ * 宽视口下 uni-app 运行时按「视口宽度」换算 rpx，字号与间距会整体放大，一屏只能
+ * 看到半个卡片。这里改用「短边」做基准，把字号/间距还原成竖屏手感（750/32 =
+ * 23.4375，与运行时 fontSize = width/23.4375 同源）；同时把页面收成 720px 居中栏
+ * （与桌面 H5 的限宽一致）。22px 封顶避免大屏字号过大。
+ * 全屏播放器的宽视口双栏布局使用 px 尺寸，不受此基准影响。
+ * ========================================================================== */
+@media (orientation: landscape) and (max-height: 820px) and (min-width: 560px),
+       (hover: none) and (pointer: coarse) and (min-width: 560px) and (min-aspect-ratio: 2/3) {
+  html {
+    font-size: min(calc(100vw / 23.4375), calc(100vh / 23.4375), 22px) !important;
+  }
+  /* 所有页面统一收成 720px 居中栏：横屏比竖屏宽一倍，铺满会把单列卡片拉扁 */
   page {
     max-width: 720px;
     margin: 0 auto;

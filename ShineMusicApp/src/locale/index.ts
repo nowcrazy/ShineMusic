@@ -33,10 +33,62 @@ function mergeTrees(target: MessageTree, source: MessageTree): MessageTree {
   return out
 }
 
+/** 已编译消息函数：intlify 对函数型消息直接调用，绕过内置消息编译器。 */
+type MessageFunctionCtx = {
+  /** 命名参数，现代版本为函数 (key) => value，旧版/自定义处理器可能是对象 */
+  named?: ((key: string) => unknown) | Record<string, unknown>
+  values?: ((key: string) => unknown) | Record<string, unknown>
+}
+type CompiledMessage = (ctx: MessageFunctionCtx) => string
+
+const NAMED_PLACEHOLDER = /\{\s*([a-zA-Z_$][\w$]*)\s*\}/g
+const AT_LITERAL = /\{\s*'@'\s*\}/g
+
+/** 从消息上下文取命名参数，兼容函数型 named()（intlify）与对象型 values。 */
+function lookupParam(ctx: MessageFunctionCtx | undefined, key: string): unknown {
+  const named = ctx?.named
+  if (typeof named === 'function') return named(key)
+  const values = ctx?.values
+  if (typeof values === 'function') return values(key)
+  if (values && typeof values === 'object') return (values as Record<string, unknown>)[key]
+  if (named && typeof named === 'object') return (named as Record<string, unknown>)[key]
+  return undefined
+}
+
+/**
+ * 把单个消息字符串编译为插值函数（{name} 命名插值 + {'@'} 字面量）。
+ * 不做动态代码求值（new Function），因此不依赖 vue-i18n 的消息编译器。
+ */
+function compileLeaf(message: string): CompiledMessage {
+  if (!message.includes('{')) return () => message
+  return (ctx) => {
+    return message.replace(AT_LITERAL, '@').replace(NAMED_PLACEHOLDER, (_, key: string) => {
+      const value = lookupParam(ctx, key)
+      return value == null ? '' : String(value)
+    })
+  }
+}
+
+/** 递归把消息树中的字符串全部预编译为函数。 */
+function compileTree(node: unknown): unknown {
+  if (typeof node === 'string') return compileLeaf(node)
+  if (node && typeof node === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      out[key] = compileTree(value)
+    }
+    return out
+  }
+  return node
+}
+
 /**
  * 主语言包（messages.ts）+ 各域补充模块合并。
  * 域模块（locale/messages/*.ts）扩展既有命名空间时逐层合并而非整体覆盖，
  * 与 messages.ts 既有 key 冲突时以域模块（逐字对齐源码）为准。
+ * 合并完成后统一预编译为函数型消息：DCloud App 产物缺 new Function，
+ * 默认编译器不可用且 messageCompiler 选项在 App 运行时副本中不生效，
+ * 函数型消息是唯一与版本无关的渲染路径。
  */
 function buildAllMessages(): Record<string, unknown> {
   const domains: Record<string, MessageTree>[] = [
@@ -50,10 +102,11 @@ function buildAllMessages(): Record<string, unknown> {
   ]
   const out: Record<string, unknown> = {}
   for (const [locale, tree] of Object.entries(allMessages)) {
-    out[locale] = domains.reduce(
-      (merged, domain) => mergeTrees(merged, domain[locale] ?? {}),
+    const merged = domains.reduce(
+      (acc, domain) => mergeTrees(acc, domain[locale] ?? {}),
       tree as MessageTree,
     )
+    out[locale] = compileTree(merged)
   }
   return out
 }
@@ -71,7 +124,7 @@ function globalScope(): Composer {
 export function createAppI18n(): I18n {
   if (_i18n) return _i18n
   const initial = loadLocale()
-  _i18n = createI18n({
+  const options = {
     legacy: false, // composition API: useI18n() in setup
     // 组合模式下 globalInjection 默认 false，$t/$d/$n 不会注入 globalProperties，
     // 模板 $t 会报 _ctx.$t is not a function 导致首屏白屏（App/H5 同样中招），必须显式开启
@@ -84,7 +137,8 @@ export function createAppI18n(): I18n {
     messages: buildAllMessages() as unknown as Record<string, DefineLocaleMessage>,
     missingWarn: import.meta.env.DEV, // 只有 dev 告警缺失 key
     fallbackWarn: false,
-  })
+  }
+  _i18n = createI18n(options as unknown as Parameters<typeof createI18n>[0])
   return _i18n
 }
 

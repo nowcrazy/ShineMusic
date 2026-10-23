@@ -18,6 +18,7 @@ import { Music4, Upload } from 'lucide-vue-next'
 import { isAuthenticated } from '@/services/session'
 import { useCapabilities } from '@/services/capabilities'
 import { uploadFiles } from '@/services/user-library'
+import { pickLocalFiles } from '@/utils/app-file-picker'
 import type { ApiUserUploadResponse } from '@/types/music'
 
 // 已选择的待上传文件（沿用 uni.chooseFile 的 tempFile 结构）
@@ -78,10 +79,37 @@ function validateFile(file: PickedFile): string | null {
 }
 
 /**
- * 选择本地文件：唤起系统选择器（count 上限 10），逐文件校验后加入待上传列表。
+ * 把选择结果按格式/大小校验后并入待上传列表。
+ * @param list 待加入的文件
+ */
+function appendPicked(list: PickedFile[]) {
+  const valid: PickedFile[] = []
+  for (const file of list) {
+    const err = validateFile(file)
+    if (err) {
+      uni.showToast({ title: err, icon: 'none' })
+      continue
+    }
+    valid.push(file)
+  }
+  if (valid.length) files.value = [...files.value, ...valid]
+}
+
+/**
+ * 选择本地文件：唤起系统选择器（最多 9 个），逐文件校验后加入待上传列表。
+ * 平台差异：H5 用 uni.chooseFile（官方仅支持 H5）；App 用原生 SAF Intent
+ * （uni.chooseFile 在 App 端不会弹任何界面），复制到缓存目录后返回真实路径。
  * 关键副作用：非法文件弹 toast 不加入；合法文件加入 files。
  */
-function handleChoose() {
+async function handleChoose() {
+  // #ifdef APP-PLUS
+  try {
+    appendPicked(await pickLocalFiles())
+  } catch {
+    uni.showToast({ title: t('libraryPage.pickFileFailed'), icon: 'none' })
+  }
+  // #endif
+  // #ifndef APP-PLUS
   uni.chooseFile({
     count: 9,
     type: 'all',
@@ -92,23 +120,16 @@ function handleChoose() {
         : tempFiles
           ? [tempFiles]
           : []
-      const picked = list.map((file) => ({
-        path: (file as { path?: string }).path ?? '',
-        name: (file as { name?: string }).name ?? '',
-        size: (file as { size?: number }).size ?? 0,
-      }))
-      const valid: PickedFile[] = []
-      for (const file of picked) {
-        const err = validateFile(file)
-        if (err) {
-          uni.showToast({ title: err, icon: 'none' })
-          continue
-        }
-        valid.push(file)
-      }
-      if (valid.length) files.value = [...files.value, ...valid]
+      appendPicked(
+        list.map((file) => ({
+          path: (file as { path?: string }).path ?? '',
+          name: (file as { name?: string }).name ?? '',
+          size: (file as { size?: number }).size ?? 0,
+        })),
+      )
     },
   })
+  // #endif
 }
 
 /**

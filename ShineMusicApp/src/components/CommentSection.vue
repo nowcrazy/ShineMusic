@@ -283,14 +283,14 @@ onMounted(() => void load(true))
                 <text v-if="comment.likeCount > 0">{{ comment.likeCount }}</text>
               </view>
               <text class="cs-op cs-op--reply" @tap="startReply(comment)">{{ $t('comments.reply') }}</text>
-              <text v-if="comment.replies.length" class="cs-op cs-op--toggle" @tap="toggleReplies(comment)">
+              <view v-if="comment.replies.length" class="cs-op cs-op--toggle" @tap="toggleReplies(comment)">
                 {{ isExpanded(comment) ? $t('comments.collapse') : $t('comments.repliesCount', { count: comment.replies.length }) }}
                 <ChevronUp v-if="isExpanded(comment)" :size="14" />
                 <ChevronDown v-else :size="14" />
-              </text>
-              <text v-if="canDelete(comment)" class="cs-op cs-op--danger" @tap="remove(comment)">
+              </view>
+              <view v-if="canDelete(comment)" class="cs-op cs-op--danger" @tap="remove(comment)">
                 <Trash2 :size="14" />
-              </text>
+              </view>
             </view>
 
             <!-- 回复区（展开时显示） -->
@@ -304,9 +304,9 @@ onMounted(() => void load(true))
                   </view>
                   <view class="cs-reply-body">
                     <text class="cs-reply-content">{{ reply.content }}</text>
-                    <text v-if="canDelete(reply)" class="cs-op cs-op--danger cs-op--inline" @tap="remove(reply, comment)">
+                    <view v-if="canDelete(reply)" class="cs-op cs-op--danger cs-op--inline" @tap="remove(reply, comment)">
                       <Trash2 :size="13" />
-                    </text>
+                    </view>
                   </view>
                   <view class="cs-reply-ops">
                     <view class="cs-op cs-op--like" :class="{ liked: reply.likedByMe }" @tap="toggleLike(reply)">

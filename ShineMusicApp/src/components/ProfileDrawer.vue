@@ -167,7 +167,7 @@ function handleLogout() {
       <view class="drawer-head">
         <view class="drawer-brand">
           <view class="drawer-mark"><AudioLines :size="17" :stroke-width="2.7" /></view>
-          <text class="drawer-brand-name">shine<span>.</span></text>
+          <text class="drawer-brand-name">shine.</text>
         </view>
         <view class="drawer-close" @tap="close"><X :size="19" /></view>
       </view>
@@ -183,7 +183,7 @@ function handleLogout() {
           <text class="drawer-mail">{{ currentUser?.email }}</text>
           <view class="drawer-roles">
             <text class="drawer-role">{{ t('drawer.listener') }}</text>
-            <text v-if="isAdmin" class="drawer-role admin"><ShieldCheck :size="12" /><text>{{ t('drawer.admin') }}</text></text>
+            <view v-if="isAdmin" class="drawer-role admin"><ShieldCheck :size="12" /><text>{{ t('drawer.admin') }}</text></view>
           </view>
         </view>
       </view>

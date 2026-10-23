@@ -11,6 +11,7 @@ import EmptyState from '@/components/EmptyState.vue'
 import PlayerBar from '@/components/PlayerBar.vue'
 import TrackRow from '@/components/TrackRow.vue'
 import { getListeningHistory, type HistoryEntry } from '@/services/history'
+import { isAuthenticated } from '@/services/session'
 import { formatDate } from '@/utils/format'
 import type { Track } from '@/types/music'
 
@@ -27,6 +28,11 @@ const tracks = computed<Track[]>(() => entries.value.map((entry) => entry.track)
 const hasMore = computed(() => entries.value.length < total.value)
 
 async function load(reset = false) {
+  if (!isAuthenticated.value) {
+    // 未登录不请求 /me/history（会 401），直接落到登录引导空态
+    loading.value = false
+    return
+  }
   if (reset) {
     loading.value = true
     page.value = 1
@@ -42,6 +48,10 @@ async function load(reset = false) {
   } finally {
     loading.value = false
   }
+}
+
+function goLogin() {
+  uni.navigateTo({ url: '/pages/auth/login' })
 }
 
 function loadMore() {
@@ -63,7 +73,15 @@ onReachBottom(loadMore)
     <view v-else-if="loadError" class="page-state">{{ t('history.loadError') }}</view>
     <template v-else>
       <EmptyState
-        v-if="!entries.length"
+        v-if="!isAuthenticated"
+        :icon="HistoryIcon"
+        :title="t('history.loginTitle')"
+        :hint="t('history.loginCopy')"
+        :action-text="t('libraryPage.goLogin')"
+        @action="goLogin"
+      />
+      <EmptyState
+        v-else-if="!entries.length"
         :icon="HistoryIcon"
         :title="t('history.empty')"
         :hint="t('history.emptyHint')"

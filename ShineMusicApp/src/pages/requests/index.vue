@@ -564,7 +564,9 @@ function formatCount(n: number): string {
 .login-tip { display: flex; flex-direction: column; align-items: center; gap: 18rpx; padding: 110rpx 40rpx; color: var(--sm-text-3); }
 .login-tip-title { color: var(--sm-text-2); font-size: 20rpx; }
 .login-tip-button { padding: 16rpx 56rpx; border-radius: 42rpx; background: var(--sm-accent); color: var(--sm-accent-ink); font-size: 20rpx; font-weight: 800; }
+/* #ifdef H5 */
 @media (min-width: 700px) {
   .form-sheet { max-width: 720px; margin: 0 auto; }
 }
+/* #endif */
 </style>

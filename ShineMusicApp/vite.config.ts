@@ -96,12 +96,14 @@ export default defineConfig(({ mode, command }) => {
   const isAppPlatform = process.env.UNI_PLATFORM === 'app'
 
   // 客户端 API 基础地址（http.ts 通过 __SM_API_BASE__ 读取）：
-  //   app 平台 → APK 发布包内置地址：优先 server.appApiOrigin（公网稳定地址），未配置时回退局域网真机调试地址；
+  //   app 平台 → APK 发布包内置地址：优先 server.appApiOrigin（公网稳定地址）；
+  //              未配置时回退 http://127.0.0.1:${appApiPort}（模拟器配合 adb reverse 永远有效；
+  //              真机/局域网换 WiFi IP 变了 → App 设置里运行时覆盖即可，无需重打包）；
   //              用户还可在 App 设置里运行时覆盖（http.ts 的 setApiBaseOverride）
-  //   h5 dev   → 空串，走相对路径 + devServer 代理
+  //   h5 dev   → 空串，走相对路径 + devServer 代理（hosts.json 热更新，无需重构建）
   //   h5 prod  → 同域留空（Nginx 反代）；前后端不同域时用 server.apiOrigin
   const apiBase = isAppPlatform
-    ? server.appApiOrigin || `http://${lanIp}:${appApiPort}`
+    ? server.appApiOrigin || `http://127.0.0.1:${appApiPort}`
     : mode === 'production'
       ? server.apiOrigin && server.apiOrigin !== server.webOrigin
         ? server.apiOrigin

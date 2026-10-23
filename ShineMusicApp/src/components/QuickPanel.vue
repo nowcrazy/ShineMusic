@@ -81,6 +81,11 @@ function go(url: string) {
 .qpanel-title { color: var(--sm-text); font-size: 26rpx; font-weight: 800; }
 .qpanel-close { display: grid; place-items: center; width: 56rpx; height: 56rpx; border-radius: 50%; background: var(--sm-surface-3); color: var(--sm-text-2); }
 .qpanel-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22rpx; }
+/* 宽视口（横屏 / 折叠屏展开）：高度受限或横向空间富余，宫格改为一行 6 列 */
+@media (orientation: landscape) and (max-height: 820px) and (min-width: 560px),
+       (hover: none) and (pointer: coarse) and (min-width: 560px) and (min-aspect-ratio: 2/3) {
+  .qpanel-grid { grid-template-columns: repeat(6, 1fr); }
+}
 .qpanel-item { display: flex; flex-direction: column; align-items: center; gap: 12rpx; padding: 24rpx 0 20rpx; border: 1rpx solid var(--sm-border); border-radius: 22rpx; background: var(--sm-surface-2); transition: background .15s ease; }
 .qpanel-item:active { background: var(--sm-surface-3); }
 .qpanel-icon { display: grid; place-items: center; width: 84rpx; height: 84rpx; border-radius: 24rpx; }

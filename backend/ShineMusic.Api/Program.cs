@@ -376,6 +376,15 @@ if (app.Environment.IsDevelopment())
 app.UseExceptionHandler(exceptionHandler => exceptionHandler.Run(async context =>
 {
     var exception = context.Features.Get<IExceptionHandlerFeature>()?.Error;
+    // 客户端主动断连（TaskCanceledException / OperationCanceledException）：
+    // ASP.NET Core 在客户端断开 HTTP 连接时会自动取消请求 CancellationToken，
+    // 此时 EF Core/HTTP 请求等异步操作会抛出 TaskCanceledException。
+    // 这不是服务端故障，不应该记录为 error 或返回 500，否则日志里会被大量噪音淹没。
+    if (exception is OperationCanceledException)
+    {
+        context.Response.StatusCode = 499; // Client Closed Request（Nginx 约定状态码）
+        return;
+    }
     // 未处理异常统一收敛为 500 JSON，先记录带 TraceId 的日志（落入 logs/app），再向客户端返回脱敏错误信息。
     // 日志带方法/路径/TraceId，配合 operations/data 日志即可顺着 TraceId 还原整条请求链路。
     context.RequestServices.GetRequiredService<ILoggerFactory>()

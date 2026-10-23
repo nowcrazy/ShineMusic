@@ -75,10 +75,19 @@ export interface HomeFeed {
  * @returns 首页视图模型
  * @throws 请求失败（网络错误或后端业务错误）时抛出 ApiError，由页面展示错误态
  */
-export async function getHomeFeed(): Promise<HomeFeed> {
+// ============ 模块级内存缓存（stale-while-revalidate）============
+// 应用从后台切回前台时 Vue 组件会重建，onMounted 再次触发。
+// 高频读接口加内存缓存：首次发请求，后续先返回缓存再静默刷新，
+// 避免用户看到 loading。进程被系统回收后缓存自然清空，冷启动会重新请求。
+let _homeFeedCache: HomeFeed | null = null
+let _homeFeedInFlight: Promise<HomeFeed> | null = null
+
+let _genresCache: readonly string[] | null = null
+let _genresInFlight: Promise<readonly string[]> | null = null
+
+async function fetchHomeFeedRaw(): Promise<HomeFeed> {
   const home = await http.get<ApiMusicHomeFeed>(`${API_PREFIX}/music/home`, false)
   const recentTracks = home.recentlyAdded.items.map(mapTrack)
-
   return {
     featured: home.featured ? mapTrack(home.featured) : recentTracks[0] ?? null,
     featuredCollectionId: home.collections[0]?.id ?? null,
@@ -87,6 +96,53 @@ export async function getHomeFeed(): Promise<HomeFeed> {
     dailyMix: recentTracks,
     trending: recentTracks.slice(0, 4),
   }
+}
+
+async function refreshHomeFeedSilently(): Promise<void> {
+  try {
+    _homeFeedCache = await fetchHomeFeedRaw()
+  } catch {
+    // 静默失败，保留旧缓存
+  }
+}
+
+/**
+ * 获取首页聚合 Feed（带模块级内存缓存）。
+ * - 首次调用：发网络请求，缓存结果后返回。
+ * - 后续调用：**立即返回缓存**，同时后台静默刷新（stale-while-revalidate）。
+ *   组件重建 / 从后台恢复 / 快速重复调用都不会再看到 loading。
+ * - 并发去重：请求进行中时再次调用会复用同一个 Promise。
+ */
+export async function getHomeFeed(): Promise<HomeFeed> {
+  if (_homeFeedCache) {
+    void refreshHomeFeedSilently()
+    return _homeFeedCache
+  }
+  if (!_homeFeedInFlight) {
+    _homeFeedInFlight = fetchHomeFeedRaw().finally(() => {
+      _homeFeedInFlight = null
+    })
+  }
+  _homeFeedCache = await _homeFeedInFlight
+  return _homeFeedCache
+}
+
+/** 清空首页缓存（管理员发布/修改合集后手动触发）。 */
+export function invalidateHomeFeedCache(): void {
+  _homeFeedCache = null
+}
+
+/**
+ * 同步读取首页缓存（页面 onMounted 里先用它同步填充 ref，避免 loading 闪烁）。
+ * 缓存未就绪时返回 null。
+ */
+export function peekHomeFeedCache(): HomeFeed | null {
+  return _homeFeedCache
+}
+
+/** 同步读取流派缓存（未就绪返回 null）。 */
+export function peekGenresCache(): readonly string[] | null {
+  return _genresCache
 }
 
 /**
@@ -155,8 +211,17 @@ export async function getTrack(trackId: string): Promise<Track> {
  * @returns 流派名字符串数组（取分页 items）
  */
 export async function getGenres(): Promise<readonly string[]> {
-  const result = await http.get<ApiPageResult<string>>(`${API_PREFIX}/genres?pageSize=100`, false)
-  return result.items
+  if (_genresCache) return _genresCache
+  if (!_genresInFlight) {
+    _genresInFlight = http
+      .get<ApiPageResult<string>>(`${API_PREFIX}/genres?pageSize=100`, false)
+      .then((r) => r.items)
+      .finally(() => {
+        _genresInFlight = null
+      })
+  }
+  _genresCache = await _genresInFlight
+  return _genresCache
 }
 
 /**
@@ -172,18 +237,48 @@ export async function getCollections(): Promise<readonly ApiCollectionSummary[]>
   return result.items
 }
 
+// 额外缓存：getCollection 按 ID 缓存合集详情（详情页重建时避免 loading 闪烁）
+type CollectionDetailResult = { detail: ApiCollectionDetail; tracks: Track[] }
+const _collectionCache = new Map<string, CollectionDetailResult>()
+const _collectionInFlight = new Map<string, Promise<CollectionDetailResult>>()
+
 /**
- * 获取精选合集详情及其映射后的曲目列表。
- * - 请求：GET /api/v1/collections/{collectionId}（匿名）
- * @param collectionId 合集 ID
- * @returns detail 原始 DTO（封面/简介等元数据）+ tracks 扁平曲目数组
+ * 获取精选合集详情及其映射后的曲目列表（按 ID 模块级缓存 + stale-while-revalidate）。
+ * - 首次调用某 ID：发请求，缓存后返回。
+ * - 后续调用同 ID：立即返回缓存，后台静默刷新。
+ * - 不同 ID 独立缓存互不影响。
  */
-export async function getCollection(collectionId: string) {
-  const detail = await http.get<ApiCollectionDetail>(
-    `${API_PREFIX}/collections/${collectionId}`,
-    false,
-  )
-  return { detail, tracks: detail.tracks.map(mapTrack) }
+export async function getCollection(collectionId: string): Promise<CollectionDetailResult> {
+  const cached = _collectionCache.get(collectionId)
+  if (cached) {
+    void (async () => {
+      try {
+        const detail = await http.get<ApiCollectionDetail>(
+          `${API_PREFIX}/collections/${collectionId}`,
+          false,
+        )
+        _collectionCache.set(collectionId, { detail, tracks: detail.tracks.map(mapTrack) })
+      } catch {
+        /* 静默刷新失败 */
+      }
+    })()
+    return cached
+  }
+  let inflight = _collectionInFlight.get(collectionId)
+  if (!inflight) {
+    inflight = http
+      .get<ApiCollectionDetail>(`${API_PREFIX}/collections/${collectionId}`, false)
+      .then((detail) => {
+        const result = { detail, tracks: detail.tracks.map(mapTrack) }
+        _collectionCache.set(collectionId, result)
+        return result
+      })
+      .finally(() => {
+        _collectionInFlight.delete(collectionId)
+      })
+    _collectionInFlight.set(collectionId, inflight)
+  }
+  return inflight
 }
 
 /**

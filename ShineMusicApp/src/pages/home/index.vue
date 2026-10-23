@@ -39,9 +39,9 @@ import PlayerBar from '@/components/PlayerBar.vue'
 import CoverArt from '@/components/CoverArt.vue'
 import ProfileDrawer from '@/components/ProfileDrawer.vue'
 import QuickPanel from '@/components/QuickPanel.vue'
-import { getGenres, getHomeFeed, searchTracks } from '@/services/catalog'
+import { getGenres, getHomeFeed, peekGenresCache, peekHomeFeedCache, searchTracks } from '@/services/catalog'
 import { resolveUrl } from '@/services/http'
-import { getDailyRecommendations } from '@/services/recommend'
+import { getDailyRecommendations, peekDailyCache } from '@/services/recommend'
 import { playQueue, playTrack } from '@/services/player'
 import {
   createPlaylist,
@@ -468,6 +468,25 @@ onShow(() => {
 
 // 首次挂载：并行拉取首页 Feed 与风格；已登录时预加载收藏数据
 onMounted(() => {
+  // ============ 先用模块级缓存同步填充，避免 loading 闪烁 ============
+  // 应用从后台切回前台时 Vue 组件重建、onMounted 再次触发。
+  // 如果 service 层已有上次的缓存数据，立即同步赋值给 ref，
+  // 页面就能在第一帧渲染已有内容，而不是闪一下 loading。
+  // 填充完后仍然调 loadHome/loadGenreChips/loadDaily，
+  // 它们内部会走 stale-while-revalidate 静默刷新。
+  const cachedHome = peekHomeFeedCache()
+  if (cachedHome) {
+    featured.value = cachedHome.featured
+    recentTracks.value = cachedHome.recentlyAdded
+    collections.value = cachedHome.collections
+    heroCollection.value = cachedHome.collections[0] ?? null
+  }
+  const cachedGenres = peekGenresCache()
+  if (cachedGenres) genres.value = cachedGenres
+  const cachedDaily = peekDailyCache()
+  if (cachedDaily) dailyTracks.value = cachedDaily.tracks
+
+  // ============ 正常异步加载（缓存命中时静默刷新，未命中时发请求） ============
   void loadHome()
   void loadGenreChips()
   void loadDaily()
@@ -599,24 +618,25 @@ function coverOf(collection: ApiCollectionSummary) {
       <view class="topbar">
         <view class="brand-lockup">
           <view class="brand-mark"><AudioLines :size="19" :stroke-width="2.7" /></view>
-          <text class="brand-name">shine<span>.</span></text>
+          <text class="brand-name">shine.</text>
         </view>
         <view class="topbar-actions">
           <view class="avatar" @tap="onAvatarTap">{{ avatarLetter }}</view>
         </view>
       </view>
 
-      <!-- 问候标题 + 今日灵感卡 -->
-      <view class="page-heading">
-        <view>
-          <text class="eyebrow">SHINE MUSIC</text>
-          <text class="greeting">{{ greetingText }}</text>
-          <text class="greeting-sub">{{ $t(timeGreeting.toneKey) }}</text>
+      <!-- 问候标题 + 今日灵感卡（横屏下两者并排，避免卡片被横向拉伸出大片留白） -->
+      <view class="hero-row">
+        <view class="page-heading">
+          <view>
+            <text class="eyebrow">SHINE MUSIC</text>
+            <text class="greeting">{{ greetingText }}</text>
+            <text class="greeting-sub">{{ $t(timeGreeting.toneKey) }}</text>
+          </view>
         </view>
-      </view>
 
-      <!-- 今日灵感卡片：时间驱动 + 氛围标签 + 主打曲目 + 播放按钮 + 更多入口 -->
-      <view v-if="activeTab === '为你'" class="inspiration-card" @tap="goDaily">
+        <!-- 今日灵感卡片：时间驱动 + 氛围标签 + 主打曲目 + 播放按钮 + 更多入口 -->
+        <view v-if="activeTab === '为你'" class="inspiration-card" @tap="goDaily">
         <view class="inspiration-left">
           <view class="inspiration-badge">
             <Sparkles :size="13" />
@@ -652,6 +672,7 @@ function coverOf(collection: ApiCollectionSummary) {
           <view v-if="dailyPreview.length > 2" class="inspiration-stack-2">
             <CoverArt :src="dailyPreview[2].cover" :rounded="14" :icon-size="18" />
           </view>
+        </view>
         </view>
       </view>
 
@@ -1122,6 +1143,7 @@ function coverOf(collection: ApiCollectionSummary) {
 .brand-name span { color: var(--sm-accent); }
 .topbar-actions { display: flex; align-items: center; gap: 14rpx; }
 .avatar { display: grid; place-items: center; width: 68rpx; height: 68rpx; border: 1rpx solid var(--sm-border-strong); border-radius: 50%; background: var(--sm-surface-3); color: var(--sm-text); font-family: 'DM Sans', sans-serif; font-size: 25rpx; font-weight: 700; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); box-shadow: 0 4rpx 14rpx var(--sm-art-shadow); }
+.hero-row { display: block; }
 .page-heading { display: flex; align-items: end; padding: 50rpx 44rpx 0; }
 .eyebrow, .section-kicker { display: block; color: var(--sm-accent); font-family: 'DM Sans', sans-serif; font-size: 17rpx; font-weight: 700; letter-spacing: 1.2rpx; }
 .greeting { display: block; margin-top: 11rpx; font-size: 42rpx; line-height: 1.25; font-weight: 700; color: var(--sm-text); }
@@ -1292,8 +1314,22 @@ function coverOf(collection: ApiCollectionSummary) {
 .ei-theme { background: var(--sm-accent-3-soft); color: var(--sm-accent-3); }
 .ei-profile { background: var(--sm-warn-soft); color: var(--sm-warn); }
 .entry-name { flex: 1; color: var(--sm-text); font-size: 21rpx; font-weight: 600; }
+/* 横屏：内容栏与竖屏手机同宽居中（844x390 时两侧各留 62px），固定底栏同步对齐，
+   避免宽屏下卡片被横向拉伸、底栏比内容栏更宽 */
+@media (orientation: landscape) and (max-height: 820px) and (min-width: 560px),
+       (hover: none) and (pointer: coarse) and (min-width: 560px) and (min-aspect-ratio: 2/3) {
+  .app-shell { max-width: 720px; margin: 0 auto; border-right: 1rpx solid var(--sm-divider); border-left: 1rpx solid var(--sm-divider); }
+  .tabbar { right: max(0px, calc((100vw - 720px) / 2)); left: max(0px, calc((100vw - 720px) / 2)); }
+  /* 问候标题与今日灵感卡并排：横屏多出来的横向空间给卡片，避免拉伸后中间大片留白 */
+  .hero-row { display: flex; align-items: stretch; gap: 26rpx; }
+  .page-heading { flex: none; padding: 34rpx 0 0 44rpx; }
+  .inspiration-card { flex: 1; min-width: 0; margin: 30rpx 40rpx 0 0; }
+}
+/* #ifdef H5 */
+/* 宽屏（桌面浏览器/平板浏览器）限宽居中；App 端始终铺满，避免手机/折叠屏被限宽 */
 @media (min-width: 700px) {
   .app-shell { max-width: 720px; min-height: 100vh; margin: 0 auto; border-right: 1rpx solid var(--sm-divider); border-left: 1rpx solid var(--sm-divider); }
   .tabbar { right: max(0px, calc((100vw - 720px) / 2)); left: max(0px, calc((100vw - 720px) / 2)); }
 }
+/* #endif */
 </style>

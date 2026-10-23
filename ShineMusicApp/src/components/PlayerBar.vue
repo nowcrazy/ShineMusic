@@ -9,7 +9,7 @@
  * - 手势：封面区左右滑切歌、下滑关闭、双击收藏、单击切换歌词模式；
  * - 行为：收藏（library）、不感兴趣（feedback），播放/跳过/播完由 player 统一上报。
  */
-import { computed, getCurrentInstance, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   AlignLeft,
@@ -245,7 +245,11 @@ function onLyricScroll(event: any) {
  */
 function centerActiveLyric() {
   const index = activeLyricIndex.value
-  const query = uni.createSelectorQuery().in(instance).select('.lyric-view').boundingClientRect()
+  // 注意：这里不能用 .in(instance) —— App 端（app-plus）会把带组件作用域的查询
+  // 派发到“当前活动页面”的 webview，切页瞬间会命中不存在的节点并让视图层抛错
+  // （Cannot read properties of undefined (reading '$')），导致新页面白屏/卡在加载态。
+  // 页面级查询只在当前页 DOM 内查找；`.lyric-view` 全应用唯一，找不到时会安全返回空。
+  const query = uni.createSelectorQuery().select('.lyric-view').boundingClientRect()
   if (index >= 0) query.select(`#lyric-line-${index}`).boundingClientRect()
   query.exec((result) => {
     const view = Array.isArray(result[0]) ? result[0][0] : result[0]
@@ -285,7 +289,6 @@ watch(
   },
 )
 watch(expanded, (open) => {
-  applyOrientationLock()
   if (open) void nextTick(() => centerActiveLyric())
 })
 watch(lyricMode, () => {
@@ -297,45 +300,14 @@ function onWindowResize() {
   void nextTick(() => centerActiveLyric())
 }
 
-// ===== App 端横屏策略（对齐全屏视频/音乐类 App）=====
-// 全局保持竖屏锁定；仅当全屏播放器展开时解锁旋转（横屏呈现双栏布局），收起时恢复竖屏。
-function applyOrientationLock() {
-  // #ifdef APP-PLUS
-  try {
-    const plus = (globalThis as any).plus
-    if (!plus?.android) return
-    const main = plus.android.runtimeMainActivity()
-    const ActivityInfo = plus.android.importClass('android.content.pm.ActivityInfo')
-    main.setRequestedOrientation(
-      expanded.value ? ActivityInfo.SCREEN_ORIENTATION_FULL_USER : ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
-    )
-  } catch {
-    // 方向控制失败不影响播放
-  }
-  // #endif
-}
+// 屏幕方向交给系统与 manifest 的 screenOrientation 统一管理（portrait + landscape 双向），
+// 这里不再在运行时锁定竖屏，否则全应用横屏无法生效。
 
 onMounted(() => {
   uni.onWindowResize?.(onWindowResize)
-  applyOrientationLock()
 })
 onUnmounted(() => {
   uni.offWindowResize?.(onWindowResize)
-  // 展开态下组件被销毁（如从播放页 reLaunch 走）时收回竖屏锁定
-  // #ifdef APP-PLUS
-  if (expanded.value) {
-    try {
-      const plus = (globalThis as any).plus
-      const main = plus?.android?.runtimeMainActivity?.()
-      if (main) {
-        const ActivityInfo = plus.android.importClass('android.content.pm.ActivityInfo')
-        main.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT)
-      }
-    } catch {
-      // ignore
-    }
-  }
-  // #endif
 })
 
 // ===== 律动频谱条（视觉动效，非真实频谱；播放时律动、暂停时静置） =====
@@ -480,7 +452,6 @@ function onArtTouchEnd(event: TouchEvent) {
 }
 
 // —— 进度条拖动 seek：缓存进度条节点位置，按触点横坐标换算播放位置 ——
-const instance = getCurrentInstance()
 let seekRect: { left: number; width: number } | null = null
 
 function fractionFromEvent(event: TouchEvent): number | null {
@@ -492,7 +463,6 @@ function fractionFromEvent(event: TouchEvent): number | null {
 function onSeekStart(event: TouchEvent) {
   uni
     .createSelectorQuery()
-    .in(instance)
     .select('.seek-track')
     .boundingClientRect((rect) => {
       const nodeRect = Array.isArray(rect) ? rect[0] : rect
@@ -804,17 +774,26 @@ function onSeekMove(event: TouchEvent) {
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes eq { 0%, 100% { transform: scaleY(.25); } 50% { transform: scaleY(1); } }
 @keyframes rise-in { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: translateY(0); } }
+/* #ifdef H5 */
 @media (min-width: 700px) {
   .now-playing { right: max(20rpx, calc((100vw - 680px) / 2)); left: max(20rpx, calc((100vw - 680px) / 2)); }
   .player-overlay { max-width: 720px; margin: 0 auto; }
 }
+/* #endif */
 
 /* 横屏 / 折叠屏展开态双栏布局（参考网易云 Pad 版 / QQ 音乐横屏 / Apple Music 双栏播放器的通行范式）：
    左栏 = 黑胶封面 + 曲目信息 + 频谱 + 进度 + 传输控制 + 操作图标行；
    右栏 = 歌词面板常驻（左对齐、大行距、毛玻璃卡片），与竖屏“封面/歌词二选一、居中沉浸”形成真正的形态差异；
    队列/音效抽屉横屏下从底部弹层改为右侧滑入面板。
-   横屏下 rpx 以横屏宽度为基准整体放大，故控制/文字尺寸全部改用 px 显式约束。 */
-@media (orientation: landscape) and (min-width: 560px) {
+   横屏下 rpx 以横屏宽度为基准整体放大，故控制/文字尺寸全部改用 px 显式约束。
+   触屏宽视口（折叠屏展开竖持、平板竖屏）同样启用双栏；桌面浏览器保持横屏启用。 */
+@media (orientation: landscape) and (min-width: 560px),
+       (hover: none) and (pointer: coarse) and (min-width: 560px) and (min-aspect-ratio: 2/3) {
+  /* 迷你播放条与横屏内容栏（720px）对齐，不铺满两侧 */
+  .now-playing {
+    right: max(20rpx, calc((100vw - 680px) / 2));
+    left: max(20rpx, calc((100vw - 680px) / 2));
+  }
   .player-overlay {
     display: grid;
     grid-template-columns: minmax(0, 11fr) minmax(0, 9fr);
@@ -909,6 +888,24 @@ function onSeekMove(event: TouchEvent) {
   }
   .queue-sheet { max-height: none; }
   .queue-scroll { flex: 1 1 auto; max-height: none; }
+}
+
+/* 横屏且高度很矮（手机横持 390~420px）：左栏按可用高度再收一档，
+   否则黑胶封面会顶出 art 行、与顶部栏重叠并被裁掉一截。 */
+@media (orientation: landscape) and (max-height: 480px) {
+  .player-art-wrap { width: min(25vh, 22vw, 220px); }
+  /* 黑胶缩到 100px 左右时贴纸会盖住半个封面，直接隐藏 */
+  .art-sticker { display: none; }
+  .player-info { margin-top: 8px; gap: 8px; }
+  .player-song-title { font-size: 18px; }
+  .player-song-artist { margin-top: 3px; font-size: 12px; }
+  .visualizer { height: 22px; margin-top: 6px; }
+  .seek-area { margin-top: 6px; }
+  .player-controls { margin-top: 6px; max-width: 380px; }
+  .control-play { width: 54px; height: 54px; }
+  .control-secondary, .control-skip { width: 40px; height: 44px; }
+  .player-extra { margin-top: 6px; gap: 10px; }
+  .extra-button { width: 38px; height: 38px; }
 }
 
 @keyframes slide-in-right { from { transform: translateX(100%); } to { transform: translateX(0); } }

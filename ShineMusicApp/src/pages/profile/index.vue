@@ -219,7 +219,7 @@ function goBack() {
 
       <!-- 昵称 -->
       <view class="section">
-        <text class="section-title"><UserRound :size="17" /> {{ $t('auth.displayName') }}</text>
+        <view class="section-title"><UserRound :size="17" /> {{ $t('auth.displayName') }}</view>
         <input v-model="displayName" class="field-input" type="text" :placeholder="$t('profilePage.displayNamePlaceholder')" maxlength="100" />
         <view class="save-row">
           <text v-if="nameMessage" class="field-message">{{ nameMessage }}</text>
@@ -238,7 +238,7 @@ function goBack() {
 
       <!-- 修改密码 -->
       <view class="section">
-        <text class="section-title"><KeyRound :size="17" /> {{ $t('profilePage.changePassword') }}</text>
+        <view class="section-title"><KeyRound :size="17" /> {{ $t('profilePage.changePassword') }}</view>
         <input v-model="currentPassword" class="field-input" password :placeholder="$t('profilePage.currentPassword')" />
         <input v-model="newPassword" class="field-input" password :placeholder="$t('profilePage.newPasswordPlaceholder')" />
         <view class="strength-row">

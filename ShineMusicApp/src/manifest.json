@@ -14,6 +14,7 @@
         "usingComponents" : true,
         "nvueStyleCompiler" : "uni-app",
         "compilerVersion" : 3,
+        "screenOrientation" : [ "portrait-primary", "landscape-primary", "landscape-secondary" ],
         "compatible" : {
             "ignoreVersion" : true
         },
@@ -23,12 +24,17 @@
                 "usesCleartextTraffic" : true,
                 "permissions" : [
                     "<uses-permission android:name=\"android.permission.INTERNET\"/>",
-                    "<uses-permission android:name=\"android.permission.ACCESS_NETWORK_STATE\"/>"
+                    "<uses-permission android:name=\"android.permission.ACCESS_NETWORK_STATE\"/>",
+                    "<uses-permission android:name=\"android.permission.WAKE_LOCK\"/>",
+                    "<uses-permission android:name=\"android.permission.FOREGROUND_SERVICE\"/>",
+                    "<uses-permission android:name=\"android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK\"/>",
+                    "<uses-permission android:name=\"android.permission.POST_NOTIFICATIONS\"/>"
                 ]
             },
             "ios" : {
                 "appid" : "com.shinemusic.app",
-                "dSYMs" : false
+                "dSYMs" : false,
+                "UIBackgroundModes" : [ "audio" ]
             },
             "sdkConfigs" : {
                 "payment" : {

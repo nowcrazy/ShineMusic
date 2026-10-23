@@ -41,7 +41,7 @@ async function load() {
     tracks.value = result.tracks
     personalized.value = result.personalized
     dateLabel.value = formatDate(result.date)
-  } catch {
+  } catch (error) {
     loadError.value = true
   } finally {
     loading.value = false
