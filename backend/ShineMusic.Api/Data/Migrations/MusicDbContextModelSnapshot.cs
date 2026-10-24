@@ -415,6 +415,100 @@ namespace ShineMusic.Api.Data.Migrations
                     b.ToTable("EditorialCollections");
                 });
 
+            modelBuilder.Entity("ShineMusic.Api.Data.ExternalDownloadTask", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AlbumTitle")
+                        .HasMaxLength(300)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ArtistsJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("AutoPublished")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("AutoRetryCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("AutoScore")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("CoverUrl")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("DurationMs")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ErrorCode")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ErrorMessage")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("GenresJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("ImportItemId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("License")
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("NextRetryAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Provider")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProviderTrackId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Quality")
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourcePageUrl")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Title")
+                        .HasMaxLength(300)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Provider", "ProviderTrackId")
+                        .IsUnique();
+
+                    b.HasIndex("Status", "CreatedAtUtc");
+
+                    b.ToTable("ExternalDownloadTasks");
+                });
+
             modelBuilder.Entity("ShineMusic.Api.Data.Favorite", b =>
                 {
                     b.Property<Guid>("UserId")
@@ -541,6 +635,12 @@ namespace ShineMusic.Api.Data.Migrations
                     b.Property<string>("ArtworkStorageKey")
                         .HasColumnType("TEXT");
 
+                    b.Property<int?>("AutoScore")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("AutoScoreBreakdownJson")
+                        .HasColumnType("TEXT");
+
                     b.Property<Guid>("BatchId")
                         .HasColumnType("TEXT");
 
@@ -613,6 +713,9 @@ namespace ShineMusic.Api.Data.Migrations
                     b.Property<bool>("MetadataReviewed")
                         .HasColumnType("INTEGER");
 
+                    b.Property<int>("ProcessingRetryCount")
+                        .HasColumnType("INTEGER");
+
                     b.Property<Guid?>("PublishedTrackId")
                         .HasColumnType("TEXT");
 
@@ -626,6 +729,10 @@ namespace ShineMusic.Api.Data.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<Guid?>("SongRequestId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourceProvider")
+                        .HasMaxLength(32)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("SourceStorageKey")

@@ -95,4 +95,12 @@ public static class ErrorCodes
     // ===== 邀请码 / 推荐 / 反馈（预留） =====
     /// <summary>请求体字段格式正确但语义不合法（如自引用、越界索引）。</summary>
     public const string SemanticInvalid = "semantic_invalid";
+
+    // ===== 外部音源抓歌（Source Download） =====
+    /// <summary>音源平台不可用（未启用、未配置凭据或平台接口调用失败）。</summary>
+    public const string SourceUnavailable = "source_unavailable";
+    /// <summary>音源音频下载失败（网络中断、体积超限、平台拒绝等）。</summary>
+    public const string SourceDownloadFailed = "source_download_failed";
+    /// <summary>同一音频内容已在曲库或导入队列中，无需重复抓取。</summary>
+    public const string SourceDuplicate = "source_duplicate";
 }

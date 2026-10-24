@@ -182,6 +182,11 @@ export const DiscAlbum = createShimIcon('DiscAlbum', [
   ["circle", { cx: "12", cy: "12", r: "5", key: "nd82uf" }],
   ["path", { d: "M12 12h.01", key: "1mp3jc" }]
 ] as LucideNode[])
+export const DownloadCloud = createShimIcon('DownloadCloud', [
+  ["path", { d: "M12 13v8l-4-4", key: "1f5nwf" }],
+  ["path", { d: "m12 21 4-4", key: "1lfcce" }],
+  ["path", { d: "M4.393 15.269A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.436 8.284", key: "ui1hmy" }]
+] as LucideNode[])
 export const FileUp = createShimIcon('FileUp', [
   ["path", { d: "M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z", key: "1rqfz7" }],
   ["path", { d: "M14 2v4a2 2 0 0 0 2 2h4", key: "tnqrlb" }],

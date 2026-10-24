@@ -40,4 +40,7 @@ public sealed class FeatureOptions
 
     /// <summary>是否启用服务端音频转码；首版强制为 true，客户端统一播放转码后的产物。</summary>
     public bool ServerTranscoding { get; set; }
+
+    /// <summary>是否开放外部音源抓歌（开放版权平台搜索/下载/评分入库）管理功能。</summary>
+    public bool SourceDownload { get; set; }
 }

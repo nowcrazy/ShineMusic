@@ -50,6 +50,8 @@ internal sealed class FeatureGateActionFilter(string featureName, IOptions<Featu
             nameof(FeatureOptions.ListeningEvents) => features.ListeningEvents,
             // 个性化推荐：单一开关。
             nameof(FeatureOptions.PersonalizedRecommendations) => features.PersonalizedRecommendations,
+            // 外部音源抓歌：单一开关（内部另有自动入库开关独立控制评分闸门）。
+            nameof(FeatureOptions.SourceDownload) => features.SourceDownload,
             // 未知特性名一律按“关闭”处理（fail-closed），防止误配导致功能意外暴露。
             _ => false
         };

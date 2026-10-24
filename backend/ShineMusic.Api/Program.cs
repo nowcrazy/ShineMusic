@@ -209,6 +209,22 @@ builder.Services
     .Validate(options => options.TimeoutSeconds is >= 1 and <= 30, "Lyrics:TimeoutSeconds must be between 1 and 30.")
     .Validate(options => options.MinScore is >= 0 and <= 1, "Lyrics:MinScore must be between 0 and 1.")
     .ValidateOnStart();
+builder.Services
+    .AddOptions<SourceDownloadOptions>()
+    .BindConfiguration(SourceDownloadOptions.SectionName)
+    .Validate(options => !options.Audius.Enabled || !string.IsNullOrWhiteSpace(options.Audius.BaseUrl),
+        "SourceDownload:Audius:BaseUrl is required when Audius is enabled.")
+    .Validate(options => !options.Jamendo.Enabled || !string.IsNullOrWhiteSpace(options.Jamendo.ClientId),
+        "SourceDownload:Jamendo:ClientId is required when Jamendo is enabled.")
+    .Validate(options => options.AutoPublishThreshold is >= 0 and <= 100,
+        "SourceDownload:AutoPublishThreshold must be between 0 and 100.")
+    .Validate(options => options.Download.MaxConcurrentDownloads is >= 1 and <= 4,
+        "SourceDownload:Download:MaxConcurrentDownloads must be between 1 and 4.")
+    .Validate(options => options.YtDlp.SearchTimeoutSeconds is >= 10 and <= 300,
+        "SourceDownload:YtDlp:SearchTimeoutSeconds must be between 10 and 300.")
+    .Validate(options => options.YtDlp.MetadataTimeoutSeconds is >= 5 and <= 120,
+        "SourceDownload:YtDlp:MetadataTimeoutSeconds must be between 5 and 120.")
+    .ValidateOnStart();
 // ===== CORS：优先使用 appsettings 显式配置；未配置时由 config/hosts.json 推导当前环境的前端来源 =====
 var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
 if (allowedOrigins.Length == 0)
@@ -263,6 +279,8 @@ builder.Services.AddSingleton<FfmpegMediaService>();
 builder.Services.AddSingleton<AudioMetadataParser>();
 builder.Services.AddSingleton<ArtworkFetcher>();
 builder.Services.AddScoped<ImportStagingService>();
+// 导入条目发布核心逻辑：人工发布（管理端点）与音源评分直通（后台服务）共用，依赖 MusicDbContext 按作用域注册。
+builder.Services.AddScoped<ImportPublishService>();
 // 歌词解析器：无状态，注册为单例；命名 HttpClient 单独控制外部歌词源的连接与超时。
 builder.Services.AddHttpClient(LyricsResolver.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddSingleton<ILyricsResolver, LyricsResolver>();
@@ -272,6 +290,27 @@ builder.Services.AddScoped<StorageGovernanceService>();
 builder.Services.AddScoped<RecommendationService>();
 // 后台服务常驻消费导入队列，按 Transcoding:MaxConcurrentJobs 控制 ffmpeg 并发。
 builder.Services.AddHostedService<LibraryImportBackgroundService>();
+// ===== 外部音源抓歌：命名 HttpClient（平台统一超时）、provider 集合、任务队列与后台下载服务 =====
+builder.Services.AddHttpClient(ShineMusic.Api.Services.SourceDownload.AudiusSourceProvider.HttpClientName,
+    client => client.Timeout = TimeSpan.FromSeconds(120));
+builder.Services.AddHttpClient(ShineMusic.Api.Services.SourceDownload.JamendoSourceProvider.HttpClientName,
+    client => client.Timeout = TimeSpan.FromSeconds(120));
+// yt-dlp 系音源的封面下载走命名客户端；音频下载由 YtDlpBridge 子进程承担。
+builder.Services.AddHttpClient(ShineMusic.Api.Services.SourceDownload.YouTubeMusicSourceProvider.HttpClientName,
+    client => client.Timeout = TimeSpan.FromSeconds(120));
+builder.Services.AddHttpClient(ShineMusic.Api.Services.SourceDownload.SoundCloudSourceProvider.HttpClientName,
+    client => client.Timeout = TimeSpan.FromSeconds(120));
+builder.Services.AddSingleton<ShineMusic.Api.Services.SourceDownload.IMusicSourceProvider, ShineMusic.Api.Services.SourceDownload.AudiusSourceProvider>();
+builder.Services.AddSingleton<ShineMusic.Api.Services.SourceDownload.IMusicSourceProvider, ShineMusic.Api.Services.SourceDownload.JamendoSourceProvider>();
+// yt-dlp 桥接（单例，进程内嵌管理 yt-dlp.exe）+ YouTube Music / SoundCloud 两个 provider。
+builder.Services.AddSingleton<ShineMusic.Api.Services.SourceDownload.YtDlpBridge>();
+builder.Services.AddSingleton<ShineMusic.Api.Services.SourceDownload.IMusicSourceProvider, ShineMusic.Api.Services.SourceDownload.YouTubeMusicSourceProvider>();
+builder.Services.AddSingleton<ShineMusic.Api.Services.SourceDownload.IMusicSourceProvider, ShineMusic.Api.Services.SourceDownload.SoundCloudSourceProvider>();
+builder.Services.AddSingleton<ShineMusic.Api.Services.SourceDownload.SourceDownloadQueue>();
+builder.Services.AddScoped<ShineMusic.Api.Services.SourceDownload.SourceDownloadService>();
+builder.Services.AddHostedService<ShineMusic.Api.Services.SourceDownload.SourceDownloadBackgroundService>();
+// 歌词定时补跑：每 6h 为已发布但无歌词的曲目重跑 LRCLIB 匹配。
+builder.Services.AddHostedService<ShineMusic.Api.Services.LyricsBackfillService>();
 // 点歌需求自动归档：定时把已满足且超期的需求从公共池隐藏（记录保留）。
 builder.Services.AddHostedService<SongRequestArchiveService>();
 // ===== Identity：用户/角色存储、密码强度与登录锁定策略（基于 EF Core 持久化） =====

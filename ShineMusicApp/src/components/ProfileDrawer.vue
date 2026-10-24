@@ -10,7 +10,7 @@
  * 对应页面：pages/profile（个人资料）；退出走 services/session（清空本地收藏/歌单/曲库后重启首页）。
  */
 import { computed, ref } from 'vue'
-import { AudioLines, Check, ChevronRight, Inbox, Languages, LogOut, Mail, Palette, Server, ShieldCheck, Upload, UserCog, X } from 'lucide-vue-next'
+import { AudioLines, Check, ChevronRight, DownloadCloud, Inbox, Languages, LogOut, Mail, Palette, Server, ShieldCheck, Upload, UserCog, X } from 'lucide-vue-next'
 import LanguageSwitcher from './LanguageSwitcher.vue'
 import { currentUser, isAdmin, logout } from '@/services/session'
 import { resetLibrary } from '@/services/library'
@@ -98,6 +98,12 @@ function goInvitationManagement() {
 function goRequestManagement() {
   close()
   uni.navigateTo({ url: '/pages/admin/requests' })
+}
+
+/** 跳转管理员音源抓歌页 */
+function goSourceDownload() {
+  close()
+  uni.navigateTo({ url: '/pages/admin/source-download' })
 }
 
 /**
@@ -242,6 +248,11 @@ function handleLogout() {
             <text class="drawer-item-title">{{ t('drawer.invitationManagement') }}</text>
             <ChevronRight :size="16" class="drawer-item-chevron" />
           </view>
+          <view class="drawer-item" @tap="goSourceDownload">
+            <view class="drawer-icon source-icon"><DownloadCloud :size="19" /></view>
+            <text class="drawer-item-title">{{ t('drawer.sourceDownload') }}</text>
+            <ChevronRight :size="16" class="drawer-item-chevron" />
+          </view>
           </template>
         </view>
       </scroll-view>
@@ -288,6 +299,7 @@ function handleLogout() {
 .drawer-icon.import-icon { background: var(--sm-info-soft); color: var(--sm-accent-2); }
 .drawer-icon.admin-icon { background: var(--sm-accent-soft); color: var(--sm-accent); }
 .drawer-icon.invite-icon { background: var(--sm-accent-3-soft); color: var(--sm-accent-3); }
+.drawer-icon.source-icon { background: var(--sm-info-soft); color: var(--sm-accent-2); }
 /* 分组标题：「账号」/「管理员」 */
 .drawer-group { padding: 10rpx 8rpx 4rpx; color: var(--sm-text-3); font-size: 18rpx; font-weight: 800; letter-spacing: .12em; }
 .drawer-item-title { flex: 1; color: var(--sm-text); font-size: 22rpx; font-weight: 600; }

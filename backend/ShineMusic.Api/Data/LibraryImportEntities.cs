@@ -135,6 +135,8 @@ public sealed class LibraryImportItem
     public int? TranscodeBitrateKbps { get; set; }
     /// <summary>处理过程中的告警代码列表（如 missing_title/missing_artist），JSON 数组字符串存储。</summary>
     public string WarningsJson { get; set; } = "[]";
+    /// <summary>转码/处理失败的自动重试次数（后台定时扫到 processing_failed 且未达上限时自动重置回 uploaded 重排队）。</summary>
+    public int ProcessingRetryCount { get; set; }
     /// <summary>失败错误码（机器可读，如 unsupported_media_format/upload_too_large/media_processing_timeout）。</summary>
     public string? ErrorCode { get; set; }
     /// <summary>面向用户的、经过安全脱敏映射的错误信息（不直接回显 ffmpeg/文件系统原始报错）。</summary>
@@ -145,6 +147,13 @@ public sealed class LibraryImportItem
     public bool MetadataReviewed { get; set; }
     /// <summary>是否为用户上传（区别于管理员导入）：用户上传的条目处理完成后自动私有入库（立即可听），而非进入人工审核发布队列。</summary>
     public bool IsUserUpload { get; set; }
+    /// <summary>外部音源标识（audius/jamendo）：仅音源抓歌条目有值，null 表示手动上传/用户上传；
+    /// 导入流水线据此对音源条目启用「评分直通入库」闸门。</summary>
+    public string? SourceProvider { get; set; }
+    /// <summary>音源条目的自动评分（0-100）；转码完成后计算，未评分为 null。人工审核页展示辅助决策。</summary>
+    public int? AutoScore { get; set; }
+    /// <summary>评分分项明细（JSON），记录音质/元数据/歌词各维度得分与扣分原因。</summary>
+    public string? AutoScoreBreakdownJson { get; set; }
     /// <summary>私有入库时创建的曲目 Id（用户上传专用）；管理员导入发布时为空。管理员转公开即对该曲目设置发布时间。</summary>
     public Guid? PublishedTrackId { get; set; }
     /// <summary>条目创建时间（UTC）。</summary>

@@ -92,6 +92,10 @@
       "style": { "navigationBarTitleText": "邀请管理" }
     },
     {
+      "path": "pages/admin/source-download",
+      "style": { "navigationBarTitleText": "音源抓歌" }
+    },
+    {
       "path": "pages/auth/login",
       "style": { "navigationBarTitleText": "登录" }
     },

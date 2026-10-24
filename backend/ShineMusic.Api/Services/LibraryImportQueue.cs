@@ -64,6 +64,7 @@ public sealed class LibraryImportBackgroundService(
     IServiceScopeFactory scopeFactory,
     IOptions<UploadOptions> uploadOptions,
     IOptions<TranscodingOptions> transcodingOptions,
+    IOptions<SourceDownloadOptions> sourceDownloadOptions,
     FfmpegMediaService mediaService,
     AudioMetadataParser metadataParser,
     ILyricsResolver lyricsResolver,
@@ -81,10 +82,74 @@ public sealed class LibraryImportBackgroundService(
         await RecoverQueuedItemsAsync(stoppingToken);
         // 并发上限来自配置，夹紧在 1~4 之间，避免转码占用过多资源。
         var workerCount = Math.Clamp(transcodingOptions.Value.MaxConcurrentJobs, 1, 4);
-        // 启动 N 个并行的消费者循环，共享同一队列通道。
+        // 启动 N 个并行的消费者循环，共享同一队列通道；外加一个转码失败自动重试扫描器。
         var workers = Enumerable.Range(0, workerCount)
-            .Select(_ => ProcessQueueAsync(stoppingToken));
+            .Select(_ => ProcessQueueAsync(stoppingToken))
+            .Append(ProcessingRetrySweepAsync(stoppingToken));
         await Task.WhenAll(workers);
+    }
+
+    /// <summary>转码/处理失败的自动重试上限（超出后停留在 processing_failed，需人工处理）。</summary>
+    private const int MaxProcessingRetries = 2;
+
+    /// <summary>转码失败自动重试的扫描间隔（5 分钟）。</summary>
+    private static readonly TimeSpan ProcessingRetrySweepInterval = TimeSpan.FromMinutes(5);
+
+    /// <summary>永久性失败错误码：重试不会改变结果，直接排除在自动重试之外。</summary>
+    private static readonly HashSet<string> NonRetryableErrorCodes = new(StringComparer.Ordinal)
+    {
+        ErrorCodes.UnsupportedMediaFormat,
+        ErrorCodes.UploadTooLarge,
+        ErrorCodes.ResourceNotFound,
+        "duplicate_private_upload"
+    };
+
+    /// <summary>
+    /// 转码失败自动重试扫描：每 5 分钟把「processing_failed 且未达重试上限且错误码可重试」的条目
+    /// 重置回 uploaded 重新入队（计数 +1），覆盖 ffmpeg 抖动/资源竞争等瞬时失败场景。
+    /// </summary>
+    private async Task ProcessingRetrySweepAsync(CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(ProcessingRetrySweepInterval, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            try
+            {
+                using var scope = scopeFactory.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<MusicDbContext>();
+                var candidates = await db.LibraryImportItems
+                    .Where(item => item.Status == LibraryImportItemStatuses.ProcessingFailed
+                        && item.ProcessingRetryCount < MaxProcessingRetries
+                        && (item.ErrorCode == null || !NonRetryableErrorCodes.Contains(item.ErrorCode)))
+                    .OrderBy(item => item.UpdatedAtUtc)
+                    .Take(20)
+                    .ToListAsync(cancellationToken);
+                foreach (var item in candidates)
+                {
+                    item.Status = LibraryImportItemStatuses.Uploaded;
+                    item.TranscodeStatus = "queued";
+                    item.ErrorCode = null;
+                    item.ErrorMessage = null;
+                    item.ProcessingRetryCount++;
+                    item.UpdatedAtUtc = DateTime.UtcNow;
+                    await db.SaveChangesAsync(cancellationToken);
+                    await queue.QueueAsync(item.Id, cancellationToken);
+                    logger.LogInformation("Import item {ImportItemId} re-queued for processing retry {Attempt}/{Max}.",
+                        item.Id, item.ProcessingRetryCount, MaxProcessingRetries);
+                }
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                logger.LogError(exception, "Processing retry sweep failed.");
+            }
+        }
     }
 
     /// <summary>
@@ -204,18 +269,22 @@ public sealed class LibraryImportBackgroundService(
             await db.SaveChangesAsync(cancellationToken);
 
             // 通过 TagLib# 解析标签并提取封面。
+            // 空值回退：外部音源下载的文件常无 ID3 标签，解析结果为空时保留音源 API 预填的元数据
+            // （手动上传原本就无预填值，?? 回退无副作用）。
             var metadata = metadataParser.Parse(sourcePath, item.Id);
-            item.Title = metadata.Title;
-            item.ArtistsJson = JsonSerializer.Serialize(metadata.Artists);
-            item.AlbumTitle = metadata.AlbumTitle;
+            item.Title = metadata.Title ?? item.Title;
+            if (metadata.Artists.Count > 0)
+                item.ArtistsJson = JsonSerializer.Serialize(metadata.Artists);
+            item.AlbumTitle = metadata.AlbumTitle ?? item.AlbumTitle;
             item.Lyrics = metadata.Lyrics;
-            item.TrackNumber = metadata.TrackNumber;
-            item.DiscNumber = metadata.DiscNumber;
-            item.ReleaseYear = metadata.ReleaseYear;
-            item.GenresJson = JsonSerializer.Serialize(metadata.Genres);
+            item.TrackNumber = metadata.TrackNumber ?? item.TrackNumber;
+            item.DiscNumber = metadata.DiscNumber ?? item.DiscNumber;
+            item.ReleaseYear = metadata.ReleaseYear ?? item.ReleaseYear;
+            if (metadata.Genres.Count > 0)
+                item.GenresJson = JsonSerializer.Serialize(metadata.Genres);
             // 时长优先采用元数据解析结果，回退到 ffprobe 探测值。
             item.DurationMs = metadata.DurationMs ?? item.DurationMs;
-            item.ArtworkStorageKey = metadata.ArtworkStorageKey;
+            item.ArtworkStorageKey = metadata.ArtworkStorageKey ?? item.ArtworkStorageKey;
 
             // 歌词自动补全：内嵌标签 → 同名旁挂 .lrc → 外部歌词源（LRCLIB）。
             // 歌词属于可选内容，解析失败只记告警，不影响转码与后续发布。
@@ -223,7 +292,7 @@ public sealed class LibraryImportBackgroundService(
             var lyricsMatch = await lyricsResolver.ResolveAsync(
                 new LyricsQuery(
                     item.Title,
-                    metadata.Artists,
+                    metadata.Artists.Count > 0 ? metadata.Artists : DeserializeList(item.ArtistsJson),
                     item.AlbumTitle,
                     item.DurationMs,
                     metadata.Lyrics,
@@ -291,7 +360,53 @@ public sealed class LibraryImportBackgroundService(
             }
             else
             {
-                item.Status = LibraryImportItemStatuses.PendingReview;
+                // 音源抓歌条目：转码完成后先评分落库；达标且总开关开启时走 ImportPublishService 直通发布，
+                // 未达标/开关关闭/直通失败一律转人工审核（不自动丢弃）。
+                if (item.SourceProvider is not null)
+                {
+                    var score = SourceDownload.SourceScoreCalculator.Calculate(item);
+                    item.AutoScore = score.Total;
+                    item.AutoScoreBreakdownJson = score.ToBreakdownJson();
+
+                    if (sourceDownloadOptions.Value.AutoPublishEnabled &&
+                        score.Total >= sourceDownloadOptions.Value.AutoPublishThreshold)
+                    {
+                        // PublishAsync 的前置守卫要求「已审核 + ReadyToPublish」，直通即视为评分审核通过。
+                        item.MetadataReviewed = true;
+                        item.Status = LibraryImportItemStatuses.ReadyToPublish;
+                        item.UpdatedAtUtc = DateTime.UtcNow;
+                        await db.SaveChangesAsync(cancellationToken);
+
+                        var publishService = scope.ServiceProvider.GetRequiredService<ImportPublishService>();
+                        var publishResult = await publishService.PublishAsync(
+                            item,
+                            new ImportPublishContext(Guid.Empty, $"auto-publish:{item.Id:N}", IsAutomatic: true),
+                            forceFulfill: false,
+                            overrideReason: null,
+                            cancellationToken);
+                        if (publishResult.Succeeded)
+                        {
+                            // PublishAsync 内部已完成事务提交、批次收口与隔离区清理，仅回写外部任务终态。
+                            await UpdateExternalTaskAsync(db, item, autoPublished: true, cancellationToken);
+                            return;
+                        }
+                        // 直通失败不阻断：降级转人工审核，由管理员在审核页处理。
+                        logger.LogWarning("Auto-publish failed for import item {ImportItemId} (score {Score}): {Message}; falling back to manual review.",
+                            item.Id, score.Total, publishResult.Error?.Message);
+                        item.MetadataReviewed = false;
+                        item.Status = LibraryImportItemStatuses.PendingReview;
+                        await UpdateExternalTaskAsync(db, item, autoPublished: false, cancellationToken);
+                    }
+                    else
+                    {
+                        item.Status = LibraryImportItemStatuses.PendingReview;
+                        await UpdateExternalTaskAsync(db, item, autoPublished: false, cancellationToken);
+                    }
+                }
+                else
+                {
+                    item.Status = LibraryImportItemStatuses.PendingReview;
+                }
             }
             item.UpdatedAtUtc = DateTime.UtcNow;
             await db.SaveChangesAsync(cancellationToken);
@@ -455,6 +570,21 @@ public sealed class LibraryImportBackgroundService(
         db.Tracks.Add(track);
         db.UserLibraryItems.Add(new UserLibraryItem { UserId = uploaderId, Track = track });
         return (track.Id, false);
+    }
+
+    /// <summary>
+    /// 回写外部音源下载任务的终态：导入流水线处理完成后，按 ImportItemId 反查任务，
+    /// 写入评分与 completed 状态（AutoPublished 区分直通入库还是转人工审核）。任务不存在时静默跳过。
+    /// </summary>
+    private static async Task UpdateExternalTaskAsync(MusicDbContext db, LibraryImportItem item, bool autoPublished, CancellationToken cancellationToken)
+    {
+        await db.ExternalDownloadTasks
+            .Where(task => task.ImportItemId == item.Id)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(task => task.Status, ExternalDownloadTaskStatuses.Completed)
+                .SetProperty(task => task.AutoScore, item.AutoScore)
+                .SetProperty(task => task.AutoPublished, autoPublished)
+                .SetProperty(task => task.UpdatedAtUtc, DateTime.UtcNow), cancellationToken);
     }
 
     /// <summary>删除隔离区中的单个文件（入库后清理，失败仅忽略）。</summary>

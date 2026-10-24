@@ -165,6 +165,18 @@ export interface ApiCreateSongRequest {
   note?: string | null
 }
 
+/** 来源：`backend/ShineMusic.Api/Contracts/SourceDownloadDtos.cs` */
+export interface ApiCreateSourceDownloadTasks {
+  provider: string
+  providerTrackIds: readonly string[]
+}
+
+/** 来源：`backend/ShineMusic.Api/Contracts/SourceDownloadDtos.cs` */
+export interface ApiCreateSourceDownloadTasksResult {
+  created: readonly ApiExternalDownloadTask[]
+  skippedDuplicates: readonly string[]
+}
+
 /** 来源：`backend/ShineMusic.Api/Contracts/ProfileDtos.cs` */
 export interface ApiCurrentUser {
   id: string
@@ -179,6 +191,39 @@ export interface ApiDailyRecommendation {
   date: string
   personalized: boolean
   tracks: readonly ApiTrack[]
+}
+
+/** 来源：`backend/ShineMusic.Api/Contracts/SourceDownloadDtos.cs` */
+export interface ApiExternalDownloadTask {
+  id: string
+  provider: string
+  providerTrackId: string
+  title?: string | null
+  artists: readonly string[]
+  albumTitle?: string | null
+  durationMs?: number | null
+  quality?: string | null
+  license?: string | null
+  sourcePageUrl?: string | null
+  coverUrl?: string | null
+  status: string
+  autoScore?: number | null
+  autoPublished: boolean
+  errorCode?: string | null
+  errorMessage?: string | null
+  autoRetryCount: number
+  nextRetryAtUtc?: string | null
+  importItemId?: string | null
+  createdAtUtc: string
+  updatedAtUtc: string
+}
+
+/** 来源：`backend/ShineMusic.Api/Contracts/SourceDownloadDtos.cs` */
+export interface ApiExternalDownloadTaskList {
+  items: readonly ApiExternalDownloadTask[]
+  total: number
+  page: number
+  pageSize: number
 }
 
 /** 来源：`backend/ShineMusic.Api/Contracts/ListeningDtos.cs` */
@@ -450,6 +495,34 @@ export interface ApiSongRequestTimelineItem {
   actorKind: string
   note?: string | null
   createdAt: string
+}
+
+/** 来源：`backend/ShineMusic.Api/Contracts/SourceDownloadDtos.cs` */
+export interface ApiSourceProviderError {
+  provider: string
+  message: string
+}
+
+/** 来源：`backend/ShineMusic.Api/Contracts/SourceDownloadDtos.cs` */
+export interface ApiSourceSearchItem {
+  provider: string
+  providerTrackId: string
+  title: string
+  artists: readonly string[]
+  albumTitle?: string | null
+  durationMs?: number | null
+  genres: readonly string[]
+  coverUrl?: string | null
+  sourcePageUrl?: string | null
+  license?: string | null
+  quality: string
+  isLosslessAvailable: boolean
+}
+
+/** 来源：`backend/ShineMusic.Api/Contracts/SourceDownloadDtos.cs` */
+export interface ApiSourceSearch {
+  results: readonly ApiSourceSearchItem[]
+  providerErrors: readonly ApiSourceProviderError[]
 }
 
 /** 来源：`backend/ShineMusic.Api/Contracts/StorageDtos.cs` */

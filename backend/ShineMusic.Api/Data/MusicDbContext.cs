@@ -42,6 +42,9 @@ public sealed class MusicDbContext(DbContextOptions<MusicDbContext> options)
 	public DbSet<LibraryImportItem> LibraryImportItems => Set<LibraryImportItem>();
 	public DbSet<UserLibraryItem> UserLibraryItems => Set<UserLibraryItem>();
 
+	// ===== 外部音源抓歌任务 =====
+	public DbSet<ExternalDownloadTask> ExternalDownloadTasks => Set<ExternalDownloadTask>();
+
 	// ===== 收听行为与个性化推荐相关 DbSet =====
 	public DbSet<ListeningEvent> ListeningEvents => Set<ListeningEvent>();
 	public DbSet<UserTrackFeedback> UserTrackFeedbacks => Set<UserTrackFeedback>();
@@ -209,6 +212,23 @@ public sealed class MusicDbContext(DbContextOptions<MusicDbContext> options)
 		// 歌词来源标识限长 32，外部源记录 ID 限长 64。
 		modelBuilder.Entity<LibraryImportItem>().Property(item => item.LyricsSource).HasMaxLength(32);
 		modelBuilder.Entity<LibraryImportItem>().Property(item => item.LyricsProviderId).HasMaxLength(64);
+		// 音源抓歌来源标识限长 32（audius/jamendo）。
+		modelBuilder.Entity<LibraryImportItem>().Property(item => item.SourceProvider).HasMaxLength(32);
+
+		// ----- 外部音源抓歌任务 -----
+		// (平台, 平台曲目 Id) 唯一：同一音源的同一首曲目只允许存在一个任务（重试复用原任务），
+		// 防止同一首歌被重复抓取占库存储。
+		modelBuilder.Entity<ExternalDownloadTask>().HasIndex(task => new { task.Provider, task.ProviderTrackId }).IsUnique();
+		// (状态, 创建时间) 复合索引：后台恢复扫描与管理端任务列表的主路径。
+		modelBuilder.Entity<ExternalDownloadTask>().HasIndex(task => new { task.Status, task.CreatedAtUtc });
+		// 字段限长，控制存储体积。
+		modelBuilder.Entity<ExternalDownloadTask>().Property(task => task.Provider).HasMaxLength(32);
+		modelBuilder.Entity<ExternalDownloadTask>().Property(task => task.ProviderTrackId).HasMaxLength(128);
+		modelBuilder.Entity<ExternalDownloadTask>().Property(task => task.Title).HasMaxLength(300);
+		modelBuilder.Entity<ExternalDownloadTask>().Property(task => task.AlbumTitle).HasMaxLength(300);
+		modelBuilder.Entity<ExternalDownloadTask>().Property(task => task.Quality).HasMaxLength(16);
+		modelBuilder.Entity<ExternalDownloadTask>().Property(task => task.Status).HasMaxLength(32);
+		modelBuilder.Entity<ExternalDownloadTask>().Property(task => task.License).HasMaxLength(200);
 
 		// ----- 收听事件（推荐算法的行为输入） -----
 		// (用户, 时间) 复合索引：按用户拉取近期行为、聚合歌手/曲目偏好。

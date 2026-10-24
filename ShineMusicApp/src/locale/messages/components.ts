@@ -24,6 +24,7 @@ export const componentsMessages = {
       importReview: '曲库导入审核',
       trackMaintenance: '曲目维护',
       invitationManagement: '邀请管理',
+      sourceDownload: '音源抓歌',
     },
     player: {
       comments: '评论',
@@ -99,6 +100,7 @@ export const componentsMessages = {
       importReview: 'Library Import Review',
       trackMaintenance: 'Track Maintenance',
       invitationManagement: 'Invitation Management',
+      sourceDownload: 'Source Download',
     },
     player: {
       comments: 'Comments',
@@ -174,6 +176,7 @@ export const componentsMessages = {
       importReview: 'ライブラリインポート審査',
       trackMaintenance: '楽曲メンテナンス',
       invitationManagement: '招待管理',
+      sourceDownload: '音源ダウンロード',
     },
     player: {
       comments: 'コメント',
