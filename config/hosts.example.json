@@ -1,8 +1,8 @@
 {
   "local": {
-    "label": "#Local · 本地开发 / 局域网（yarn dev:h5、真机调试）。首次克隆后：复制本文件为 hosts.json，把 lanIp 改成你电脑的局域网 IP",
+    "label": "#Local · 本地开发 / 局域网（ShineMusicWeb yarn dev、真机调试）。首次克隆后：复制本文件为 hosts.json，把 lanIp 改成你电脑的局域网 IP",
     "lanIp": "192.168.x.x",
-    "webPort": 5173,
+    "webPort": 5174,
     "apiPort": 5180,
     "appApiPort": 5180,
     "apiHost": "localhost"

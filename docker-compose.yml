@@ -1,0 +1,70 @@
+# ShineMusic 基础设施：PostgreSQL（主库）、Redis（分布式缓存）与 RabbitMQ（下载/导入消息队列）。
+# 用法：docker compose up -d（开发机与家用服务器共用同一份；生产用环境变量覆盖连接串中的口令）。
+# 端口仅绑定本机回环/局域网使用，不暴露公网；数据经命名卷持久化，容器重建不丢数据。
+name: shinemusic
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: shinemusic-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: shinemusic
+      # 本地开发口令；生产部署必须经环境变量 POSTGRES_PASSWORD 覆盖并同步更新后端连接串。
+      POSTGRES_PASSWORD: shinemusic-dev
+      POSTGRES_DB: shinemusic
+      # 全库时区固定 UTC，与后端 DateTime.UtcNow / timestamptz 语义一致。
+      TZ: UTC
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shinemusic -d shinemusic"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: shinemusic-redis
+    restart: unless-stopped
+    # AOF 持久化：缓存数据可丢，但保留可重启恢复能力（成本极低）。
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: shinemusic-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: shinemusic
+      # 本地开发口令；生产部署必须经环境变量 RABBITMQ_DEFAULT_PASS 覆盖并同步更新后端连接配置。
+      RABBITMQ_DEFAULT_PASS: shinemusic-dev
+      TZ: UTC
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # 管理台（仅本机/局域网）
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  postgres-data:
+  redis-data:
+  rabbitmq-data:

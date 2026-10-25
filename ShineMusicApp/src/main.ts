@@ -8,7 +8,6 @@
 import { createSSRApp } from 'vue'
 import * as VueRuntime from 'vue'
 import App from './App.vue'
-import { patchShowModal } from '@/utils/modal-patch'
 import { reapplyThemeOnApp } from '@/utils/app-theme-bridge'
 import { installWebApiShim } from '@/utils/web-api-shim'
 import { createAppI18n } from '@/locale'
@@ -25,11 +24,8 @@ type UniVueRuntime = typeof import('vue') & {
   createVueApp?: typeof createSSRApp
 }
 
-// App 端逻辑层没有浏览器全局对象，先补 URLSearchParams（H5 有原生实现，此处空操作）。
+// App 端逻辑层没有浏览器全局对象，先补 URLSearchParams（此处只对 App 生效）。
 installWebApiShim()
-
-// 在应用创建前修补 uni.showModal（仅 H5 端生效），修复点击按钮后模态框不关闭的 bug。
-patchShowModal()
 
 /**
  * 创建并返回 uni-app 应用实例。

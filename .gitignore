@@ -61,3 +61,6 @@ ShineMusicApp/package-lock.json
 !/README.md
 
 # ---------- ShineMusicApp锛圚BuilderX uni-app 婧愮爜宸ョ▼锛夛細node_modules / unpackage 宸茬敱涓婃柟鍏ㄥ眬瑙勫垯鎺掗櫎 ----------
+
+# 第三方参考工程，不入库
+/ZrAdmin-tmp/

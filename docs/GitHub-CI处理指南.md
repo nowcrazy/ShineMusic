@@ -16,9 +16,9 @@ cd c:\Learn\ShineMusic\ShineMusicApp
 yarn check:contracts;  if ($LASTEXITCODE -ne 0) { throw "闸门①失败：契约漂移，执行 yarn gen:contracts 后重新检查" }
 yarn typecheck;        if ($LASTEXITCODE -ne 0) { throw "闸门②失败：类型检查报错，按输出修复" }
 yarn check:i18n;       if ($LASTEXITCODE -ne 0) { throw "闸门③失败：新增 UI 中文未走语言包，接线后重查；确属逻辑值则 yarn check:i18n --update 更新基线" }
-yarn build:h5;         if ($LASTEXITCODE -ne 0) { throw "闸门④失败：H5 构建报错，按输出修复" }
+yarn build:app;        if ($LASTEXITCODE -ne 0) { throw "闸门④失败：App 构建报错，按输出修复" }
 cd c:\Learn\ShineMusic
-dotnet build backend/ShineMusic.slnx -c Release --nologo; if ($LASTEXITCODE -ne 0) { throw "闸门⑤失败：后端构建报错/有警告" }
+dotnet build ShineMusicApi/ShineMusic.slnx -c Release --nologo; if ($LASTEXITCODE -ne 0) { throw "闸门⑤失败：后端构建报错/有警告" }
 Write-Host "===== [OK] 五道闸门全过，进入第 2 步 =====" -ForegroundColor Green
 ```
 
@@ -95,7 +95,7 @@ git push origin main
 | 闸门① 契约漂移 | `ShineMusicApp` 下执行 `yarn gen:contracts`，重新预检 |
 | 闸门② 类型报错 | 按报错文件/行号修复，重新预检 |
 | 闸门③ i18n 残留 | 按输出的文件/文案把新 UI 文案接入语言包（`$t()`/`t()` + key 入三语树）；确属有意保留的逻辑匹配值则 `yarn check:i18n --update` 更新基线后重新预检 |
-| 闸门④ H5 构建报错 | 按报错修复，重新预检 |
+| 闸门④ App 构建报错 | 按报错修复，重新预检 |
 | 闸门⑤ 后端报错/警告 | 清零警告（项目"警告即错误"），重新预检 |
 | CI 的 yarn install 失败 | 本地 `ShineMusicApp` 下 `yarn install` → 提交更新后的 `yarn.lock` |
 | CI 契约检查失败 | `yarn gen:contracts` → 提交 `src/types/api.generated.ts` |

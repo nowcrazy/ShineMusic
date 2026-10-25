@@ -1,0 +1,8 @@
+<Solution>
+  <Project Path="ShineMusic.Api.csproj" />
+  <Project Path="../ShineMusic.Model/ShineMusic.Model.csproj" />
+  <Project Path="../ShineMusic.Repository/ShineMusic.Repository.csproj" />
+  <Project Path="../ShineMusic.Service/ShineMusic.Service.csproj" />
+  <Project Path="../ShineMusic.Tasks/ShineMusic.Tasks.csproj" />
+  <Project Path="../ShineMusic.Common/ShineMusic.Common.csproj" />
+</Solution>

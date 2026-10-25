@@ -4,7 +4,7 @@
  * 2026-10-18 契约审计后，这里从「手写 34 个接口镜像后端 DTO」改为
  * 「转发自动生成的契约类型」。改动要点：
  *
- * - `./api.generated.ts` 由 `backend/tools/generate-ts-contracts.py` 从后端
+ * - `./api.generated.ts` 由 `ShineMusicApi/tools/generate-ts-contracts.py` 从后端
  *   `public sealed record` 生成，**禁止手工修改**；后端改契约后重新生成即可。
  * - 本文件负责三件事，且只做这三件事：
  *     1. 把生成类型以「历史沿用名」re-export，业务代码 import 路径不变；

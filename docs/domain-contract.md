@@ -198,7 +198,8 @@
 - `InvitationEmail:PublicBaseUrl`、`InvitationEmail:FromAddress`：注册链接来源地址和发件人。
 - `InvitationEmail:SmtpHost`、`InvitationEmail:SmtpPort`、`InvitationEmail:Username`、`InvitationEmail:Password`：邮件投递设置；邮件服务供应方待定。
 - `Cors:AllowedOrigins`：允许的 Web 开发/管理端来源；不使用任意来源通配符搭配凭证。
-- `Database:ConnectionString`：SQLite 文件位置；数据库文件不得放进可公开访问的媒体目录。
+- `Database:ConnectionString`：PostgreSQL 连接串（Npgsql 格式）；口令不得写进仓库，生产环境用 `Database__ConnectionString` 注入。
+- `Redis:ConnectionString`：Redis 连接串；留空时回退为进程内内存缓存（仅限单机开发兜底）。
 
 上传大小的产品值暂留空，但安全上限配置是上传开放前的部署必需项。配置键不得用 `VITE_` 前缀暴露给客户端。
 

@@ -21,7 +21,6 @@ const HOSTS_FILE = path.resolve(CONFIG_DIR, '../config/hosts.json')
 interface HostsConfig {
   local?: {
     lanIp?: string
-    webPort?: number
     apiPort?: number
     appApiPort?: number
     apiHost?: 'localhost' | 'lan'
@@ -72,49 +71,41 @@ function watchHostsPlugin(): Plugin {
 
 /**
  * 单一地址源：config/hosts.json
- *   - #Local 段 → 开发（dev 代理）、真机 App
- *   - #Server 段 → 生产构建
+ *   - #Local 段 → 真机 App 调试地址
+ *   - #Server 段 → 生产 APK 内置地址
  * 改 IP / 域名只改这一个文件，前端无需再动 .env。
+ *
+ * 本工程只产 App（APK），Web 前端见同级 ShineMusicWeb 工程。
  */
-export default defineConfig(({ mode, command }) => {
+export default defineConfig(({ mode }) => {
   const hosts = readHosts()
   const local = hosts.local ?? {}
   const server = hosts.server ?? {}
 
-  const lanIp = local.lanIp ?? ''
-  const webPort = local.webPort ?? 5173
-  const apiPort = local.apiPort ?? 5143
   const appApiPort = local.appApiPort ?? 5180
-  // apiHost = 'lan' 表示后端在另一台机器/手机上，代理走局域网 IP
-  const apiHost = local.apiHost === 'lan' && lanIp ? lanIp : 'localhost'
-
-  // H5 devServer 代理目标（开发环境）
-  const apiTarget = `http://${apiHost}:${apiPort}`
 
   // 判断当前是否为 App 平台构建（云打包 / 真机运行）。
   // 注意：云打包时 mode 是 'production' 而非 'app'，必须用 UNI_PLATFORM 判断平台。
   const isAppPlatform = process.env.UNI_PLATFORM === 'app'
 
   // 客户端 API 基础地址（http.ts 通过 __SM_API_BASE__ 读取）：
-  //   app 平台 → APK 发布包内置地址：优先 server.appApiOrigin（公网稳定地址）；
-  //              未配置时回退 http://127.0.0.1:${appApiPort}（模拟器配合 adb reverse 永远有效；
-  //              真机/局域网换 WiFi IP 变了 → App 设置里运行时覆盖即可，无需重打包）；
-  //              用户还可在 App 设置里运行时覆盖（http.ts 的 setApiBaseOverride）
-  //   h5 dev   → 空串，走相对路径 + devServer 代理（hosts.json 热更新，无需重构建）
-  //   h5 prod  → 同域留空（Nginx 反代）；前后端不同域时用 server.apiOrigin
-  const apiBase = isAppPlatform
+  //   dev（yarn dev:app / HBuilderX 运行）→ 本地调试地址：优先 local.lanIp（真机同 Wi-Fi 直连，
+  //        后端以 0.0.0.0 监听即可）；未配置 lanIp 时回退 127.0.0.1（模拟器 + adb reverse）；
+  //   发行包（yarn build:app / 云打包）→ 优先 server.appApiOrigin（公网稳定地址）；
+  //        未配置时回退 http://127.0.0.1:${appApiPort}。用户仍可在 App 设置里运行时覆盖。
+  // 发行模式：uni build -p app --mode app（本地打包）与云打包（mode=production）；
+  // 其余（uni -p app / HBuilderX 真机调试，mode=development）按本地调试处理。
+  const isReleaseBuild = mode === 'app' || mode === 'production'
+  const devApiHost = local.lanIp || '127.0.0.1'
+  const apiBase = isReleaseBuild
     ? server.appApiOrigin || `http://127.0.0.1:${appApiPort}`
-    : mode === 'production'
-      ? server.apiOrigin && server.apiOrigin !== server.webOrigin
-        ? server.apiOrigin
-        : ''
-      : ''
+    : `http://${devApiHost}:${appApiPort}`
 
   return {
     plugins: [uni(), watchHostsPlugin()],
     // App 端（v3 service→view 渲染桥）不支持 <svg>（lucide 图标会全部隐形），
     // 用本地 shim（view + CSS mask + 内联 SVG data-URI）整体替换 lucide-vue-next；
-    // H5 仍用原包。shim 由 scripts/generate-lucide-shim.mjs 生成（yarn gen:icons）。
+    // shim 由 scripts/generate-lucide-shim.mjs 生成（yarn gen:icons）。
     resolve: isAppPlatform
       ? {
           alias: {
@@ -122,9 +113,6 @@ export default defineConfig(({ mode, command }) => {
           },
         }
       : undefined,
-    // H5 构建产物用相对路径：放进 5+App 壳（file:// 本地加载）时，绝对路径 /assets 会找不到资源。
-    // 仅 h5 平台的构建生效；app 产物与 dev server 不受影响。
-    base: command === 'build' && process.env.UNI_PLATFORM === 'h5' ? './' : undefined,
     define: {
       __SM_API_BASE__: JSON.stringify(apiBase),
       // vue-i18n esm-bundler 特性开关：替换为字面量后不再出现
@@ -133,12 +121,6 @@ export default defineConfig(({ mode, command }) => {
       __VUE_I18N_FULL_INSTALL__: true,
       __INTLIFY_PROD_DEVTOOLS__: false,
       __VUE_I18N_LEGACY_API__: false,
-    },
-    server: {
-      proxy: {
-        '/api': { target: apiTarget, changeOrigin: true },
-        '/health': { target: apiTarget, changeOrigin: true },
-      },
     },
   }
 })

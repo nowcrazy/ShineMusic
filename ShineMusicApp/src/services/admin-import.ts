@@ -310,6 +310,18 @@ export async function rejectImportItem(itemId: string): Promise<void> {
 }
 
 /**
+ * 一键补全：调度歌词链（LRCLIB/酷狗/咪咕）+ iTunes 元数据，只补空字段。
+ * 返回更新后的条目与本次补齐的字段清单（lyrics/album/genres/releaseYear/cover/...）。
+ */
+export async function enrichImportItem(
+  itemId: string,
+): Promise<{ item: LibraryImportItem; filled: string[] }> {
+  return http.post<{ item: LibraryImportItem; filled: string[] }>(
+    `${API_PREFIX}/admin/library/import-items/${itemId}/enrich`,
+  )
+}
+
+/**
  * 解除导入条目与点歌需求的关联。
  * 用于批量上传时误把多个条目挂到同一需求上，发布前逐条解绑。
  */

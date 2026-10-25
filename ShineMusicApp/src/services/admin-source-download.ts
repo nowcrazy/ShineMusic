@@ -17,7 +17,7 @@ import type {
 } from '@/types/api.generated'
 import { API_PREFIX, http } from './http'
 
-export type SourceProviderName = 'audius' | 'jamendo' | 'ytmusic' | 'soundcloud'
+export type SourceProviderName = 'audius' | 'jamendo' | 'ytmusic' | 'soundcloud' | 'kuwo';
 export type SourceProviderFilter = 'all' | SourceProviderName
 
 /** 音源展示名（界面徽章用；未知名称回退原始 id） */
@@ -26,6 +26,7 @@ export const SourceProviderLabel: Record<string, string> = {
   jamendo: 'Jamendo',
   ytmusic: 'YT Music',
   soundcloud: 'SoundCloud',
+  kuwo: 'Kuwo',
 }
 
 export type SourceSearchItem = ApiSourceSearchItem

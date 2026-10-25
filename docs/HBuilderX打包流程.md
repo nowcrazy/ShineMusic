@@ -26,10 +26,10 @@ yarn build:app
 打包前验证（不耗云打包次数，可选）：
 
 ```powershell
-yarn build:h5
+yarn typecheck
 ```
 
-或 HBuilderX 菜单「运行 → 运行到浏览器」。
+或 HBuilderX 菜单「运行 → 运行到手机或模拟器」（真机 / Android 模拟器）。
 
 ## 3. HBuilderX 云打包
 

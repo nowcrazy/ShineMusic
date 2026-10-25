@@ -21,6 +21,7 @@ import {
   Music2,
   RefreshCw,
   ShieldCheck,
+  Sparkles,
   X,
 } from 'lucide-vue-next'
 import { isAdmin } from '@/services/session'
@@ -28,6 +29,7 @@ import { pickLocalFiles } from '@/utils/app-file-picker'
 import { ApiError } from '@/services/http'
 import { describeError, ErrorCodes } from '@/services/errors'
 import {
+  enrichImportItem,
   getImportBatches,
   getPreviewUrl,
   ImportBatchStatusLabel,
@@ -52,6 +54,7 @@ const loading = ref(false)
 const uploading = ref(false)
 const saving = ref(false)
 const publishing = ref(false)
+const enriching = ref(false)
 const loadError = ref('')
 
 // 从需求池「上传并满足」跳转而来时携带的目标需求；发布后自动满足该需求
@@ -348,6 +351,43 @@ function parseOptionalNumber(value: string): number | null {
   if (!normalized) return null
   const parsed = Number(normalized)
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null
+}
+
+/** 一键补全：调度歌词链 + iTunes 元数据，只填充表单中仍为空的字段（不覆盖人工输入） */
+async function handleEnrich() {
+  const item = selectedItem.value
+  if (!item || enriching.value) return
+  enriching.value = true
+  try {
+    const result = await enrichImportItem(item.id)
+    // 就地更新列表中的条目（后端已落库）
+    for (const batch of batches.value) {
+      const idx = batch.items.findIndex((i) => i.id === result.item.id)
+      if (idx >= 0) {
+        batch.items.splice(idx, 1, result.item)
+        break
+      }
+    }
+    // 只填表单空字段，保留管理员已输入的内容
+    const m = result.item.metadata
+    if (!artists.value.trim() && m.artists.length > 0) artists.value = m.artists.join('、')
+    if (!albumTitle.value.trim() && m.albumTitle) albumTitle.value = m.albumTitle
+    if (!trackNumber.value.trim() && m.trackNumber) trackNumber.value = String(m.trackNumber)
+    if (!discNumber.value.trim() && m.discNumber) discNumber.value = String(m.discNumber)
+    if (!releaseYear.value.trim() && m.releaseYear) releaseYear.value = String(m.releaseYear)
+    if (!genres.value.trim() && m.genres.length > 0) genres.value = m.genres.join('、')
+    if (!lyrics.value.trim() && m.lyrics) lyrics.value = m.lyrics
+    uni.showToast({
+      title: result.filled.length > 0
+        ? t('importReview.autoFillFilled', { count: result.filled.length })
+        : t('importReview.autoFillNoHit'),
+      icon: 'none',
+    })
+  } catch (error) {
+    uni.showToast({ title: describeError(error, t('importReview.enrichFailed')), icon: 'none' })
+  } finally {
+    enriching.value = false
+  }
 }
 
 /** 保存元数据修正 */
@@ -813,6 +853,14 @@ function statusClass(status: string): string {
         </view>
 
         <view class="action-row">
+          <view
+            v-if="selectedItem.status !== ImportItemStatus.Published"
+            class="enrich-button"
+            :class="{ disabled: enriching }"
+            @tap="handleEnrich"
+          >
+            <Sparkles :size="17" /><text>{{ enriching ? $t('importReview.autoFilling') : $t('importReview.autoFillBtn') }}</text>
+          </view>
           <view class="save-button" :class="{ disabled: saving }" @tap="saveMetadata">
             <Check :size="17" /><text>{{ saving ? $t('importReview.saving') : $t('importReview.saveMetadata') }}</text>
           </view>
@@ -938,6 +986,8 @@ function statusClass(status: string): string {
 .unlink-button { flex: none; padding: 8rpx 22rpx; border-radius: 20rpx; background: var(--sm-surface); color: var(--sm-danger); font-size: 15rpx; font-weight: 700; }
 .save-button { display: flex; flex: 1; align-items: center; justify-content: center; gap: 8rpx; height: 78rpx; border-radius: 12rpx; background: var(--sm-accent); color: var(--sm-accent-ink); font-size: 17rpx; font-weight: 800; }
 .save-button.disabled { opacity: .55; }
+.enrich-button { display: flex; flex: 1; align-items: center; justify-content: center; gap: 8rpx; height: 78rpx; border-radius: 12rpx; background: var(--sm-info-soft, rgba(90,140,255,.16)); color: var(--sm-accent-2); font-size: 17rpx; font-weight: 800; }
+.enrich-button.disabled { opacity: .55; }
 .publish-button { display: flex; flex: 1; align-items: center; justify-content: center; gap: 8rpx; height: 78rpx; border-radius: 12rpx; background: var(--sm-accent-2); color: var(--sm-accent-2-ink); font-size: 17rpx; font-weight: 800; }
 .publish-button.disabled { opacity: .55; }
 .reject-button { display: flex; align-items: center; justify-content: center; gap: 8rpx; width: 140rpx; height: 78rpx; border-radius: 12rpx; background: var(--sm-danger-soft); color: var(--sm-danger); font-size: 17rpx; font-weight: 700; }

@@ -4,13 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev:h5": "uni",
-    "build:h5": "uni build",
     "dev:app": "yarn gen:icons && uni -p app",
     "build:app": "yarn gen:icons && uni build -p app --mode app",
     "gen:icons": "node scripts/generate-lucide-shim.mjs",
-    "gen:contracts": "python ../backend/tools/generate-ts-contracts.py",
-    "check:contracts": "python ../backend/tools/generate-ts-contracts.py --check",
+    "gen:contracts": "python ../ShineMusicApi/tools/generate-ts-contracts.py",
+    "check:contracts": "python ../ShineMusicApi/tools/generate-ts-contracts.py --check",
     "check:i18n": "node scripts/check-i18n-residual.mjs",
     "typecheck": "vue-tsc --noEmit"
   },
@@ -18,7 +16,6 @@
     "@dcloudio/uni-app": "3.0.0-5020620260917001",
     "@dcloudio/uni-app-plus": "3.0.0-5020620260917001",
     "@dcloudio/uni-components": "3.0.0-5020620260917001",
-    "@dcloudio/uni-h5": "3.0.0-5020620260917001",
     "lucide-vue-next": "^0.468.0",
     "vue": "3.4.21",
     "vue-i18n": "9.14.5"

@@ -73,6 +73,7 @@ const providerOptions: { value: SourceProviderFilter; label: string }[] = [
   { value: 'jamendo', label: 'Jamendo' },
   { value: 'ytmusic', label: 'YT Music' },
   { value: 'soundcloud', label: 'SoundCloud' },
+  { value: 'kuwo', label: 'Kuwo' },
 ]
 
 const statusFilters = ['', SourceTaskStatus.Queued, SourceTaskStatus.Downloading, SourceTaskStatus.ImportQueued, SourceTaskStatus.Completed, SourceTaskStatus.Failed]
@@ -442,6 +443,10 @@ function formatDuration(ms: number | null | undefined): string {
                 class="badge retry-badge"
               >{{ $t('sourceDownload.autoRetryBadge', { count: task.autoRetryCount, max: 3 }) }}</text>
               <text v-if="task.autoScore != null" class="badge score-badge">{{ $t('sourceDownload.autoScoreLabel', { score: task.autoScore }) }}</text>
+              <text
+                v-if="task.status === SourceTaskStatus.Completed && task.hasLyrics === false"
+                class="badge no-lyrics-badge"
+              >{{ $t('sourceDownload.noLyricsBadge') }}</text>
               <text v-if="task.autoPublished" class="badge published-badge">
                 <ShieldCheck :size="11" /> {{ $t('sourceDownload.autoPublishedBadge') }}
               </text>
@@ -530,6 +535,7 @@ function formatDuration(ms: number | null | undefined): string {
 .status-badge.status-error { background: var(--sm-danger-soft); color: var(--sm-danger); }
 .status-badge.status-info { background: var(--sm-surface-3); color: var(--sm-text-2); }
 .score-badge { background: var(--sm-accent-3-soft); color: var(--sm-accent-3); }
+.no-lyrics-badge { background: var(--sm-warn-soft, rgba(230, 162, 60, 0.12)); color: var(--sm-warn, #b26a00); }
 .retry-badge { background: var(--sm-info-soft); color: var(--sm-accent-2); }
 .published-badge { background: var(--sm-accent-soft); color: var(--sm-accent); }
 .review-badge { background: var(--sm-info-soft); color: var(--sm-accent-2); }

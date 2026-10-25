@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\ShineMusic.Model\ShineMusic.Model.csproj" />
+    <ProjectReference Include="..\ShineMusic.Common\ShineMusic.Common.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="SqlSugarCore" Version="5.1.4.221" />
+    <!-- SqlSugarCore 默认依赖 Npgsql 5.0.18：该版本读取 timestamptz 会转成本机 Local 时间，
+         导致 UTC 时间被再按 UTC 标签输出（+8 小时偏移）。显式升级到 Npgsql 8，读取即返回 Kind=Utc。 -->
+    <PackageReference Include="Npgsql" Version="8.0.5" />
+  </ItemGroup>
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+</Project>
