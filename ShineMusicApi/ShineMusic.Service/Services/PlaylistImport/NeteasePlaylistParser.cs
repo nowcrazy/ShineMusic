@@ -17,6 +17,10 @@ public sealed partial class NeteasePlaylistParser(IHttpClientFactory httpClientF
 
     private const string PlaylistPageBase = "https://music.163.com/playlist";
     private const string PlaylistApiBase = "https://music.163.com/api/v6/playlist/detail";
+    private const string SongDetailApiBase = "https://music.163.com/api/v3/song/detail";
+
+    /// <summary>单批 song/detail 请求的最大曲目数（避免 URL 过长/触发风控）。</summary>
+    private const int SongDetailBatchSize = 500;
 
     /// <inheritdoc />
     public string Platform => "netease";
@@ -139,38 +143,100 @@ public sealed partial class NeteasePlaylistParser(IHttpClientFactory httpClientF
         var cover = GetString(playlist, "coverImgUrl");
         var description = GetString(playlist, "description");
 
-        var items = new List<ParsedPlaylistTrack>();
-        foreach (var track in tracks.EnumerateArray())
+        // 网易云 /api/v6/playlist/detail 的 tracks 仅返回前若干首的完整信息，
+        // 全量曲目 Id 在 trackIds 中。当 trackIds 多于 tracks 时，需分批调用
+        // /api/v3/song/detail 补全曲目详情，否则歌单会被截断。
+        var trackIds = ExtractTrackIds(playlist);
+        JsonElement tracksToUse = tracks;
+        List<JsonElement>? pooledSongs = null;
+
+        if (trackIds.Count > tracks.GetArrayLength())
         {
-            var title = GetString(track, "name");
-            if (string.IsNullOrWhiteSpace(title))
-                continue;
-            var artists = new List<string>();
-            if (track.TryGetProperty("ar", out var artistArray) && artistArray.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var artist in artistArray.EnumerateArray())
-                {
-                    var artistName = GetString(artist, "name");
-                    if (!string.IsNullOrWhiteSpace(artistName))
-                        artists.Add(artistName.Trim());
-                }
-            }
-            string? album = null;
-            if (track.TryGetProperty("al", out var albumElement) && albumElement.ValueKind == JsonValueKind.Object)
-                album = GetString(albumElement, "name");
-            int? durationMs = GetInt(track, "dt");
-            var trackId = GetNumberAsString(track, "id");
-            items.Add(new ParsedPlaylistTrack(
-                title.Trim(),
-                artists,
-                album,
-                durationMs,
-                trackId,
-                trackId is null ? null : $"https://music.163.com/song?id={trackId}"));
+            pooledSongs = await FetchSongsByIdAsync(client, trackIds, cancellationToken);
+            if (pooledSongs.Count > 0)
+                tracksToUse = default; // 标记使用 pooledSongs
         }
+
+        var items = new List<ParsedPlaylistTrack>();
+        if (pooledSongs is not null)
+        {
+            foreach (var track in pooledSongs)
+                AddTrackFromApi(items, track);
+        }
+        else
+        {
+            foreach (var track in tracksToUse.EnumerateArray())
+                AddTrackFromApi(items, track);
+        }
+
         if (items.Count == 0)
             throw new PlaylistParseException("歌单解析失败，请确认链接为公开歌单后重试。");
         return new ParsedPlaylist(name.Trim(), cover, description, items);
+    }
+
+    /// <summary>从 playlist 节点提取全量曲目 Id（trackIds[].id）。</summary>
+    private static List<string> ExtractTrackIds(JsonElement playlist)
+    {
+        var ids = new List<string>();
+        if (!playlist.TryGetProperty("trackIds", out var trackIds) || trackIds.ValueKind != JsonValueKind.Array)
+            return ids;
+        foreach (var item in trackIds.EnumerateArray())
+        {
+            var id = GetNumberAsString(item, "id");
+            if (id is not null)
+                ids.Add(id);
+        }
+        return ids;
+    }
+
+    /// <summary>分批调用 /api/v3/song/detail 获取曲目详情（字段 ar/al/dt）。</summary>
+    private static async Task<List<JsonElement>> FetchSongsByIdAsync(HttpClient client, IReadOnlyList<string> trackIds, CancellationToken cancellationToken)
+    {
+        var songs = new List<JsonElement>();
+        for (var offset = 0; offset < trackIds.Count; offset += SongDetailBatchSize)
+        {
+            var batch = trackIds.Skip(offset).Take(SongDetailBatchSize).ToList();
+            var c = JsonSerializer.Serialize(batch.Select(id => new { id = long.Parse(id) }));
+            var url = $"{SongDetailApiBase}?c={Uri.EscapeDataString(c)}";
+            var raw = await PlaylistHttpText.GetStringAsync(client, url, cancellationToken);
+            using var doc = JsonDocument.Parse(raw);
+            if (doc.RootElement.TryGetProperty("songs", out var songsArray) && songsArray.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var song in songsArray.EnumerateArray())
+                    songs.Add(song.Clone());
+            }
+        }
+        return songs;
+    }
+
+    /// <summary>从 API 曲目节点（ar/al/dt 缩写字段）构造 ParsedPlaylistTrack。</summary>
+    private static void AddTrackFromApi(List<ParsedPlaylistTrack> items, JsonElement track)
+    {
+        var title = GetString(track, "name");
+        if (string.IsNullOrWhiteSpace(title))
+            return;
+        var artists = new List<string>();
+        if (track.TryGetProperty("ar", out var artistArray) && artistArray.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var artist in artistArray.EnumerateArray())
+            {
+                var artistName = GetString(artist, "name");
+                if (!string.IsNullOrWhiteSpace(artistName))
+                    artists.Add(artistName.Trim());
+            }
+        }
+        string? album = null;
+        if (track.TryGetProperty("al", out var albumElement) && albumElement.ValueKind == JsonValueKind.Object)
+            album = GetString(albumElement, "name");
+        int? durationMs = GetInt(track, "dt");
+        var trackId = GetNumberAsString(track, "id");
+        items.Add(new ParsedPlaylistTrack(
+            title.Trim(),
+            artists,
+            album,
+            durationMs,
+            trackId,
+            trackId is null ? null : $"https://music.163.com/song?id={trackId}"));
     }
 
     private static string? GetString(JsonElement element, string property) =>

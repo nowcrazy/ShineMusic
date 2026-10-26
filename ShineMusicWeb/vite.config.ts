@@ -133,8 +133,10 @@ export default defineConfig(({ command, mode }) => {
     server: {
       port: local.webPort ?? 5174,
       proxy: {
-        '/api': { target: `http://${apiHost}:${apiPort}`, changeOrigin: true },
-        '/health': { target: `http://${apiHost}:${apiPort}`, changeOrigin: true },
+        // xfwd: true 让 http-proxy 自动注入 X-Forwarded-For / X-Forwarded-Proto / X-Forwarded-Host，
+        // 后端经 ForwardedHeaders 中间件即可拿到真实客户端 IP（而非 Vite 的 127.0.0.1）。
+        '/api': { target: `http://${apiHost}:${apiPort}`, changeOrigin: true, xfwd: true },
+        '/health': { target: `http://${apiHost}:${apiPort}`, changeOrigin: true, xfwd: true },
       },
     },
     build: {

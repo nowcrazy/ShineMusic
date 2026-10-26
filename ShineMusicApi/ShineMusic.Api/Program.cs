@@ -3,6 +3,7 @@
 // 另支持以 --create-admin 命令行参数交互式创建首位管理员（创建后直接退出，不启动 Web 服务）。
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using System.IdentityModel.Tokens.Jwt;
@@ -100,6 +101,18 @@ builder.Services.Configure<ApiBehaviorOptions>(options =>
     };
 });
 builder.Services.AddHttpClient();
+// ===== 反向代理头：让 HttpContext.Connection.RemoteIpAddress / Request.Scheme 反映真实客户端地址与协议 =====
+// 部署在 nginx / IIS / 负载均衡器之后时，直连 IP 是代理而非用户；
+// ForwardedHeaders 中间件会把 X-Forwarded-For / X-Forwarded-Proto 回填到 HttpContext，
+// 使后续取 IP 的代码（ClientInfo.ResolveIp、限流、操作日志等）拿到真实客户端 IPv4。
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    // 保留默认 KnownProxies（127.0.0.1 / ::1）：信任本机回环代理（如 Vite dev server、本地 nginx）。
+    // 如需信任更多内网代理，可在此追加 KnownIPNetworks（如 192.168.0.0/16）。
+    // 最多取两跳：客户端 → 一级代理 → 应用，防止客户端伪造 X-Forwarded-For 链过长。
+    options.ForwardLimit = 2;
+});
 // ===== 响应压缩：对 JSON 等文本响应启用 gzip/brotli，减小传输体积（客户端未声明支持时自动跳过） =====
 builder.Services.AddResponseCompression(options =>
 {
@@ -114,8 +127,7 @@ builder.Services.AddRateLimiter(options =>
     options.AddPolicy("play-events", httpContext =>
         System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
             partitionKey: httpContext.User.FindFirst(JwtRegisteredClaimNames.Sub)?.Value
-                ?? httpContext.Connection.RemoteIpAddress?.ToString()
-                ?? "anonymous",
+                ?? ClientInfo.ResolveIp(httpContext),
             factory: _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
             {
                 PermitLimit = 120,                 // 每分钟最多 120 条上报（约 2 条/秒，远超正常播放频率）
@@ -460,6 +472,10 @@ if (app.Environment.IsDevelopment())
     });
     // RabbitMQ 无内置仪表盘；运维观测用 RabbitMQ Management UI（15672 端口，docker compose 已映射）。
 }
+
+// ===== 反向代理头必须放在管道最前面：先把 X-Forwarded-For/Proto 回填到 HttpContext，
+// 后续异常处理、操作日志、限流等中间件拿到的 RemoteIpAddress 才是真实客户端 IP。=====
+app.UseForwardedHeaders();
 
 // ===== 中间件管道（顺序敏感）：异常处理 → CORS → 认证 → 授权 → 端点路由 =====
 // 未处理异常统一收敛为 500 JSON，先记录带 TraceId 的日志，再向客户端返回脱敏错误信息。

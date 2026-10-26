@@ -22,14 +22,8 @@ public static class ClientInfo
         return (clientType, deviceInfo);
     }
 
-    /// <summary>取客户端 IP（经代理时优先 X-Forwarded-For 首跳）。</summary>
-    public static string ResolveIp(HttpContext context)
-    {
-        var forwarded = context.Request.Headers["X-Forwarded-For"].ToString();
-        if (!string.IsNullOrWhiteSpace(forwarded))
-            return Truncate(forwarded.Split(',')[0].Trim(), 64);
-        return Truncate(context.Connection.RemoteIpAddress?.ToString() ?? "-", 64);
-    }
+    /// <summary>取客户端真实 IP（优先 IPv4）。委托给 ShineMusic.Common.ClientIp 统一实现。</summary>
+    public static string ResolveIp(HttpContext context) => ShineMusic.Common.ClientIp.Resolve(context);
 
     private static string InferClientType(string ua)
     {

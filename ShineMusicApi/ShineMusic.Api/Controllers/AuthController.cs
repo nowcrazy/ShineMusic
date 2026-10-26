@@ -41,8 +41,8 @@ public sealed class AuthController : ControllerBase
         _logger = loggerFactory.CreateLogger("Auth");
     }
 
-    /// <summary>客户端 IP：反向代理后取值由 ForwardedHeaders 决定，未配置时即直连地址。</summary>
-    private string ClientIp => HttpContext?.Connection.RemoteIpAddress?.ToString() ?? "-";
+    /// <summary>客户端真实 IP（经 ForwardedHeaders 解析后优先 IPv4；反向代理后也能拿到用户真实地址）。</summary>
+    private string ClientIp => ClientInfo.ResolveIp(HttpContext);
 
     /// <summary>客户端 User-Agent，空值时写占位符，便于日志对齐。</summary>
     private string ClientAgent

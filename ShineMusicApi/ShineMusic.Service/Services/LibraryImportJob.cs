@@ -470,19 +470,49 @@ public sealed class LibraryImportJob(
             foreach (var genre in newGenres)
                 await db.Insertable(genre).ExecuteCommandAsync(cancellationToken);
             await db.Insertable(track).ExecuteCommandAsync(cancellationToken);
-            foreach (var artist in resolvedArtists)
-                await db.Insertable(new TrackArtist { TrackId = track.Id, ArtistId = artist.Id }).ExecuteCommandAsync(cancellationToken);
-            if (album is not null)
-                foreach (var artist in resolvedArtists)
-                {
-                    // 已有专辑 + 已有艺人的组合可能已建过关联（重复上传/导入同专辑曲目），跳过避免主键冲突。
-                    var albumId2 = album.Id;
-                    var artistId = artist.Id;
-                    if (!await db.Queryable<AlbumArtist>().AnyAsync(link => link.AlbumId == albumId2 && link.ArtistId == artistId, cancellationToken))
-                        await db.Insertable(new AlbumArtist { AlbumId = albumId2, ArtistId = artistId }).ExecuteCommandAsync(cancellationToken);
-                }
-            foreach (var genre in resolvedGenres)
-                await db.Insertable(new TrackGenre { TrackId = track.Id, GenreId = genre.Id }).ExecuteCommandAsync(cancellationToken);
+
+            // 关联表写入：元数据里艺人/流派名可能重复（同一艺人在 ArtistsJson 出现多次），
+            // 先按 Id 去重，避免复合主键 (TrackId,ArtistId)/(TrackId,GenreId) 冲突。
+            var distinctArtists = resolvedArtists.DistinctBy(a => a.Id).ToList();
+            var distinctGenres = resolvedGenres.DistinctBy(g => g.Id).ToList();
+
+            // 曲目是新建的，TrackArtist/TrackGenre 不可能预存；用 Storageable+WhereColumns
+            // 统一走"不存在则插入"，同时把批内重复交给 WhereColumns 兜底去重。
+            if (distinctArtists.Count > 0)
+            {
+                var trackArtists = distinctArtists
+                    .Select(a => new TrackArtist { TrackId = track.Id, ArtistId = a.Id })
+                    .ToList();
+                await db.Storageable(trackArtists)
+                    .WhereColumns(link => new { link.TrackId, link.ArtistId })
+                    .ToStorage()
+                    .AsInsertable.ExecuteCommandAsync(cancellationToken);
+            }
+
+            // AlbumArtist 需兼容"同专辑多首曲目分批导入/并发导入"：专辑已存在、关联可能已建。
+            // 用 Storageable+WhereColumns(AlbumId,ArtistId) 只插入库中尚不存在的组合，
+            // 替代原先 AnyAsync 先查再插的竞态窗口（并发事务互相看不到未提交行导致重复插入）。
+            if (album is not null && distinctArtists.Count > 0)
+            {
+                var albumArtists = distinctArtists
+                    .Select(a => new AlbumArtist { AlbumId = album.Id, ArtistId = a.Id })
+                    .ToList();
+                await db.Storageable(albumArtists)
+                    .WhereColumns(link => new { link.AlbumId, link.ArtistId })
+                    .ToStorage()
+                    .AsInsertable.ExecuteCommandAsync(cancellationToken);
+            }
+
+            if (distinctGenres.Count > 0)
+            {
+                var trackGenres = distinctGenres
+                    .Select(g => new TrackGenre { TrackId = track.Id, GenreId = g.Id })
+                    .ToList();
+                await db.Storageable(trackGenres)
+                    .WhereColumns(link => new { link.TrackId, link.GenreId })
+                    .ToStorage()
+                    .AsInsertable.ExecuteCommandAsync(cancellationToken);
+            }
             if (lyric is not null)
                 await db.Insertable(lyric).ExecuteCommandAsync(cancellationToken);
             await db.Insertable(playbackAsset).ExecuteCommandAsync(cancellationToken);

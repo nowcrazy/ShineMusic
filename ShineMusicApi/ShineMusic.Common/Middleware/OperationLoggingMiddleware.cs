@@ -34,7 +34,7 @@ public sealed class OperationLoggingMiddleware
         var stopwatch = Stopwatch.StartNew();
         var method = context.Request.Method;
         var path = context.Request.Path + context.Request.QueryString;
-        var clientIp = context.Connection.RemoteIpAddress?.ToString() ?? "-";
+        var clientIp = ShineMusic.Common.ClientIp.Resolve(context);
         var userAgent = context.Request.Headers.UserAgent.ToString();
 
         // 请求进入时的调试快照：排查“请求到底有没有到后端/到了哪个地址”时先看这一行。

@@ -92,6 +92,49 @@ public sealed class ImportPublishService(
         if (await db.Queryable<MediaAsset>().AnyAsync(asset => asset.ContentHash == item.ContentHash, cancellationToken))
             return ImportPublishResult.Failure(ImportPublishErrorKind.Conflict, "This audio has already been published.");
 
+        // 元数据级去重：标题 + 艺人 + 专辑均相同的已发布曲目视为同一首歌（非翻唱），
+        // 避免同一首歌的不同音频文件（不同码率/压制）重复入库。
+        var itemTitle = NormalizeMetadata(item.Title);
+        var itemArtists = DeserializeList(item.ArtistsJson).Select(NormalizeMetadata).Where(v => v.Length > 0).ToList();
+        var itemAlbum = NormalizeMetadata(item.AlbumTitle);
+        if (itemTitle.Length > 0 && itemArtists.Count > 0)
+        {
+            var titleCandidates = await db.Queryable<Track>()
+                .Where(track => track.PublishedAt != null && track.Title.ToLower() == itemTitle)
+                .Select(track => track.Id)
+                .ToListAsync(cancellationToken);
+            if (titleCandidates.Count > 0)
+            {
+                var candidateArtists = await db.Queryable<TrackArtist, Artist>((link, artist) => link.ArtistId == artist.Id)
+                    .Where((link, artist) => titleCandidates.Contains(link.TrackId))
+                    .Select((link, artist) => new { link.TrackId, ArtistName = artist.Name })
+                    .ToListAsync(cancellationToken);
+                var candidateAlbums = await db.Queryable<Track, Album>((track, album) => track.AlbumId == album.Id)
+                    .Where((track, album) => titleCandidates.Contains(track.Id))
+                    .Select((track, album) => new { track.Id, AlbumTitle = album.Title })
+                    .ToListAsync(cancellationToken);
+                var albumByTrack = candidateAlbums.ToDictionary(c => c.Id, c => NormalizeMetadata(c.AlbumTitle));
+
+                foreach (var candidateId in titleCandidates)
+                {
+                    var candidateArtistsNorm = candidateArtists
+                        .Where(c => c.TrackId == candidateId)
+                        .Select(c => NormalizeMetadata(c.ArtistName))
+                        .Where(v => v.Length > 0)
+                        .ToList();
+                    // 艺人有交集且专辑相同（任一侧无专辑信息时退化为标题+艺人匹配）。
+                    var artistOverlap = candidateArtistsNorm.Any(a => itemArtists.Contains(a));
+                    if (!artistOverlap)
+                        continue;
+                    var candidateAlbum = albumByTrack.GetValueOrDefault(candidateId) ?? string.Empty;
+                    var albumMatches = itemAlbum.Length == 0 || candidateAlbum.Length == 0 || itemAlbum == candidateAlbum;
+                    if (albumMatches)
+                        return ImportPublishResult.Failure(ImportPublishErrorKind.Conflict,
+                            $"曲库中已存在相同曲目（标题、艺人、专辑一致），无需重复发布。如为翻唱版本请修改艺人或专辑信息。");
+                }
+            }
+        }
+
         // 点歌需求联动：发布前校验「待上架曲目」是否确实是「需求要的那首歌」，防止张冠李戴。
         if (item.SongRequestId.HasValue)
         {
@@ -385,19 +428,44 @@ public sealed class ImportPublishService(
                 foreach (var genre in newGenres)
                     await db.Insertable(genre).ExecuteCommandAsync(cancellationToken);
                 await db.Insertable(track).ExecuteCommandAsync(cancellationToken);
-                foreach (var artist in resolvedArtists)
-                    await db.Insertable(new TrackArtist { TrackId = track.Id, ArtistId = artist.Id }).ExecuteCommandAsync(cancellationToken);
-                if (album is not null)
-                    foreach (var artist in resolvedArtists)
-                    {
-                        // 已有专辑 + 已有艺人的组合可能已建过关联（同专辑多首曲目分批发布），跳过避免主键冲突。
-                        var albumId2 = album.Id;
-                        var artistId = artist.Id;
-                        if (!await db.Queryable<AlbumArtist>().AnyAsync(link => link.AlbumId == albumId2 && link.ArtistId == artistId, cancellationToken))
-                            await db.Insertable(new AlbumArtist { AlbumId = albumId2, ArtistId = artistId }).ExecuteCommandAsync(cancellationToken);
-                    }
-                foreach (var genre in resolvedGenres)
-                    await db.Insertable(new TrackGenre { TrackId = track.Id, GenreId = genre.Id }).ExecuteCommandAsync(cancellationToken);
+
+                // 关联表写入：元数据里艺人/流派名可能重复，先按 Id 去重避免复合主键冲突；
+                // 用 Storageable+WhereColumns 走"不存在则插入"，替代原先 AnyAsync 先查再插的竞态窗口。
+                var distinctArtists = resolvedArtists.DistinctBy(a => a.Id).ToList();
+                var distinctGenres = resolvedGenres.DistinctBy(g => g.Id).ToList();
+
+                if (distinctArtists.Count > 0)
+                {
+                    var trackArtists = distinctArtists
+                        .Select(a => new TrackArtist { TrackId = track.Id, ArtistId = a.Id })
+                        .ToList();
+                    await db.Storageable(trackArtists)
+                        .WhereColumns(link => new { link.TrackId, link.ArtistId })
+                        .ToStorage()
+                        .AsInsertable.ExecuteCommandAsync(cancellationToken);
+                }
+
+                if (album is not null && distinctArtists.Count > 0)
+                {
+                    var albumArtists = distinctArtists
+                        .Select(a => new AlbumArtist { AlbumId = album.Id, ArtistId = a.Id })
+                        .ToList();
+                    await db.Storageable(albumArtists)
+                        .WhereColumns(link => new { link.AlbumId, link.ArtistId })
+                        .ToStorage()
+                        .AsInsertable.ExecuteCommandAsync(cancellationToken);
+                }
+
+                if (distinctGenres.Count > 0)
+                {
+                    var trackGenres = distinctGenres
+                        .Select(g => new TrackGenre { TrackId = track.Id, GenreId = g.Id })
+                        .ToList();
+                    await db.Storageable(trackGenres)
+                        .WhereColumns(link => new { link.TrackId, link.GenreId })
+                        .ToStorage()
+                        .AsInsertable.ExecuteCommandAsync(cancellationToken);
+                }
                 await db.Insertable(originalAsset).ExecuteCommandAsync(cancellationToken);
                 await db.Insertable(playbackAsset).ExecuteCommandAsync(cancellationToken);
                 if (lyric is not null)
@@ -489,6 +557,12 @@ public sealed class ImportPublishService(
         try { return JsonSerializer.Deserialize<List<string>>(json) ?? []; }
         catch (JsonException) { return []; }
     }
+
+    /// <summary>元数据归一化：压缩空白 + trim + 小写，用于标题/艺人/专辑的宽松比较。</summary>
+    private static string NormalizeMetadata(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : System.Text.RegularExpressions.Regex.Replace(value, @"\s+", " ").Trim().ToLowerInvariant();
 
     private static string GetImageContentType(string extension) => extension.ToLowerInvariant() switch
     {
