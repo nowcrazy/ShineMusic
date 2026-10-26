@@ -214,6 +214,12 @@ builder.Services
     .Validate(options => options.MinScore is >= 0 and <= 1, "Lyrics:MinScore must be between 0 and 1.")
     .ValidateOnStart();
 builder.Services
+    .AddOptions<LibraryImportOptions>()
+    .BindConfiguration(LibraryImportOptions.SectionName)
+    .Validate(options => options.AutoPublishThreshold is >= 0 and <= 100,
+        "LibraryImport:AutoPublishThreshold must be between 0 and 100.")
+    .ValidateOnStart();
+builder.Services
     .AddOptions<SourceDownloadOptions>()
     .BindConfiguration(SourceDownloadOptions.SectionName)
     .Validate(options => !options.Audius.Enabled || !string.IsNullOrWhiteSpace(options.Audius.BaseUrl),
@@ -342,6 +348,24 @@ builder.Services.AddSingleton<ShineMusic.Service.SourceDownload.IMusicSourceProv
 builder.Services.AddSingleton<ShineMusic.Service.SourceDownload.IMusicSourceProvider, ShineMusic.Service.SourceDownload.SoundCloudSourceProvider>();
 builder.Services.AddSingleton<ShineMusic.Service.SourceDownload.IMusicSourceProvider, ShineMusic.Service.SourceDownload.KuwoSourceProvider>();
 builder.Services.AddScoped<ShineMusic.Service.SourceDownload.SourceDownloadService>();
+// ===== 外部歌单解析导入：命名客户端（网易云需 UA/Referer 头，QQ 音乐需 Referer）+ 平台 parser 单例 + 编排服务 =====
+builder.Services.AddHttpClient(ShineMusic.Service.PlaylistImport.NeteasePlaylistParser.HttpClientName, client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(20);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36");
+    client.DefaultRequestHeaders.Referrer = new Uri("https://music.163.com/");
+});
+builder.Services.AddHttpClient(ShineMusic.Service.PlaylistImport.QQMusicPlaylistParser.HttpClientName, client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(20);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36");
+    client.DefaultRequestHeaders.Referrer = new Uri("https://y.qq.com/");
+});
+builder.Services.AddSingleton<ShineMusic.Service.PlaylistImport.IPlaylistParser, ShineMusic.Service.PlaylistImport.NeteasePlaylistParser>();
+builder.Services.AddSingleton<ShineMusic.Service.PlaylistImport.IPlaylistParser, ShineMusic.Service.PlaylistImport.QQMusicPlaylistParser>();
+builder.Services.AddSingleton<ShineMusic.Service.PlaylistImport.IPlaylistParser, ShineMusic.Service.PlaylistImport.KuwoPlaylistParser>();
+builder.Services.AddSingleton<ShineMusic.Service.PlaylistImport.IPlaylistParser, ShineMusic.Service.PlaylistImport.YtDlpPlaylistParser>();
+builder.Services.AddScoped<ShineMusic.Service.PlaylistImport.PlaylistImportService>();
 // 歌词定时补跑、点歌需求自动归档、导入/下载失败重试扫描：由 BackgroundService 定时器驱动
 // （启动恢复见 ShineMusic.Tasks.QueueBootstrap.InitializeAsync）。
 // ===== 用户/角色服务：1b 阶段起由 SqlSugar 版 UserService 接管原 Identity UserManager/SignInManager/RoleManager 职责 =====
@@ -510,8 +534,8 @@ await using (var scope = app.Services.CreateAsyncScope())
     var sqlSugar = scope.ServiceProvider.GetRequiredService<ISqlSugarClient>();
     ShineMusic.Repository.Data.SqlSugarSchemaBootstrap.Initialize(sqlSugar, app.Logger);
     var userService = scope.ServiceProvider.GetRequiredService<UserService>();
-    // 内置角色幂等播种（替代原 RoleManager 逻辑）。
-    foreach (var roleName in new[] { "user", "admin" })
+    // 内置角色幂等播种（替代原 RoleManager 逻辑）：user 普通用户 / admin 管理员 / tempadmin 临时管理员。
+    foreach (var roleName in new[] { "user", "admin", "tempadmin" })
         await userService.EnsureRoleAsync(roleName);
 
     // —— 开发环境确保管理员账号可用（存在则解锁+重置密码；不存在则创建） ——

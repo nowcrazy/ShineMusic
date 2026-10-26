@@ -29,6 +29,7 @@ public static class AdminAudit
         if (!Guid.TryParse(context.User.FindFirst("sub")?.Value, out var actorUserId))
             throw new InvalidOperationException("An authenticated administrator is required to create an audit entry.");
 
+        var (clientType, deviceInfo) = ClientInfo.Resolve(context);
         db.Insertable(new AdminAuditEntry
         {
             ActorUserId = actorUserId,
@@ -38,7 +39,10 @@ public static class AdminAudit
             // 详情为可选快照：序列化成 JSON 存储，null 时留空。
             DetailsJson = details is null ? null : JsonSerializer.Serialize(details),
             // 记录请求追踪 Id，便于把审计条目与链路日志关联排查。
-            TraceId = context.TraceIdentifier
+            TraceId = context.TraceIdentifier,
+            Ip = ClientInfo.ResolveIp(context),
+            ClientType = clientType,
+            DeviceInfo = deviceInfo,
         }).ExecuteCommand();
     }
 }

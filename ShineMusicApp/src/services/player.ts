@@ -13,7 +13,7 @@
  */
 import { reactive, readonly } from 'vue'
 import type { ApiLyric, Track } from '@/types/music'
-import { getTrackDefaultLyric } from './catalog'
+import { checkTrackExists, getTrackDefaultLyric } from './catalog'
 import { reportPlayEvent } from './feedback'
 import { EQ_PRESETS, findEqPreset, type EqBand } from './eq-presets'
 import {
@@ -154,6 +154,11 @@ function restoreState() {
   _restoreQueueRef = queue
   syncFromBackgroundAudio()
   _restoreQueueRef = null
+  // 曲库重建/曲目被删后，持久化现场可能引用已不存在的曲目：异步校验，确认 404 则清除，
+  // 避免迷你播放条复活死曲目、一点播放就陷入 404 重试循环
+  void checkTrackExists(track.id).then((exists) => {
+    if (!exists && state.currentTrack?.id === track.id) purgeDeadTrack(track.id, false)
+  })
 }
 
 /** restoreState 内部暂存的 queue（供 syncFromBackgroundAudio 匹配曲目用，生命周期内为 null） */
@@ -549,6 +554,94 @@ function scheduleAutoRetry(): boolean {
   return true
 }
 
+/** 正在进行存在性校验的曲目 id；防止引擎重复 onError 引发并发校验 */
+let goneCheckInFlight: string | null = null
+
+/**
+ * 把已确认不存在（404）的曲目从队列与播放现场中永久移除。
+ * 用于曲库重建/曲目被删后清理失效的本地持久化现场——否则死曲目每次冷启动都会复活，
+ * 点播放就陷入 404 重试循环。
+ * @param trackId 已确认 404 的曲目
+ * @param autoplayNext 移除后是否自动播放下一首（播放中出错传 true；冷启动校验传 false）
+ */
+function purgeDeadTrack(trackId: string, autoplayNext: boolean) {
+  const deadIndex = state.queueIndex
+  const queue = state.queue.filter((item) => item.id !== trackId)
+  const wasCurrent = state.currentTrack?.id === trackId
+  state.queue = queue
+  if (!wasCurrent) {
+    // 非当前曲目：仅收缩队列并校正下标
+    state.queueIndex = queue.findIndex((item) => item.id === state.currentTrack?.id)
+    if (state.currentTrack) persistState(true)
+    return
+  }
+  engine?.stop()
+  resetAutoRetry()
+  state.currentTrack = null
+  state.currentLyric = null
+  state.currentTime = 0
+  state.duration = 0
+  state.audioError = false
+  state.isPlaying = false
+  state.queueIndex = -1
+  if (!queue.length) {
+    // 队列已空：连同持久化现场一起清掉（persistState 需要 currentTrack，只能直接删 key）
+    try {
+      uni.removeStorageSync(STATE_STORAGE_KEY)
+    } catch {
+      /* 存储不可用时忽略 */
+    }
+    return
+  }
+  if (autoplayNext) {
+    // 队列收缩后，原位置的下一首自然顶替到 deadIndex
+    const nextIndex = Math.min(Math.max(deadIndex, 0), queue.length - 1)
+    playTrack(queue[nextIndex], queue)
+  } else {
+    // 无当前曲目时持久化现场不可还原（restoreState 要求 track 存在），直接清掉
+    try {
+      uni.removeStorageSync(STATE_STORAGE_KEY)
+    } catch {
+      /* 存储不可用时忽略 */
+    }
+  }
+}
+
+/**
+ * 引擎错误处理：先确认曲目是否仍存在，再决定重试还是移除。
+ * - 曲目 404（曲库重建/被下架/被移除权限）：永久移除并按需自动切下一首；
+ * - 其余（弱网等瞬断）：维持原自动续播重试，重试耗尽才进入错误态。
+ */
+function handleAudioError() {
+  const track = state.currentTrack
+  if (!track) {
+    state.audioError = true
+    state.isPlaying = false
+    persistState(true)
+    return
+  }
+  if (goneCheckInFlight === track.id) return
+  goneCheckInFlight = track.id
+  const wasPlaying = state.isPlaying
+  void checkTrackExists(track.id)
+    .then((exists) => {
+      // 校验期间用户可能已切歌，仅当仍是同一曲目时才处置
+      if (state.currentTrack?.id !== track.id) return
+      if (!exists) {
+        purgeDeadTrack(track.id, wasPlaying)
+        return
+      }
+      // 播放中（用户想听）才自动续播；已暂停或到重试上限则进入错误态
+      if (wasPlaying && scheduleAutoRetry()) return
+      state.audioError = true
+      state.isPlaying = false
+      persistState(true)
+    })
+    .finally(() => {
+      if (goneCheckInFlight === track.id) goneCheckInFlight = null
+    })
+}
+
 /** 懒构建音频引擎，并把当前音效预设对应的 EQ 波段预置进去 */
 function ensureEngine(): AudioEngine {
   if (engine) return engine
@@ -568,13 +661,7 @@ function ensureEngine(): AudioEngine {
       persistState()
     },
     onEnded: handleEnded,
-    onError: () => {
-      // 播放中（用户想看/想听）才自动续播；已暂停或到重试上限则进入错误态
-      if (state.isPlaying && scheduleAutoRetry()) return
-      state.audioError = true
-      state.isPlaying = false
-      persistState(true)
-    },
+    onError: handleAudioError,
   })
   engine.setEqBands(findEqPreset(state.eqPreset).bands)
   return engine

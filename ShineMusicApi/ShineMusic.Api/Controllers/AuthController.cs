@@ -54,6 +54,23 @@ public sealed class AuthController : ControllerBase
         }
     }
 
+    /// <summary>写入一条登录审计（账号、结果、原因、IP、客户端/设备画像），与文件日志互补供后台检索。</summary>
+    private void WriteLoginAudit(ISqlSugarClient db, string login, Guid? userId, string result, string reason)
+    {
+        var (clientType, deviceInfo) = ClientInfo.Resolve(HttpContext);
+        db.Insertable(new LoginAuditEntry
+        {
+            Login = login,
+            UserId = userId,
+            Result = result,
+            Reason = reason,
+            Ip = ClientInfo.ResolveIp(HttpContext),
+            ClientType = clientType,
+            DeviceInfo = deviceInfo,
+            UserAgent = ClientAgent == "-" ? null : ClientAgent,
+        }).ExecuteCommand();
+    }
+
     // 【POST /api/v1/auth/invitations/validate】注册前校验邀请令牌（匿名）。
     // 请求体：ValidateInvitationRequest.InvitationToken（明文一次性令牌，可为邮件链接令牌或注册码/CDK）。
     // 返回：200 InvitationValidationResponse（脱敏邮箱（CDK 为空）+ 渠道 channel=email|code + 到期时间 UTC）；
@@ -224,6 +241,7 @@ public sealed class AuthController : ControllerBase
         if (string.IsNullOrWhiteSpace(loginIdentifier) || string.IsNullOrWhiteSpace(request.Password))
         {
             _logger.LogWarning("Login rejected | Reason=missing_credentials | Ip={Ip} | Ua={Ua}", ClientIp, ClientAgent);
+            WriteLoginAudit(db, loginIdentifier ?? "-", null, "failure", "missing_credentials");
             return ApiResults.ValidationError(HttpContext, "credentials", "Email or username and password are required."); // 400
         }
 
@@ -234,6 +252,7 @@ public sealed class AuthController : ControllerBase
             // 账号不存在：仅服务端记录（响应与密码错误保持一致，避免邮箱枚举）；带 TraceId 便于定位。
             _logger.LogWarning("Login failed | Reason=account_not_found | Login={Login} | Ip={Ip} | Ua={Ua}",
                 loginIdentifier, ClientIp, ClientAgent);
+            WriteLoginAudit(db, loginIdentifier, null, "failure", "account_not_found");
             return Unauthorized(HttpContext);
         }
 
@@ -244,6 +263,7 @@ public sealed class AuthController : ControllerBase
             var reason = checkResult.IsLockedOut ? "account_locked" : "bad_password";
             _logger.LogWarning("Login failed | Reason={Reason} | Login={Login} | UserId={UserId} | Ip={Ip} | Ua={Ua}",
                 reason, loginIdentifier, user.Id, ClientIp, ClientAgent);
+            WriteLoginAudit(db, loginIdentifier, user.Id, "failure", reason);
             return Unauthorized(HttpContext);
         }
 
@@ -251,6 +271,7 @@ public sealed class AuthController : ControllerBase
         var tokens = await IssueTokensAsync(user, userService, tokenService, db);
         _logger.LogInformation("Login succeeded | Login={Login} | UserId={UserId} | Ip={Ip} | Ua={Ua}",
             loginIdentifier, user.Id, ClientIp, ClientAgent);
+        WriteLoginAudit(db, loginIdentifier, user.Id, "success", "ok");
         return Results.Ok(tokens);
     }
 
@@ -312,7 +333,7 @@ public sealed class AuthController : ControllerBase
                 return Unauthorized(HttpContext); // 401：已被另一个请求抢先轮换
             }
 
-            var roles = await userService.GetRolesAsync(tokenUser.Id);
+            var roles = await userService.GetEffectiveRolesAsync(tokenUser);
             var accessToken = tokenService.CreateAccessToken(tokenUser, roles);
             // 落库的是新刷新令牌的哈希；明文 replacement.Token 仅在本次响应中返回给客户端。
             await db.Insertable(new ShineMusic.Model.Entities.RefreshToken
@@ -375,7 +396,7 @@ public sealed class AuthController : ControllerBase
         var user = await userService.FindByIdAsync(userId);
         if (user is null)
             return Results.Unauthorized(); // 401：令牌有效但用户已被删除
-        var roles = await userService.GetRolesAsync(user.Id);
+        var roles = await userService.GetEffectiveRolesAsync(user);
         return Results.Ok(new
         {
             id = user.Id,
@@ -400,7 +421,7 @@ public sealed class AuthController : ControllerBase
     {
         var now = DateTime.UtcNow;
         var refresh = TokenService.CreateRefreshToken();
-        var access = tokenService.CreateAccessToken(user, await userService.GetRolesAsync(user.Id));
+        var access = tokenService.CreateAccessToken(user, await userService.GetEffectiveRolesAsync(user));
         await db.Insertable(new ShineMusic.Model.Entities.RefreshToken
         {
             UserId = user.Id,

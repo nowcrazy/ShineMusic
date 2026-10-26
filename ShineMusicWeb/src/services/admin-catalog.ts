@@ -6,6 +6,7 @@
  * - PATCH /admin/tracks/{id}     （更新曲目元数据）
  */
 import type { ApiAdminTrackQuery, ApiAdminTrackUpdate, ApiCreateLyric, ApiLyric, ApiPageResult, ApiTrack, ApiUpdateLyric } from '@/types/music'
+import type { ApiTrackDeleteResult } from '@/types/api.generated'
 import { API_PREFIX, http } from './http'
 
 /**
@@ -39,6 +40,15 @@ export async function getAdminTracks(query: ApiAdminTrackQuery = {}) {
  */
 export async function updateAdminTrack(trackId: string, update: ApiAdminTrackUpdate) {
   return http.patch<ApiTrack>(`${API_PREFIX}/admin/tracks/${trackId}`, update)
+}
+
+/**
+ * 管理端删除曲目：同时清理关联的音频、封面文件与曲目记录。
+ *
+ * DELETE /admin/tracks/{trackId}
+ */
+export function deleteAdminTrack(trackId: string) {
+  return http.delete<ApiTrackDeleteResult>(`${API_PREFIX}/admin/tracks/${trackId}`)
 }
 
 // ===== 歌词管理 =====

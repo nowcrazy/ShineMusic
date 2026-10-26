@@ -61,11 +61,11 @@ public sealed class AudiusSourceProvider(
     public async Task<SourceDownloadInfo> ResolveDownloadAsync(string providerTrackId, CancellationToken cancellationToken)
     {
         var track = await GetTrackAsync(providerTrackId, cancellationToken)
-            ?? throw new SourceUnavailableException("The track was not found on Audius.");
+            ?? throw new SourceUnavailableException("该曲目在 Audius 上不存在或已被删除。");
 
         // 作者开放了 Public 全曲下载 → 尝试原文件（通常无损）；
         // Audius 的 is_downloadable 标记并不可靠（部分曲目标记可下载但 /download 返回 403），
-        // 因此用一次轻量 HEAD 校验端点可用性，失败即回退到 320k 流地址。
+        // 因此用一次轻量探测校验端点可用性，失败即回退到 320k 流地址。
         if (track.IsLosslessAvailable)
         {
             var downloadUrl = $"{Base()}/v1/tracks/{Uri.EscapeDataString(providerTrackId)}/download?app_name={AppName()}";
@@ -81,22 +81,29 @@ public sealed class AudiusSourceProvider(
             logger.LogWarning("Audius download endpoint returned non-success for track {TrackId}; falling back to stream.", providerTrackId);
         }
 
-        // 兜底：320k 流式转码。
+        // 兜底：320k 流式转码。内容节点可能因版权把 CID 拉黑（403）或曲目被删（404），
+        // 探测失败时抛出明确原因，避免下载层只报笼统的 "could not be downloaded"。
+        var streamUrl = $"{Base()}/v1/tracks/{Uri.EscapeDataString(providerTrackId)}/stream?app_name={AppName()}";
+        if (!await IsEndpointAvailableAsync(streamUrl, cancellationToken))
+            throw new SourceUnavailableException("该曲目在 Audius 已下架或被内容节点屏蔽，无法下载。");
         return new SourceDownloadInfo(
-            $"{Base()}/v1/tracks/{Uri.EscapeDataString(providerTrackId)}/stream?app_name={AppName()}",
+            streamUrl,
             "mp3",
             IsLossless: false,
             BitrateKbps: 320,
             Quality: SourceQualities.High);
     }
 
-    /// <summary>用 HEAD 轻量校验下载端点是否可用（Audius 部分曲目标记可下载但实际 403）。</summary>
+    /// <summary>
+    /// 轻量校验下载/流端点可用性（Audius 部分曲目标记可下载但实际 403，内容节点也可能拉黑 CID）。
+    /// 用 GET + ResponseHeadersRead（而非 HEAD）：部分内容节点对 HEAD 支持不佳，GET 仅读响应头最贴近真实下载行为。
+    /// </summary>
     private async Task<bool> IsEndpointAvailableAsync(string url, CancellationToken cancellationToken)
     {
         try
         {
             var client = httpClientFactory.CreateClient(HttpClientName);
-            using var request = new HttpRequestMessage(HttpMethod.Head, url);
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
             using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
             // 3xx 重定向视为可用（内容节点会 302），4xx/5xx 视为不可用。
             return response.IsSuccessStatusCode || ((int)response.StatusCode >= 300 && (int)response.StatusCode < 400);
@@ -111,12 +118,17 @@ public sealed class AudiusSourceProvider(
         }
     }
 
-    /// <summary>解析 Audius 曲目 JSON 为统一模型；关键字段缺失时返回 null 跳过。</summary>
+    /// <summary>解析 Audius 曲目 JSON 为统一模型；关键字段缺失或曲目已删除/不可流播时返回 null 跳过。</summary>
     private SourceSearchResult? ParseTrack(JsonElement item)
     {
         var id = GetString(item, "id");
         var title = GetString(item, "title");
         if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(title))
+            return null;
+
+        // Audius 搜索会混入已删除/不可用的盗版上传曲目（is_delete / is_available=false / is_streamable=false），
+        // 它们的 stream/download 端点必然 404，必须在搜索阶段就过滤掉，否则用户派发的下载任务注定失败。
+        if (GetBool(item, "is_delete") || HasFalseFlag(item, "is_available") || HasFalseFlag(item, "is_streamable"))
             return null;
 
         // 艺人：Audius 曲目挂单一 user 对象。
@@ -150,7 +162,7 @@ public sealed class AudiusSourceProvider(
             DurationMs: durationSeconds * 1000,
             Genres: string.IsNullOrWhiteSpace(genre) ? [] : [genre.Trim()],
             CoverUrl: coverUrl,
-            SourcePageUrl: GetString(item, "permalink"),
+            SourcePageUrl: AbsolutePermalink(GetString(item, "permalink")),
             License: GetString(item, "license"),
             Quality: downloadable ? SourceQualities.Lossless : SourceQualities.High,
             IsLosslessAvailable: downloadable);
@@ -184,6 +196,18 @@ public sealed class AudiusSourceProvider(
 
     private string Base() => options.Value.Audius.BaseUrl.TrimEnd('/');
     private string AppName() => Uri.EscapeDataString(options.Value.Audius.AppName);
+
+    /// <summary>Audius 的 permalink 是相对路径（如 /byone/xxx），补全为 audius.co 绝对地址，供前端直接打开。</summary>
+    private static string? AbsolutePermalink(string? permalink)
+    {
+        if (string.IsNullOrWhiteSpace(permalink)) return null;
+        if (permalink.StartsWith("http", StringComparison.OrdinalIgnoreCase)) return permalink;
+        return $"https://audius.co{(permalink.StartsWith('/') ? permalink : $"/{permalink}")}";
+    }
+
+    /// <summary>字段存在且显式为 false 时返回 true（字段缺失视为未知，不误伤）。</summary>
+    private static bool HasFalseFlag(JsonElement element, string name)
+        => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.False;
 
     private static string? GetString(JsonElement element, string name)
         => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;

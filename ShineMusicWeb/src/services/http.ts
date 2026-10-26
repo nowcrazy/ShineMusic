@@ -96,6 +96,8 @@ type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 interface RequestOptions {
   // 匿名接口可不附带凭证；默认附带
   withAuth?: boolean
+  // 单次请求超时（毫秒）；默认 REQUEST_TIMEOUT_MS，慢接口（如音源聚合搜索）可放大
+  timeoutMs?: number
   // 内部：401 后是否允许刷新重试
   _retry?: boolean
 }
@@ -134,10 +136,12 @@ interface ErrorBody {
  * @returns resolve 为 { status, data }（HTTP 错误状态也在此返回，由上层统一抛错）；
  *          reject 仅发生在 uni.request 网络层失败，包装为 ApiError(0, 'network_error')
  */
-function sendRequest(method: HttpMethod, url: string, data: unknown, withAuth: boolean) {
+function sendRequest(method: HttpMethod, url: string, data: unknown, withAuth: boolean, timeoutMs?: number) {
   return new Promise<{ status: number; data: unknown }>((resolve, reject) => {
     const header: Record<string, string> = {}
     if (data !== undefined && method !== 'GET') header['Content-Type'] = 'application/json'
+    // 显式声明客户端类型，后端审计日志据此区分 PC 后台 / App（设备描述由 UA 解析）。
+    header['X-Client-Type'] = 'web-admin'
     const token = getAccessToken()
     if (withAuth && token) header.Authorization = `Bearer ${token}`
     uni.request({
@@ -145,7 +149,7 @@ function sendRequest(method: HttpMethod, url: string, data: unknown, withAuth: b
       method: method as any,
       data: data as AnyObject | undefined,
       header,
-      timeout: REQUEST_TIMEOUT_MS,
+      timeout: timeoutMs ?? REQUEST_TIMEOUT_MS,
       success: ({ statusCode, data: body }) => resolve({ status: statusCode, data: body }),
       fail: (error) => reject(new ApiError(0, 'network_error', error.errMsg || t('services.networkError'))),
     })
@@ -195,13 +199,13 @@ export async function request<T>(
   data?: unknown,
   options: RequestOptions = {},
 ): Promise<T> {
-  const { withAuth = true, _retry = false } = options
-  const { status, data: body } = await sendRequest(method, resolveUrl(path), data, withAuth)
+  const { withAuth = true, timeoutMs, _retry = false } = options
+  const { status, data: body } = await sendRequest(method, resolveUrl(path), data, withAuth, timeoutMs)
 
   if (status === 401 && !_retry && withAuth && getRefreshToken() && refreshHandler) {
     const refreshed = await refreshHandler()
     if (refreshed) {
-      return request<T>(method, path, data, { withAuth, _retry: true })
+      return request<T>(method, path, data, { withAuth, timeoutMs, _retry: true })
     }
   }
 

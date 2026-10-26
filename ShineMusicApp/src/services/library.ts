@@ -181,6 +181,18 @@ export async function getPlaylist(playlistId: string) {
 }
 
 /**
+ * 移除歌单中的一条待补齐（pending）曲目。
+ *
+ * DELETE /me/playlists/{playlistId}/pending/{pendingId}
+ *
+ * @param playlistId 歌单 id
+ * @param pendingId 待补齐条目 id
+ */
+export async function removePlaylistPendingTrack(playlistId: string, pendingId: string) {
+  return http.delete<void>(`${API_PREFIX}/me/playlists/${playlistId}/pending/${pendingId}`)
+}
+
+/**
  * 更新歌单信息（名称/描述/封面）。
  *
  * PATCH /me/playlists/{playlistId}

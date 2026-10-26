@@ -14,7 +14,9 @@
     "check:contracts": "python ../ShineMusicApi/tools/generate-ts-contracts.py --check"
   },
   "dependencies": {
-    "lucide-vue-next": "^0.468.0",
+    "@element-plus/icons-vue": "2.3.1",
+    "element-plus": "2.8.8",
+    "pinia": "2.1.7",
     "vue": "3.4.21",
     "vue-i18n": "9.14.5",
     "vue-router": "4.4.5"

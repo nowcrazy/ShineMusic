@@ -31,6 +31,7 @@ public sealed class LibraryImportJob(
     IOptions<UploadOptions> uploadOptions,
     IOptions<TranscodingOptions> transcodingOptions,
     IOptions<SourceDownloadOptions> sourceDownloadOptions,
+    IOptions<LibraryImportOptions> libraryImportOptions,
     FfmpegMediaService mediaService,
     AudioMetadataParser metadataParser,
     ILyricsResolver lyricsResolver,
@@ -222,7 +223,40 @@ public sealed class LibraryImportJob(
                 }
                 else
                 {
-                    item.Status = LibraryImportItemStatuses.PendingReview;
+                    // 管理员手动导入：与音源抓歌相同，转码完成后评分；达标直通发布，未达标转人工审核。
+                    var score = SourceDownload.SourceScoreCalculator.Calculate(item);
+                    item.AutoScore = score.Total;
+                    item.AutoScoreBreakdownJson = score.ToBreakdownJson();
+
+                    if (libraryImportOptions.Value.AutoPublishEnabled &&
+                        score.Total >= libraryImportOptions.Value.AutoPublishThreshold)
+                    {
+                        item.MetadataReviewed = true;
+                        item.Status = LibraryImportItemStatuses.ReadyToPublish;
+                        item.UpdatedAtUtc = DateTime.UtcNow;
+                        await db.Updateable(item).ExecuteCommandAsync(cancellationToken);
+
+                        var publishResult = await publishService.PublishAsync(
+                            item,
+                            new ImportPublishContext(Guid.Empty, $"auto-publish:{item.Id:N}", IsAutomatic: true),
+                            forceFulfill: false,
+                            overrideReason: null,
+                            cancellationToken);
+                        if (publishResult.Succeeded)
+                        {
+                            // PublishAsync 内部已完成事务提交、批次收口与隔离区清理。
+                            return;
+                        }
+                        // 直通失败不阻断：降级转人工审核，由管理员在审核页处理。
+                        logger.LogWarning("Auto-publish failed for manual import item {ImportItemId} (score {Score}): {Message}; falling back to manual review.",
+                            item.Id, score.Total, publishResult.Error?.Message);
+                        item.MetadataReviewed = false;
+                        item.Status = LibraryImportItemStatuses.PendingReview;
+                    }
+                    else
+                    {
+                        item.Status = LibraryImportItemStatuses.PendingReview;
+                    }
                 }
             }
             item.UpdatedAtUtc = DateTime.UtcNow;
@@ -440,7 +474,13 @@ public sealed class LibraryImportJob(
                 await db.Insertable(new TrackArtist { TrackId = track.Id, ArtistId = artist.Id }).ExecuteCommandAsync(cancellationToken);
             if (album is not null)
                 foreach (var artist in resolvedArtists)
-                    await db.Insertable(new AlbumArtist { AlbumId = album.Id, ArtistId = artist.Id }).ExecuteCommandAsync(cancellationToken);
+                {
+                    // 已有专辑 + 已有艺人的组合可能已建过关联（重复上传/导入同专辑曲目），跳过避免主键冲突。
+                    var albumId2 = album.Id;
+                    var artistId = artist.Id;
+                    if (!await db.Queryable<AlbumArtist>().AnyAsync(link => link.AlbumId == albumId2 && link.ArtistId == artistId, cancellationToken))
+                        await db.Insertable(new AlbumArtist { AlbumId = albumId2, ArtistId = artistId }).ExecuteCommandAsync(cancellationToken);
+                }
             foreach (var genre in resolvedGenres)
                 await db.Insertable(new TrackGenre { TrackId = track.Id, GenreId = genre.Id }).ExecuteCommandAsync(cancellationToken);
             if (lyric is not null)

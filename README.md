@@ -8,7 +8,7 @@
 
 - `ShineMusicApi/`：ASP.NET Core (.NET 10) + SqlSugar + PostgreSQL + Redis + RabbitMQ，唯一 API 服务
 - `ShineMusicApp/`：uni-app + Vue 3 的 **App 前端**（只产 APK，无 H5 构建）
-- `ShineMusicWeb/`：Vue 3 + Vite 的 **Web 前端**（独立站点，浏览器直接访问）
+- `ShineMusicWeb/`：Vue 3 + Vite + Element Plus 的 **Web 管理后台**（独立站点与登录，面向管理员）
 - `ShineMusicApi/tools/generate-ts-contracts.py`：契约单一来源，一次生成同时写入 App/Web 两份 `api.generated.ts`
 - `config/hosts.json`：前后端共用的唯一地址配置（不入库，模板见 `config/hosts.example.json`）
 - `docs/`：项目文档（接口契约、操作指南）
@@ -26,7 +26,7 @@ docker compose up -d
 # 3. 后端（.NET 10 SDK，本机需可执行 ffmpeg / ffprobe；启动时 SqlSugar CodeFirst 幂等建表）
 dotnet run --project ShineMusicApi/ShineMusic.Api
 
-# 4. Web 前端（http://localhost:5174，/api 由 Vite 代理到后端）
+# 4. Web 管理后台（http://localhost:5174，独立登录页；/api 由 Vite 代理到后端）
 cd ShineMusicWeb
 yarn install
 yarn dev

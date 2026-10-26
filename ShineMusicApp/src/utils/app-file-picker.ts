@@ -47,6 +47,79 @@ function queryDisplayName(resolver: any, uri: any, fallback: string): string {
   return fallback
 }
 
+/** DISPLAY_NAME 查询失败时，按 content:// URI 的 MIME 类型推断扩展名（保证后续格式校验拿到正确后缀） */
+function extensionFromMime(resolver: any, uri: any): string {
+  const android = plus.android as any
+  try {
+    const mime = android.invoke(resolver, 'getType', uri) as string | null
+    if (mime) {
+      const MimeTypeMap = android.importClass('android.webkit.MimeTypeMap')
+      const ext = android.invoke(
+        android.invoke(MimeTypeMap, 'getSingleton'),
+        'getExtensionFromMimeType',
+        mime,
+      ) as string | null
+      if (ext) return ext
+    }
+  } catch {
+    /* 推断失败 */
+  }
+  return 'bin'
+}
+
+/** 已知的音频扩展名集合（用于判断 DISPLAY_NAME/MIME 结果是否可信） */
+const KNOWN_AUDIO_EXTS = [
+  'mp3', 'flac', 'wav', 'aac', 'm4a', 'm4b', 'ogg', 'oga',
+  'wma', 'aiff', 'aif', 'ape', 'mpc', 'mpp', 'wv', 'dsf',
+]
+
+/**
+ * 文件头嗅探：读取缓存文件前 16 字节识别真实音频格式。
+ * SAF 的 DISPLAY_NAME / getType 在部分基座上不可用，这里作为最终兜底，
+ * 保证复制到缓存的文件能拿到正确扩展名（validateFile 只认扩展名）。
+ */
+function sniffAudioExt(path: string): string {
+  const android = plus.android as any
+  let input: any = null
+  try {
+    const FileInputStream = android.importClass('java.io.FileInputStream')
+    input = new FileInputStream(path)
+    const buf = android.newObject('[B', 16)
+    const n = android.invoke(input, 'read', buf) as number
+    if (!n || n < 4) return ''
+    const b = (i: number) => buf[i] & 0xff
+    const s = (i: number, len: number) => {
+      let r = ''
+      for (let k = 0; k < len && i + k < n; k += 1) r += String.fromCharCode(b(i + k))
+      return r
+    }
+    if (s(0, 3) === 'ID3') return 'mp3'
+    if (b(0) === 0xff && (b(1) & 0xe0) === 0xe0) {
+      // 0xFFFx：MPEG 帧同步；layer 位(2-1)为 0 是 AAC ADTS，否则按 mp3
+      return (b(1) & 0x06) === 0 ? 'aac' : 'mp3'
+    }
+    if (s(0, 4) === 'fLaC') return 'flac'
+    if (s(0, 4) === 'OggS') return 'ogg'
+    if (s(0, 4) === 'RIFF' && s(8, 4) === 'WAVE') return 'wav'
+    if (s(0, 4) === 'FORM' && (s(8, 4) === 'AIFF' || s(8, 4) === 'AIFC')) return 'aiff'
+    if (s(4, 4) === 'ftyp') return 'm4a'
+    if (s(0, 3) === 'MAC') return 'ape'
+    if (s(0, 3) === 'MP+') return 'mpc'
+    if (s(0, 4) === 'wvpk') return 'wv'
+    if (s(0, 4) === 'DSD ') return 'dsf'
+    if (b(0) === 0x30 && b(1) === 0x26 && b(2) === 0xb2 && b(3) === 0x75) return 'wma'
+    return ''
+  } catch {
+    return ''
+  } finally {
+    try {
+      if (input) android.invoke(input, 'close')
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 /** 把 content:// URI 的字节流复制到应用缓存目录，返回本地绝对路径 */
 function copyUriToCache(resolver: any, uri: any, displayName: string): string {
   const android = plus.android as any
@@ -149,13 +222,39 @@ function pickViaAndroid(): Promise<PickedLocalFile[]> {
             const single = android.invoke(data, 'getData')
             if (single) uris.push(single)
           }
-          const picked: PickedLocalFile[] = uris.map((uri, index) => {
-            const fallback = `picked-${Date.now()}-${index}.bin`
-            const name = queryDisplayName(resolver, uri, fallback)
-            const path = copyUriToCache(resolver, uri, name)
-            return { path, name, size: localFileSize(path) }
-          })
-          resolve(picked)
+          // onActivityResult 由框架在 Activity 线程同步触发，此上下文中 SAF 的
+          // ContentResolver 桥调用会静默失效（query/getType/openInputStream 均空操作）。
+          // 回到 JS 事件循环后再做查询与复制。
+          setTimeout(() => {
+            try {
+              const picked: PickedLocalFile[] = uris.map((uri, index) => {
+                const fallback = `picked-${Date.now()}-${index}.${extensionFromMime(resolver, uri)}`
+                const queried = queryDisplayName(resolver, uri, '')
+                let path = copyUriToCache(resolver, uri, queried || fallback)
+                // DISPLAY_NAME / MIME 都不可靠时，用文件头嗅探修正扩展名，保证 validateFile 识别
+                let name = queried || fallback
+                const nameExt = name.split('.').pop()?.toLowerCase() ?? ''
+                if (!KNOWN_AUDIO_EXTS.includes(nameExt)) {
+                  const sniffed = sniffAudioExt(path)
+                  if (sniffed) {
+                    name = `${name.replace(/\.[^.]*$/, '')}.${sniffed}`
+                    // 同步重命名缓存文件：uni.uploadFile 的 multipart filename 取自 uri 的 basename
+                    try {
+                      const File = android.importClass('java.io.File')
+                      const newPath = `${path.replace(/\.[^.]*$/, '')}.${sniffed}`
+                      if (android.invoke(new File(path), 'renameTo', new File(newPath))) path = newPath
+                    } catch {
+                      /* 重命名失败则沿用原路径 */
+                    }
+                  }
+                }
+                return { path, name, size: localFileSize(path) }
+              })
+              resolve(picked)
+            } catch (error) {
+              reject(error instanceof Error ? error : new Error(String(error)))
+            }
+          }, 50)
         } catch (error) {
           reject(error instanceof Error ? error : new Error(String(error)))
         }

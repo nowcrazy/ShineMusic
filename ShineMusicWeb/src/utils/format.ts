@@ -32,6 +32,19 @@ export function formatDate(iso: string): string {
 }
 
 /**
+ * 将 ISO 日期时间字符串格式化为本地 YYYY-MM-DD HH:mm:ss（日志/审计列表用）。
+ *
+ * @param iso ISO 8601 日期时间字符串
+ * @returns 形如 "2026-10-25 16:30:05" 的字符串；解析失败返回空串
+ */
+export function formatDateTime(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return ''
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
+/**
  * 将字节数格式化为人类可读的文件大小（KB/MB）。
  *
  * @param bytes 字节数，可为 null/undefined

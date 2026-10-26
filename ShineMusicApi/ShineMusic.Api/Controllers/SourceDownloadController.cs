@@ -6,6 +6,7 @@ using System.Text.Json;
 using ShineMusic.Service.Messaging;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 using ShineMusic.Model.Contracts;
 using ShineMusic.Model.Entities;
 using ShineMusic.Api.Extensions;
@@ -36,6 +37,7 @@ public sealed class SourceDownloadController : ControllerBase
         [FromQuery] string? provider,
         [FromQuery] int? limit,
         IEnumerable<IMusicSourceProvider> providers,
+        IOptions<SourceDownloadOptions> options,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(query))
@@ -56,13 +58,26 @@ public sealed class SourceDownloadController : ControllerBase
         if (providerFilter != "all" && candidates.Count > 0 && enabledCandidates.Count == 0)
             errors.Add(new SourceProviderErrorDto(providerFilter, candidates[0].DisabledReason ?? "Source is disabled."));
 
+        // 单源搜索预算：任一源超时即放弃该源（标注 providerErrors），其余源结果照常返回，
+        // 防止不可达源（如国内网络下的 YouTube/yt-dlp）挂起拖垮整体响应。
+        var budgetSeconds = Math.Clamp(options.Value.SearchBudgetSeconds, 5, 300);
         // 并行搜索各启用源；单源异常收敛为 providerErrors。
         var searchTasks = enabledCandidates.Select(async candidate =>
         {
+            using var budgetCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            budgetCts.CancelAfter(TimeSpan.FromSeconds(budgetSeconds));
             try
             {
-                var items = await candidate.SearchAsync(query.Trim(), effectiveLimit, cancellationToken);
+                var items = await candidate.SearchAsync(query.Trim(), effectiveLimit, budgetCts.Token);
                 return (Provider: candidate.Provider, Items: items, Error: (string?)null);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // 预算到期（非客户端取消）：该源标注超时，不拖垮整体；yt-dlp 系平台提示代理配置
+                var hint = candidate.Provider is "ytmusic" or "soundcloud"
+                    ? "（国内网络不可直连，可在 appsettings 的 SourceDownload:YtDlp:Proxy 配置代理）"
+                    : string.Empty;
+                return (Provider: candidate.Provider, Items: Array.Empty<SourceSearchResult>(), Error: (string?)$"搜索超时（>{budgetSeconds} 秒），已跳过该源{hint}");
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {

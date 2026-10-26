@@ -33,6 +33,12 @@ public sealed class ApplicationUser : IdentityUser<Guid>
     public required string DisplayName { get; set; }
     /// <summary>账号创建时间（UTC）。</summary>
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+    /// <summary>
+    /// 临时管理员有效期截止（UTC）：仅当用户拥有 tempadmin 角色时有意义，
+    /// 自授予起 3 天；过期后读取角色时自动降级为普通用户并清空本字段。
+    /// </summary>
+    [SugarColumn(IsNullable = true)]
+    public DateTime? TempAdminUntilUtc { get; set; }
 }
 
 /// <summary>JWT 刷新令牌记录；明文令牌只发给客户端，数据库仅保存其哈希。</summary>
@@ -184,6 +190,47 @@ public sealed class UserPlaylistTrack
     public int SortOrder { get; set; }
     /// <summary>加入歌单的时间（UTC）。</summary>
     public DateTime AddedAtUtc { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>歌单导入产生的待补齐曲目：外部歌单中未匹配到曲库的条目，静默下载发布完成后转正为 UserPlaylistTrack。</summary>
+[SugarTable("UserPlaylistPendingTracks")]
+public sealed class UserPlaylistPendingTrack
+{
+    /// <summary>无参构造：满足 SqlSugar Insertable/Updateable 的 new() 约束。</summary>
+    [SetsRequiredMembers]
+    public UserPlaylistPendingTrack() { Title = null!; ArtistsJson = null!; SourcePlatform = null!; }
+
+    /// <summary>待补齐条目唯一标识，Guid 主键。</summary>
+    [SugarColumn(IsPrimaryKey = true)]
+    public Guid Id { get; set; } = Guid.NewGuid();
+    /// <summary>所属歌单 Id。</summary>
+    public Guid PlaylistId { get; set; }
+    /// <summary>曲目标题（外部平台原文）。</summary>
+    public required string Title { get; set; }
+    /// <summary>艺人名列表的 JSON 数组字符串。</summary>
+    public required string ArtistsJson { get; set; }
+    /// <summary>专辑名（可空）。</summary>
+    public string? AlbumTitle { get; set; }
+    /// <summary>时长（毫秒，可空）。</summary>
+    public int? DurationMs { get; set; }
+    /// <summary>封面地址（可空，外部平台 CDN）。</summary>
+    public string? CoverUrl { get; set; }
+    /// <summary>来源平台标识：netease / qqmusic / kuwo / ytmusic。</summary>
+    public required string SourcePlatform { get; set; }
+    /// <summary>来源平台曲目 Id（可空）。</summary>
+    public string? SourceTrackId { get; set; }
+    /// <summary>来源页面地址（可空）。</summary>
+    public string? SourceUrl { get; set; }
+    /// <summary>原歌单内排序序号（0 起），转正时作为 UserPlaylistTrack.SortOrder。</summary>
+    public int SortOrder { get; set; }
+    /// <summary>状态：pending（待下载）/ downloading（下载中）/ no_source（无可用源）/ failed（获取失败）。</summary>
+    public string Status { get; set; } = "pending";
+    /// <summary>关联的音源下载任务 Id（可空，未找到可用源时为空）。</summary>
+    public Guid? DownloadTaskId { get; set; }
+    /// <summary>创建时间（UTC）。</summary>
+    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+    /// <summary>最近更新时间（UTC）。</summary>
+    public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
 }
 
 /// <summary>点歌/求歌记录：用户提交想要上架的曲目，管理员走审核流程处理，其他用户可投票顶歌。</summary>
@@ -400,7 +447,51 @@ public sealed class AdminAuditEntry
     public string? DetailsJson { get; set; }
     /// <summary>请求追踪 Id（HttpContext.TraceIdentifier），用于串联日志与审计，最长 100 字符。</summary>
     public required string TraceId { get; set; }
+    /// <summary>客户端 IP 地址（最长 64）。</summary>
+    [SugarColumn(IsNullable = true)]
+    public string? Ip { get; set; }
+    /// <summary>客户端类型：web-admin / app / unknown（最长 32）。</summary>
+    [SugarColumn(IsNullable = true)]
+    public string? ClientType { get; set; }
+    /// <summary>设备描述：PC 端为浏览器+系统，App 端为机型+系统版本（最长 256）。</summary>
+    [SugarColumn(IsNullable = true)]
+    public string? DeviceInfo { get; set; }
     /// <summary>审计写入时间（UTC）；(CreatedAtUtc, ActorUserId) 复合索引支撑按时间/操作人检索。</summary>
+    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>登录审计条目：记录每次登录尝试（含失败）的账号、结果、IP 与客户端设备信息。</summary>
+[SugarTable("LoginAuditEntries")]
+public sealed class LoginAuditEntry
+{
+    /// <summary>无参构造：满足 SqlSugar 的 new() 约束（required 成员由调用方填充）。</summary>
+    [SetsRequiredMembers]
+    public LoginAuditEntry() { Login = null!; Result = null!; Reason = null!; Ip = null!; }
+
+    /// <summary>条目唯一标识，Guid 主键。</summary>
+    [SugarColumn(IsPrimaryKey = true)]
+    public Guid Id { get; set; } = Guid.NewGuid();
+    /// <summary>登录尝试的账号（邮箱或用户名原样记录，最长 256）。</summary>
+    public required string Login { get; set; }
+    /// <summary>命中账号的用户 Id；账号不存在时为 null。</summary>
+    [SugarColumn(IsNullable = true)]
+    public Guid? UserId { get; set; }
+    /// <summary>结果：success / failure（最长 16）。</summary>
+    public required string Result { get; set; }
+    /// <summary>原因：ok / account_not_found / bad_password / account_locked / missing_credentials（最长 32）。</summary>
+    public required string Reason { get; set; }
+    /// <summary>客户端 IP 地址（最长 64）。</summary>
+    public required string Ip { get; set; }
+    /// <summary>客户端类型：web-admin / app / web-app / unknown（最长 32）。</summary>
+    [SugarColumn(IsNullable = true)]
+    public string? ClientType { get; set; }
+    /// <summary>设备描述：PC 端为浏览器+系统，App 端为机型+系统版本（最长 256）。</summary>
+    [SugarColumn(IsNullable = true)]
+    public string? DeviceInfo { get; set; }
+    /// <summary>原始 User-Agent（最长 512，排查用）。</summary>
+    [SugarColumn(IsNullable = true)]
+    public string? UserAgent { get; set; }
+    /// <summary>发生时间（UTC）。</summary>
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 }
 
@@ -431,6 +522,20 @@ public sealed class ApplicationRole : IdentityRole<Guid>
     /// <summary>主键（覆盖基类属性以挂 SqlSugar 主键标注）。</summary>
     [SugarColumn(IsPrimaryKey = true)]
     public override Guid Id { get; set; }
+}
+
+/// <summary>
+/// 内置角色名常量：user 普通用户 / admin 管理员（长期）/ tempadmin 临时管理员（3 天有效）。
+/// 角色互斥：一个用户同一时刻只拥有其中一个。
+/// </summary>
+public static class RoleNames
+{
+    /// <summary>普通用户。</summary>
+    public const string User = "user";
+    /// <summary>管理员（长期有效）。</summary>
+    public const string Admin = "admin";
+    /// <summary>临时管理员：自授予起 3 天内视同管理员，到期自动降级为普通用户。</summary>
+    public const string TempAdmin = "tempadmin";
 }
 
 /// <summary>用户-角色关联：映射 Identity 标准表 AspNetUserRoles（复合主键 UserId+RoleId）。</summary>

@@ -5,29 +5,69 @@
  * 对应后端接口：services/library 的 getPlaylist / renamePlaylist / deletePlaylist / removePlaylistTrack。
  */
 import { ref } from 'vue'
-import { onLoad } from '@dcloudio/uni-app'
+import { onLoad, onUnload } from '@dcloudio/uni-app'
 import { useI18n } from 'vue-i18n'
-import { ListMusic, Pencil, Play, Plus, Trash2, X } from 'lucide-vue-next'
+import { ListMusic, Loader, Pencil, Play, Plus, Trash2, X } from 'lucide-vue-next'
 import TrackRow from '@/components/TrackRow.vue'
 import PlayerBar from '@/components/PlayerBar.vue'
 import {
   deletePlaylist,
   getPlaylist,
+  removePlaylistPendingTrack,
   removePlaylistTrack,
   renamePlaylist,
 } from '@/services/library'
 import { playQueue } from '@/services/player'
 import { resolveUrl } from '@/services/http'
-import type { ApiPlaylistDetail, Track } from '@/types/music'
+import type { ApiPlaylistDetail, ApiPlaylistPendingTrack, Track } from '@/types/music'
 
 const { t } = useI18n()
 
-// 页面状态：歌单 ID / 歌单详情 / 曲目列表 / 加载中 / 加载失败
+// 页面状态：歌单 ID / 歌单详情 / 曲目列表 / 待补齐曲目 / 加载中 / 加载失败
 const playlistId = ref('')
 const detail = ref<ApiPlaylistDetail | null>(null)
 const tracks = ref<Track[]>([])
+const pendings = ref<ApiPlaylistPendingTrack[]>([])
 const loading = ref(true)
 const loadError = ref(false)
+
+/** 列表行：正式曲目或待补齐条目（原歌单顺序合并渲染）。 */
+type Row = { kind: 'track'; track: Track } | { kind: 'pending'; pending: ApiPlaylistPendingTrack }
+const rows = ref<Row[]>([])
+
+// 下载进行中的 pending 轮询定时器（8s）
+let pollTimer: ReturnType<typeof setTimeout> | null = null
+
+/** 按原歌单顺序合并正式曲目与 pending 行：pending.sortOrder 命中的槽位渲染 pending，否则顺序取下一首正式曲目。 */
+function buildRows() {
+  const pendingBySlot = new Map(pendings.value.map((pending) => [pending.sortOrder, pending]))
+  const total = tracks.value.length + pendings.value.length
+  const merged: Row[] = []
+  let cursor = 0
+  for (let slot = 0; slot < total; slot++) {
+    const pending = pendingBySlot.get(slot)
+    if (pending) merged.push({ kind: 'pending', pending })
+    else if (cursor < tracks.value.length) merged.push({ kind: 'track', track: tracks.value[cursor++] })
+  }
+  // 兜底：槽位耗尽后仍有剩余正式曲目（pending 被删除等场景），追加到尾部。
+  while (cursor < tracks.value.length) merged.push({ kind: 'track', track: tracks.value[cursor++] })
+  rows.value = merged
+}
+
+/** 存在下载中/等待下载的 pending 时 8s 轮询刷新（发布完成后自动转正为可播放）。 */
+function schedulePoll() {
+  if (pollTimer) {
+    clearTimeout(pollTimer)
+    pollTimer = null
+  }
+  if (pendings.value.some((pending) => pending.status === 'pending' || pending.status === 'downloading')) {
+    pollTimer = setTimeout(() => void load(false), 8000)
+  }
+}
+
+onUnload(() => {
+  if (pollTimer) clearTimeout(pollTimer)
+})
 
 /**
  * 解析 onLoad query：必须携带歌单 id，缺参进入错误态
@@ -45,16 +85,21 @@ onLoad((options) => {
 
 /**
  * 加载歌单详情与曲目，并以歌单名同步导航栏标题
- * 关键副作用：失败置 loadError；无论成败关闭 loading
+ * @param showLoading 是否展示加载态（轮询刷新时为 false，避免闪烁）
+ * 关键副作用：失败置 loadError；无论成败关闭 loading；合并 pending 行并按需排轮询
  */
-async function load() {
+async function load(showLoading = true) {
+  if (showLoading) loading.value = true
   try {
     const result = await getPlaylist(playlistId.value)
     detail.value = result.detail
     tracks.value = result.tracks
+    pendings.value = result.detail.pendingTracks ? [...result.detail.pendingTracks] : []
+    buildRows()
+    schedulePoll()
     uni.setNavigationBarTitle({ title: result.detail.name })
   } catch {
-    loadError.value = true
+    if (showLoading) loadError.value = true
   } finally {
     loading.value = false
   }
@@ -132,6 +177,30 @@ async function handleRemove(track: Track) {
     uni.showToast({ title: t('playlistPage.removeFailed'), icon: 'none' })
   }
 }
+
+/** 待补齐行状态文案：downloading/pending/no_source/failed。 */
+function pendingStatusText(status: string) {
+  switch (status) {
+    case 'downloading': return t('playlistPage.pendingDownloading')
+    case 'pending': return t('playlistPage.pendingWaiting')
+    case 'no_source': return t('playlistPage.pendingNoSource')
+    default: return t('playlistPage.pendingFailed')
+  }
+}
+
+/**
+ * 移除歌单中的一条待补齐（pending）曲目
+ * 关键副作用：接口成功后直接本地过滤掉该行（成功即更新，失败保留并 toast）
+ */
+async function handleRemovePending(pending: ApiPlaylistPendingTrack) {
+  try {
+    await removePlaylistPendingTrack(playlistId.value, pending.id)
+    pendings.value = pendings.value.filter((item) => item.id !== pending.id)
+    buildRows()
+  } catch {
+    uni.showToast({ title: t('playlistPage.removeFailed'), icon: 'none' })
+  }
+}
 </script>
 
 <template>
@@ -148,7 +217,7 @@ async function handleRemove(track: Track) {
         </view>
         <text class="detail-title">{{ detail.name }}</text>
         <text v-if="detail.description" class="detail-sub">{{ detail.description }}</text>
-        <text class="detail-meta">{{ t('catalog.trackCount', { count: tracks.length }) }}</text>
+        <text class="detail-meta">{{ t('catalog.trackCount', { count: rows.length }) }}</text>
         <view class="header-actions">
           <view class="play-all" @tap="playAll"><Play :size="16" fill="currentColor" /><text>{{ t('playlistPage.playAll') }}</text></view>
           <view class="icon-action" @tap="goPickTracks"><Plus :size="20" /></view>
@@ -156,15 +225,34 @@ async function handleRemove(track: Track) {
           <view class="icon-action danger" @tap="handleDelete"><Trash2 :size="18" /></view>
         </view>
       </view>
-      <!-- 曲目列表：每行带移除按钮；空歌单展示空态与添加入口 -->
+      <!-- 曲目列表：正式曲目与 pending 待补齐行按原歌单顺序合并；空歌单展示空态与添加入口 -->
       <view class="detail-list">
-        <view v-for="(track, index) in tracks" :key="track.id" class="removable-row">
-          <view class="row-main">
-            <TrackRow :track="track" :index="index" :queue="tracks" />
+        <template v-for="(row, index) in rows" :key="row.kind === 'track' ? row.track.id : row.pending.id">
+          <view v-if="row.kind === 'track'" class="removable-row">
+            <view class="row-main">
+              <TrackRow :track="row.track" :index="index" :queue="tracks" />
+            </view>
+            <view class="remove-button" @tap.stop="handleRemove(row.track)"><X :size="15" /></view>
           </view>
-          <view class="remove-button" @tap.stop="handleRemove(track)"><X :size="15" /></view>
-        </view>
-        <view v-if="!tracks.length" class="empty-tip">
+          <!-- pending 行：灰色不可播放，展示下载状态；发布完成后轮询自动转正 -->
+          <view v-else class="removable-row">
+            <view class="row-main">
+              <view class="pending-row">
+                <text class="pending-index">{{ index + 1 }}</text>
+                <view class="pending-copy">
+                  <text class="pending-title">{{ row.pending.title }}</text>
+                  <text class="pending-artist">{{ row.pending.artists.join(' / ') || '-' }}</text>
+                </view>
+                <view class="pending-status">
+                  <Loader v-if="row.pending.status === 'downloading'" :size="12" class="spin" />
+                  <text>{{ pendingStatusText(row.pending.status) }}</text>
+                </view>
+              </view>
+            </view>
+            <view class="remove-button" @tap.stop="handleRemovePending(row.pending)"><X :size="15" /></view>
+          </view>
+        </template>
+        <view v-if="!rows.length" class="empty-tip">
           <text>{{ t('playlistPage.empty') }}</text>
           <view class="add-button" @tap="goPickTracks"><Plus :size="15" /><text>{{ t('playlistPage.addTracks') }}</text></view>
         </view>
@@ -195,6 +283,15 @@ async function handleRemove(track: Track) {
 .removable-row { display: flex; align-items: center; gap: 8rpx; }
 .row-main { flex: 1; min-width: 0; }
 .remove-button { display: grid; flex: none; place-items: center; width: 44rpx; height: 44rpx; border-radius: 50%; background: var(--sm-danger-soft); color: var(--sm-danger); }
+/* pending 待补齐行：整体降透明度表示灰色不可播放 */
+.pending-row { display: flex; align-items: center; gap: 18rpx; padding: 20rpx 0; opacity: 0.45; }
+.pending-index { flex: none; width: 44rpx; color: var(--sm-text-3); font-size: 18rpx; text-align: center; }
+.pending-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 6rpx; }
+.pending-title { overflow: hidden; color: var(--sm-text); font-size: 21rpx; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.pending-artist { overflow: hidden; color: var(--sm-text-2); font-size: 17rpx; text-overflow: ellipsis; white-space: nowrap; }
+.pending-status { display: flex; flex: none; align-items: center; gap: 6rpx; color: var(--sm-text-3); font-size: 16rpx; }
+.spin { animation: sm-spin 1s linear infinite; }
+@keyframes sm-spin { to { transform: rotate(360deg); } }
 .empty-tip { display: flex; flex-direction: column; align-items: center; gap: 22rpx; padding: 70rpx 0; color: var(--sm-text-2); font-size: 19rpx; }
 .add-button { display: flex; align-items: center; gap: 8rpx; padding: 14rpx 28rpx; border-radius: 40rpx; background: var(--sm-accent); color: var(--sm-accent-ink); font-size: 18rpx; font-weight: 700; }
 .page-bottom-spacer { height: 180rpx; }

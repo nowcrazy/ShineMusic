@@ -104,6 +104,7 @@ export type {
   ApiInvitation,
   ApiNotification,
   ApiPlaylistDetail,
+  ApiPlaylistPendingTrack,
   ApiPlaylistSummary,
   ApiReferencedTrack,
   ApiRejectedUpload,

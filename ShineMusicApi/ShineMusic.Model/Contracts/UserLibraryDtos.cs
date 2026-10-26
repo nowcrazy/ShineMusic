@@ -21,7 +21,29 @@ public sealed record PlaylistSummaryDto(Guid Id, string Name, string? Descriptio
 /// <param name="Tracks">歌单内的曲目列表。</param>
 /// <param name="UpdatedAt">歌单最近更新时间（UTC）。</param>
 /// <param name="ArtworkUrl">歌单封面地址；未设置封面时为 null。</param>
-public sealed record PlaylistDetailDto(Guid Id, string Name, string? Description, IReadOnlyList<TrackDto> Tracks, DateTime UpdatedAt, string? ArtworkUrl = null);
+/// <param name="PendingTracks">歌单导入产生的待补齐曲目（未匹配到曲库、静默下载进行中或失败的条目）。</param>
+public sealed record PlaylistDetailDto(Guid Id, string Name, string? Description, IReadOnlyList<TrackDto> Tracks, DateTime UpdatedAt, string? ArtworkUrl = null, IReadOnlyList<PlaylistPendingTrackDto>? PendingTracks = null);
+
+/// <summary>
+/// 歌单导入产生的待补齐曲目（前端灰色展示，发布完成后自动转正）。
+/// </summary>
+/// <param name="Id">待补齐条目唯一标识。</param>
+/// <param name="Title">曲目标题。</param>
+/// <param name="Artists">艺人名列表。</param>
+/// <param name="AlbumTitle">专辑名。</param>
+/// <param name="DurationMs">时长（毫秒）。</param>
+/// <param name="CoverUrl">封面地址。</param>
+/// <param name="SortOrder">原歌单内排序序号（0 起）。</param>
+/// <param name="Status">状态：pending/downloading/no_source/failed。</param>
+public sealed record PlaylistPendingTrackDto(
+    Guid Id,
+    string Title,
+    IReadOnlyList<string> Artists,
+    string? AlbumTitle,
+    int? DurationMs,
+    string? CoverUrl,
+    int SortOrder,
+    string Status);
 
 /// <summary>
 /// 创建歌单的请求体；字段均可空，实际必填规则由服务端校验。

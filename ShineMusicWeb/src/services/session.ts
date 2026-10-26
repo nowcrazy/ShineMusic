@@ -191,7 +191,7 @@ export function requireLogin(): boolean {
     confirmText: t('auth.goLogin'),
     cancelText: t('socialErrors.maybeLater'),
     success: ({ confirm }) => {
-      if (confirm) uni.navigateTo({ url: '/pages/auth/login' })
+      if (confirm) uni.navigateTo({ url: '/login' })
     },
   })
   return false

@@ -25,9 +25,11 @@ export function uploadArtwork(filePath: string | Blob): Promise<UploadArtworkRes
   return new Promise((resolve, reject) => {
     const url = resolveUrl(`${API_PREFIX}/admin/artwork`)
     const token = getAccessToken()
+    const isBlob = typeof Blob !== 'undefined' && filePath instanceof Blob
     uni.uploadFile({
       url,
-      filePath: filePath as string,
+      filePath: isBlob ? '' : (filePath as string),
+      file: isBlob ? filePath : undefined,
       name: 'file',
       header: token ? { Authorization: `Bearer ${token}` } : {},
       success: (res) => {

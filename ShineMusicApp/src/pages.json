@@ -32,6 +32,10 @@
       "style": { "navigationBarTitleText": "歌单" }
     },
     {
+      "path": "pages/playlist/import",
+      "style": { "navigationBarTitleText": "歌单导入" }
+    },
+    {
       "path": "pages/playlist/pick-track",
       "style": { "navigationBarTitleText": "添加歌曲" }
     },

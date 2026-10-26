@@ -1,0 +1,155 @@
+/* ShineMusic 管理后台全局样式：独立于 App 端的桌面端视觉。 */
+
+:root {
+  --adm-primary: #34a56f;
+  --adm-primary-soft: #eef8f2;
+  --adm-sidebar: #111827;
+  --adm-sidebar-soft: #1a2333;
+  --adm-sidebar-text: #cbd5e1;
+  --adm-page-bg: #f5f7fa;
+  --adm-card-bg: #ffffff;
+  --adm-border: #e5e8ee;
+  --adm-text: #1f2937;
+  --adm-text-2: #6b7280;
+  --adm-text-3: #9ca3af;
+  --adm-danger: #dc5a45;
+  --adm-radius: 10px;
+
+  /* Element Plus 主色改为品牌绿 */
+  --el-color-primary: #34a56f;
+  --el-color-primary-light-3: #71c09a;
+  --el-color-primary-light-5: #9ad2b7;
+  --el-color-primary-light-7: #c2e4d4;
+  --el-color-primary-light-8: #d6ede2;
+  --el-color-primary-light-9: #eef8f2;
+  --el-color-primary-dark-2: #298458;
+  --el-border-radius-base: 8px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--adm-page-bg);
+  color: var(--adm-text);
+  font-family: 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--adm-primary);
+  text-decoration: none;
+}
+
+/* 页面通用排版 */
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.page-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.page-heading h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.page-heading p {
+  margin: 6px 0 0;
+  color: var(--adm-text-2);
+  font-size: 13px;
+}
+
+.panel {
+  padding: 18px;
+  border: 1px solid var(--adm-border);
+  border-radius: var(--adm-radius);
+  background: var(--adm-card-bg);
+}
+
+.panel-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.text-muted {
+  color: var(--adm-text-2);
+}
+
+.text-faint {
+  color: var(--adm-text-3);
+}
+
+.mono {
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+}
+
+.pagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.el-table {
+  --el-table-border-color: var(--adm-border);
+  --el-table-header-bg-color: #fafbfc;
+}
+
+.el-table th.el-table__cell {
+  color: var(--adm-text-2);
+  font-weight: 600;
+}
+
+/* 滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+  background: #cfd6e0;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}

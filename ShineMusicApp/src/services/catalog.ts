@@ -27,7 +27,7 @@ import type {
   ApiTrack,
   Track,
 } from '@/types/music'
-import { API_PREFIX, http, resolveUrl } from './http'
+import { API_PREFIX, ApiError, http, resolveUrl } from './http'
 import { t } from '@/locale'
 
 /**
@@ -203,6 +203,23 @@ export async function getTracks(query: TrackQuery = {}): Promise<ApiPageResult<T
 export async function getTrack(trackId: string): Promise<Track> {
   const track = await http.get<ApiTrack>(`${API_PREFIX}/tracks/${trackId}`, false)
   return mapTrack(track)
+}
+
+/**
+ * 检查曲目是否仍然存在（用于识别曲库重建后失效的本地缓存/持久化曲目）。
+ * - 附带登录凭证请求：用户上传的私有曲目对匿名不可见，但对上传者本人可见，
+ *   匿名检查会把私有曲目误判为"已删除"；
+ * - 仅把 404 判定为"不存在"；网络错误/5xx 按"仍存在"处理，避免弱网误清播放现场。
+ * @param trackId 曲目 ID
+ * @returns true=存在或无法判定；false=确认已删除/不可见
+ */
+export async function checkTrackExists(trackId: string): Promise<boolean> {
+  try {
+    await http.get<ApiTrack>(`${API_PREFIX}/tracks/${trackId}`)
+    return true
+  } catch (error) {
+    return !(error instanceof ApiError && error.status === 404)
+  }
 }
 
 /**

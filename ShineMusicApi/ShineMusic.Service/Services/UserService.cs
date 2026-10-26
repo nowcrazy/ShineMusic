@@ -81,6 +81,50 @@ public sealed class UserService(ISqlSugarClient db)
         return IdentityResult.Success;
     }
 
+    /// <summary>移除用户角色；角色不存在或用户本就不在该角色中时静默成功（幂等）。</summary>
+    public async Task RemoveFromRoleAsync(Guid userId, string roleName)
+    {
+        var normalized = roleName.ToUpperInvariant();
+        var role = await db.Queryable<ApplicationRole>().FirstAsync(item => item.NormalizedName == normalized);
+        if (role is null) return;
+        await db.Deleteable<ApplicationUserRole>()
+            .Where(item => item.UserId == userId && item.RoleId == role.Id)
+            .ExecuteCommandAsync();
+    }
+
+    /// <summary>
+    /// 获取用户的有效角色集合（处理临时管理员有效期）：
+    /// - 拥有 tempadmin 角色且 TempAdminUntilUtc 未过期：有效角色附加 admin（与管理员同权）；
+    /// - 已过期：自动降级为普通用户——移除 tempadmin 角色、清空有效期、确保 user 角色（幂等落库，
+    ///   下次读取不再命中降级分支）。
+    /// </summary>
+    public async Task<List<string>> GetEffectiveRolesAsync(ApplicationUser user)
+    {
+        var roles = await GetRolesAsync(user.Id);
+        var tempIndex = roles.FindIndex(role => string.Equals(role, RoleNames.TempAdmin, StringComparison.OrdinalIgnoreCase));
+        if (tempIndex < 0) return roles;
+
+        if (user.TempAdminUntilUtc is not null && user.TempAdminUntilUtc.Value > DateTime.UtcNow)
+        {
+            // 有效期内：附加管理员权限（无截止时间的临时管理员视为已过期，保证 3 天规则严格生效）
+            if (!roles.Contains(RoleNames.Admin)) roles.Add(RoleNames.Admin);
+            return roles;
+        }
+
+        // 已过期：降级为普通用户并持久化
+        roles.RemoveAt(tempIndex);
+        await RemoveFromRoleAsync(user.Id, RoleNames.TempAdmin);
+        user.TempAdminUntilUtc = null;
+        // 显式 UpdateColumns 保证 TempAdminUntilUtc 为 null 时也真实写 NULL
+        await db.Updateable(user).UpdateColumns(item => new { item.TempAdminUntilUtc }).ExecuteCommandAsync();
+        if (!roles.Contains(RoleNames.User))
+        {
+            var addResult = await AddToRoleAsync(user.Id, RoleNames.User);
+            if (addResult.Succeeded) roles.Add(RoleNames.User);
+        }
+        return roles;
+    }
+
     /// <summary>角色不存在时创建（幂等），替代启动种子中的 RoleManager。</summary>
     public async Task EnsureRoleAsync(string roleName)
     {

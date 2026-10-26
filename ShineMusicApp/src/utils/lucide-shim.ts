@@ -182,6 +182,11 @@ export const DiscAlbum = createShimIcon('DiscAlbum', [
   ["circle", { cx: "12", cy: "12", r: "5", key: "nd82uf" }],
   ["path", { d: "M12 12h.01", key: "1mp3jc" }]
 ] as LucideNode[])
+export const Download = createShimIcon('Download', [
+  ["path", { d: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4", key: "ih7n3h" }],
+  ["polyline", { points: "7 10 12 15 17 10", key: "2ggqvy" }],
+  ["line", { x1: "12", x2: "12", y1: "15", y2: "3", key: "1vk2je" }]
+] as LucideNode[])
 export const DownloadCloud = createShimIcon('DownloadCloud', [
   ["path", { d: "M12 13v8l-4-4", key: "1f5nwf" }],
   ["path", { d: "m12 21 4-4", key: "1lfcce" }],
@@ -260,6 +265,11 @@ export const Library = createShimIcon('Library', [
   ["path", { d: "M8 8v12", key: "1gg7y9" }],
   ["path", { d: "M4 4v16", key: "6qkkli" }]
 ] as LucideNode[])
+export const Link2 = createShimIcon('Link2', [
+  ["path", { d: "M9 17H7A5 5 0 0 1 7 7h2", key: "8i5ue5" }],
+  ["path", { d: "M15 7h2a5 5 0 1 1 0 10h-2", key: "1b9ql8" }],
+  ["line", { x1: "8", x2: "16", y1: "12", y2: "12", key: "1jonct" }]
+] as LucideNode[])
 export const ListMusic = createShimIcon('ListMusic', [
   ["path", { d: "M21 15V6", key: "h1cx4g" }],
   ["path", { d: "M18.5 18a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z", key: "8saifv" }],
@@ -281,6 +291,16 @@ export const ListPlus = createShimIcon('ListPlus', [
   ["path", { d: "M16 18H3", key: "12xzn7" }],
   ["path", { d: "M18 9v6", key: "1twb98" }],
   ["path", { d: "M21 12h-6", key: "bt1uis" }]
+] as LucideNode[])
+export const Loader = createShimIcon('Loader', [
+  ["path", { d: "M12 2v4", key: "3427ic" }],
+  ["path", { d: "m16.2 7.8 2.9-2.9", key: "r700ao" }],
+  ["path", { d: "M18 12h4", key: "wj9ykh" }],
+  ["path", { d: "m16.2 16.2 2.9 2.9", key: "1bxg5t" }],
+  ["path", { d: "M12 18v4", key: "jadmvz" }],
+  ["path", { d: "m4.9 19.1 2.9-2.9", key: "bwix9q" }],
+  ["path", { d: "M2 12h4", key: "j09sii" }],
+  ["path", { d: "m4.9 4.9 2.9 2.9", key: "giyufr" }]
 ] as LucideNode[])
 export const LogIn = createShimIcon('LogIn', [
   ["path", { d: "M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4", key: "u53s6r" }],

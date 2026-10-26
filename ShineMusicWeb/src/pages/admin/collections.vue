@@ -1,451 +1,537 @@
 <script setup lang="ts">
 /**
- * 歌单管理页（管理员）：运营歌单（推荐歌单）的创建、信息编辑、删除与曲目编排。
- * 进入方式：首页头像抽屉 →「歌单管理」（仅管理员可见）。
- * 对应后端接口：services/admin-collections（POST/PUT/DELETE /admin/collections、
- *                PUT /admin/collections/{id}/tracks）；
- *                曲目检索复用 services/catalog.searchTracks。
- * 页面结构：列表态（全部歌单卡片）与编辑态（表单 + 曲目编排）互斥切换。
+ * 运营歌单：创建/编辑精选歌单，上传封面，按顺序编排曲目。
  */
-import { computed, ref } from 'vue'
-import { onShow } from '@dcloudio/uni-app'
-import { useI18n } from 'vue-i18n'
-import { ArrowDown, ArrowUp, ChevronLeft, ListMusic, Plus, Search, Trash2, X } from 'lucide-vue-next'
-import { isAdmin } from '@/services/session'
+import { onMounted, reactive, ref } from 'vue'
+import { ElMessage, ElMessageBox, type UploadRequestOptions } from 'element-plus'
+import { ArrowDown, ArrowUp, Delete, Edit, Plus, Refresh, Search, Upload } from '@element-plus/icons-vue'
 import {
   createCollection,
   deleteCollection,
+  getCollectionDetail,
+  listCollections,
   replaceCollectionTracks,
   searchTracksForCollection,
   updateCollection,
 } from '@/services/admin-collections'
-import { getCollection, getCollections } from '@/services/catalog'
+import { uploadArtwork } from '@/services/admin-artwork'
 import { resolveUrl } from '@/services/http'
+import { describeError } from '@/services/errors'
+import { formatTime } from '@/utils/format'
 import type { ApiCollectionSummary, ApiTrack } from '@/types/music'
 
-/** 歌单编辑态内缓存的曲目摘要：仅展示所需字段（曲目检索返回 ApiTrack，详情返回 Track，两者统一为此最小结构） */
-type CachedTrack = {
-  id: string
-  title: string
-  artists: string
-  artworkUrl: string | null
-}
-
-// —— 列表态 ——
-const { t } = useI18n()
-const collections = ref<readonly ApiCollectionSummary[]>([])
 const loading = ref(false)
-const listMessage = ref('')
+const items = ref<ApiCollectionSummary[]>([])
+const total = ref(0)
+const page = ref(1)
+const pageSize = ref(20)
 
-// —— 编辑态 ——
-// 编辑中的歌单：null=新建，非 null=修改
-type EditingState = {
-  id: string | null
-  title: string
-  description: string
-  trackIds: string[]
-  trackCache: Map<string, CachedTrack> // 已选曲目的摘要缓存（用于列表展示）
-}
-const editing = ref<EditingState | null>(null)
+const dialogOpen = ref(false)
+const editingId = ref('')
 const saving = ref(false)
-const editMessage = ref('')
+const coverUploading = ref(false)
+const form = reactive({
+  title: '',
+  description: '',
+  isPublished: true,
+  artworkId: '' as string,
+  artworkUrl: '' as string,
+})
 
-// —— 添加曲目搜索面板 ——
-const addPanelOpen = ref(false)
-const addQuery = ref('')
-const addResults = ref<readonly ApiTrack[]>([])
-const addSearching = ref(false)
-const addMessage = ref('')
+const selectedTracks = ref<ApiTrack[]>([])
+const keyword = ref('')
+const searching = ref(false)
+const candidates = ref<ApiTrack[]>([])
 
-// 非管理员直接提示（服务端同样独立鉴权，此处仅前端防御）
-if (!isAdmin.value) {
-  uni.showToast({ title: t('collectionsAdmin.requireAdmin'), icon: 'none' })
-}
+const artistText = (track: ApiTrack) => track.artists.map((artist) => artist.name).join('、') || '未知艺人'
+const coverPreview = () => (form.artworkUrl ? resolveUrl(form.artworkUrl) : '')
 
-/** 歌单封面地址解析（后端返回相对路径 artworkUrl） */
-function coverUrl(collection: ApiCollectionSummary): string {
-  return collection.artworkUrl ? resolveUrl(collection.artworkUrl) : ''
-}
-
-/** 返回上一页（无上一页时回首页） */
-function goBack() {
-  const pages = getCurrentPages()
-  if (pages.length > 1) {
-    uni.navigateBack()
-  } else {
-    uni.reLaunch({ url: '/pages/home/index' })
-  }
-}
-
-/** 加载全部歌单（后端单次返回上限 50，运营歌单数量可控） */
-async function loadCollections() {
+async function load() {
   loading.value = true
-  listMessage.value = ''
   try {
-    collections.value = await getCollections()
+    const result = await listCollections(page.value, pageSize.value)
+    items.value = [...result.items]
+    total.value = result.total
   } catch (error) {
-    listMessage.value = error instanceof Error ? error.message : t('collectionsAdmin.loadFailed')
+    ElMessage.error(describeError(error, '歌单列表加载失败'))
   } finally {
     loading.value = false
   }
 }
 
-onShow(() => {
-  if (isAdmin.value) void loadCollections()
-})
-
-/** 打开新建歌单编辑器 */
-function openCreate() {
-  editing.value = { id: null, title: '', description: '', trackIds: [], trackCache: new Map() }
-  editMessage.value = ''
-  addPanelOpen.value = false
+function resetForm() {
+  form.title = ''
+  form.description = ''
+  form.isPublished = true
+  form.artworkId = ''
+  form.artworkUrl = ''
+  selectedTracks.value = []
+  candidates.value = []
+  keyword.value = ''
 }
 
-/** 打开已有歌单编辑器：拉取详情以装载曲目 */
-async function openEdit(collection: ApiCollectionSummary) {
-  editMessage.value = ''
+function openCreate() {
+  editingId.value = ''
+  resetForm()
+  dialogOpen.value = true
+}
+
+async function openEdit(item: ApiCollectionSummary) {
+  editingId.value = item.id
+  resetForm()
+  form.title = item.title
+  form.description = item.description ?? ''
+  form.artworkUrl = item.artworkUrl ?? ''
+  dialogOpen.value = true
   try {
-    const detail = await getCollection(collection.id)
-    const trackCache = new Map<string, CachedTrack>()
-    for (const track of detail.tracks) trackCache.set(track.id, { id: track.id, title: track.title, artists: track.artist, artworkUrl: track.cover })
-    editing.value = {
-      id: collection.id,
-      title: detail.detail.title,
-      description: detail.detail.description ?? '',
-      trackIds: detail.tracks.map((track) => track.id),
-      trackCache,
-    }
-    addPanelOpen.value = false
+    const detail = await getCollectionDetail(item.id)
+    selectedTracks.value = [...detail.tracks]
+    form.artworkUrl = detail.artworkUrl ?? form.artworkUrl
   } catch (error) {
-    uni.showToast({ title: error instanceof Error ? error.message : t('collectionsAdmin.loadDetailFailed'), icon: 'none' })
+    ElMessage.error(describeError(error, '歌单详情加载失败'))
   }
 }
 
-/** 关闭编辑器回到列表 */
-function closeEditor() {
-  editing.value = null
-  void loadCollections()
+async function searchTracks() {
+  searching.value = true
+  try {
+    const result = await searchTracksForCollection(keyword.value, 1, 20)
+    candidates.value = [...result.items]
+    if (candidates.value.length === 0) ElMessage.info('没有匹配的曲目')
+  } catch (error) {
+    ElMessage.error(describeError(error, '曲目搜索失败'))
+  } finally {
+    searching.value = false
+  }
 }
 
-/** 保存歌单（新建或修改 + 曲目整体替换） */
-async function handleSave() {
-  if (!editing.value) return
-  const state = editing.value
-  const title = state.title.trim()
-  if (!title) {
-    editMessage.value = t('collectionsAdmin.titleRequired')
+function addTrack(track: ApiTrack) {
+  if (selectedTracks.value.some((item) => item.id === track.id)) {
+    ElMessage.info('该曲目已在歌单中')
     return
   }
-  saving.value = true
-  editMessage.value = ''
+  selectedTracks.value.push(track)
+}
+
+function moveTrack(index: number, offset: number) {
+  const target = index + offset
+  if (target < 0 || target >= selectedTracks.value.length) return
+  const list = [...selectedTracks.value]
+  const [moved] = list.splice(index, 1)
+  list.splice(target, 0, moved)
+  selectedTracks.value = list
+}
+
+function removeTrack(index: number) {
+  selectedTracks.value.splice(index, 1)
+}
+
+async function handleCoverUpload(options: UploadRequestOptions) {
+  if (coverUploading.value) return
+  coverUploading.value = true
   try {
-    if (state.id === null) {
-      await createCollection({
-        title,
-        description: state.description.trim() || null,
-        trackIds: state.trackIds,
-      })
-    } else {
-      await updateCollection(state.id, {
-        title,
-        description: state.description.trim() || null,
-      })
-      await replaceCollectionTracks(state.id, state.trackIds)
-    }
-    uni.showToast({ title: t('collectionsAdmin.saved'), icon: 'none' })
-    closeEditor()
+    const result = await uploadArtwork(options.file)
+    form.artworkId = result.id
+    form.artworkUrl = result.artworkUrl
+    ElMessage.success('封面已上传，保存后生效')
   } catch (error) {
-    editMessage.value = error instanceof Error ? error.message : t('collectionsAdmin.saveFailed')
+    ElMessage.error(describeError(error, '封面上传失败'))
+  } finally {
+    coverUploading.value = false
+  }
+}
+
+async function save() {
+  if (saving.value) return
+  if (!form.title.trim()) {
+    ElMessage.warning('请填写歌单标题')
+    return
+  }
+  const trackIds = selectedTracks.value.map((track) => track.id)
+  saving.value = true
+  try {
+    if (editingId.value) {
+      await updateCollection(editingId.value, {
+        title: form.title.trim(),
+        description: form.description.trim() || null,
+        isPublished: form.isPublished,
+        ...(form.artworkId ? { artworkId: form.artworkId } : {}),
+      })
+      await replaceCollectionTracks(editingId.value, trackIds)
+      ElMessage.success('歌单已更新')
+    } else {
+      await createCollection({
+        title: form.title.trim(),
+        description: form.description.trim() || null,
+        trackIds,
+        ...(form.artworkId ? { artworkId: form.artworkId } : {}),
+      })
+      ElMessage.success('歌单已创建')
+    }
+    dialogOpen.value = false
+    await load()
+  } catch (error) {
+    ElMessage.error(describeError(error, '保存失败'))
   } finally {
     saving.value = false
   }
 }
 
-/** 删除歌单（二次确认） */
-function handleDelete(collection: ApiCollectionSummary) {
-  uni.showModal({
-    title: t('collectionsAdmin.deleteTitle'),
-    content: t('collectionsAdmin.deleteConfirm', { title: collection.title }),
-    confirmText: t('admin.common.delete'),
-    success: async ({ confirm }) => {
-      if (!confirm) return
-      try {
-        await deleteCollection(collection.id)
-        uni.showToast({ title: t('collectionsAdmin.deleted'), icon: 'none' })
-        void loadCollections()
-      } catch (error) {
-        uni.showToast({ title: error instanceof Error ? error.message : t('collectionsAdmin.deleteFailed'), icon: 'none' })
-      }
-    },
-  })
-}
-
-// —— 编辑器：曲目编排 ——
-
-/** 从编辑器移除一首曲目 */
-function removeTrack(trackId: string) {
-  if (!editing.value) return
-  editing.value.trackIds = editing.value.trackIds.filter((id) => id !== trackId)
-}
-
-/** 上移/下移曲目（调整歌单内顺序） */
-function moveTrack(trackId: string, direction: -1 | 1) {
-  if (!editing.value) return
-  const ids = [...editing.value.trackIds]
-  const index = ids.indexOf(trackId)
-  const target = index + direction
-  if (index < 0 || target < 0 || target >= ids.length) return
-  ;[ids[index], ids[target]] = [ids[target], ids[index]]
-  editing.value.trackIds = ids
-}
-
-/** 打开添加曲目面板并预载热门曲目 */
-async function openAddPanel() {
-  addPanelOpen.value = true
-  addQuery.value = ''
-  addResults.value = []
-  addMessage.value = ''
-  await runAddSearch('')
-}
-
-/** 执行曲目搜索（空关键词时返回最近加入的曲目） */
-async function runAddSearch(query: string) {
-  addSearching.value = true
-  addMessage.value = ''
+async function remove(item: ApiCollectionSummary) {
   try {
-    const page = await searchTracksForCollection(query, 1, 50)
-    addResults.value = page.items
+    await ElMessageBox.confirm(`确定删除歌单「${item.title}」吗？曲目本身不受影响。`, '删除歌单', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
+  try {
+    await deleteCollection(item.id)
+    ElMessage.success('歌单已删除')
+    await load()
   } catch (error) {
-    addMessage.value = error instanceof Error ? error.message : t('collectionsAdmin.searchFailed')
-  } finally {
-    addSearching.value = false
+    ElMessage.error(describeError(error, '删除失败'))
   }
 }
 
-/** 把搜索结果中的曲目加入歌单（去重，最多 200 首） */
-function addTrackToPlaylist(track: CachedTrack) {
-  if (!editing.value) return
-  if (editing.value.trackIds.includes(track.id)) {
-    uni.showToast({ title: t('collectionsAdmin.trackAlreadyIn'), icon: 'none' })
-    return
-  }
-  if (editing.value.trackIds.length >= 200) {
-    uni.showToast({ title: t('collectionsAdmin.maxTracks', { count: 200 }), icon: 'none' })
-    return
-  }
-  editing.value.trackIds.push(track.id)
-  // 曲目摘要入缓存（最小可用信息，供编辑态列表展示）
-  editing.value.trackCache.set(track.id, track)
-  uni.showToast({ title: t('collectionsAdmin.added'), icon: 'none' })
-}
-
-/** 编辑器内曲目展示信息（从缓存取，取不到回退占位） */
-function trackInfo(trackId: string): CachedTrack {
-  const track = editing.value?.trackCache.get(trackId)
-  if (!track) return { id: trackId, title: trackId, artists: '', artworkUrl: null }
-  return track
-}
-
-/** 搜索面板结果行的曲目信息 */
-const addTrackInfo = computed(() =>
-  addResults.value.map((track) => ({
-    id: track.id,
-    title: track.title,
-    artists: track.artists.map((artist) => artist.name).join('、') || t('collectionsAdmin.unknownArtist'),
-    artworkUrl: track.artworkUrl ?? null,
-  })),
-)
+onMounted(load)
 </script>
 
 <template>
-  <view class="manage-page">
-    <!-- 顶部返回栏 -->
-    <view class="page-head">
-      <view class="back-button" @click="editing ? closeEditor() : goBack()">
-        <ChevronLeft v-if="!editing" :size="20" />
-        <X v-else :size="20" />
-      </view>
-      <text class="page-title">{{ editing ? $t('collectionsAdmin.editTitle') : $t('collectionsAdmin.pageTitle') }}</text>
-      <view v-if="!editing" class="head-action" @click="openCreate"><Plus :size="18" /><text>{{ $t('collectionsAdmin.create') }}</text></view>
-    </view>
+  <div class="page">
+    <div class="page-heading">
+      <div>
+        <h2>运营歌单</h2>
+        <p>编排精选合集，封面、推荐语与曲目顺序均可调整</p>
+      </div>
+      <div class="heading-actions">
+        <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
+        <el-button type="primary" :icon="Plus" @click="openCreate">新建歌单</el-button>
+      </div>
+    </div>
 
-    <!-- ============ 列表态 ============ -->
-    <scroll-view v-if="!editing" class="page-body" scroll-y :show-scrollbar="false">
-      <view v-if="loading" class="inline-hint">{{ $t('admin.common.loading') }}</view>
-      <view v-else-if="listMessage" class="inline-hint">{{ listMessage }}</view>
-      <view v-else-if="!collections.length" class="empty-block">
-        <ListMusic :size="26" />
-        <text>{{ $t('collectionsAdmin.emptyTitle') }}</text>
-        <text class="empty-sub">{{ $t('collectionsAdmin.emptySub') }}</text>
-      </view>
+    <div class="panel">
+      <el-table v-loading="loading" :data="items" row-key="id" empty-text="暂无已发布歌单">
+        <el-table-column label="封面" width="76">
+          <template #default="{ row }">
+            <div class="cover">
+              <img v-if="row.artworkUrl" :src="resolveUrl(row.artworkUrl)" alt="" />
+              <span v-else>♪</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="标题" min-width="200">
+          <template #default="{ row }">
+            <div class="title-cell">
+              <strong>{{ row.title }}</strong>
+              <span class="text-faint mono">{{ row.id }}</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="推荐语" min-width="260">
+          <template #default="{ row }">
+            <span class="text-muted">{{ row.description || '—' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="曲目数" width="90" prop="trackCount" />
+        <el-table-column label="操作" width="150" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="primary" :icon="Edit" @click="openEdit(row)">编辑</el-button>
+            <el-button link type="danger" :icon="Delete" @click="remove(row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
 
-      <view v-for="collection in collections" :key="collection.id" class="collection-row">
-        <view class="collection-cover">
-          <img v-if="coverUrl(collection)" class="cover-img" :src="coverUrl(collection)" mode="aspectFill" />
-          <ListMusic v-else :size="20" />
-        </view>
-        <view class="collection-copy" @click="openEdit(collection)">
-          <text class="collection-title">{{ collection.title }}</text>
-          <text class="collection-desc">{{ collection.description || $t('collectionsAdmin.noDescription') }}</text>
-          <text class="collection-count">{{ $t('catalog.trackCount', { count: collection.trackCount }) }}</text>
-        </view>
-        <view class="row-actions">
-          <view class="row-action" @click="openEdit(collection)"><Search :size="16" /></view>
-          <view class="row-action danger" @click="handleDelete(collection)"><Trash2 :size="16" /></view>
-        </view>
-      </view>
-      <view class="bottom-space"></view>
-    </scroll-view>
+      <div class="pagination">
+        <el-pagination
+          v-model:current-page="page"
+          v-model:page-size="pageSize"
+          :total="total"
+          :page-sizes="[20, 50, 100]"
+          layout="total, sizes, prev, pager, next"
+          @current-change="load"
+          @size-change="load"
+        />
+      </div>
+    </div>
 
-    <!-- ============ 编辑态 ============ -->
-    <scroll-view v-else class="page-body" scroll-y :show-scrollbar="false">
-      <view class="form-block">
-        <text class="field-label">{{ $t('collectionsAdmin.fieldTitle') }}</text>
-        <input v-model="editing.title" class="field-input" type="text" :placeholder="$t('collectionsAdmin.titlePlaceholder')" maxlength="100" />
-        <text class="field-label">{{ $t('collectionsAdmin.fieldDescription') }}</text>
-        <textarea v-model="editing.description" class="field-textarea" :placeholder="$t('collectionsAdmin.descriptionPlaceholder')" maxlength="500" />
-      </view>
+    <el-dialog
+      v-model="dialogOpen"
+      :title="editingId ? '编辑歌单' : '新建歌单'"
+      width="900px"
+      top="6vh"
+      destroy-on-close
+    >
+      <div class="editor">
+        <div class="editor-form">
+          <div class="cover-block">
+            <div class="cover cover-lg">
+              <img v-if="form.artworkUrl" :src="coverPreview()" alt="" />
+              <span v-else>♪</span>
+            </div>
+            <div class="cover-ops">
+              <el-upload
+                :show-file-list="false"
+                accept="image/*"
+                :http-request="handleCoverUpload"
+                :disabled="coverUploading"
+              >
+                <el-button size="small" :icon="Upload" :loading="coverUploading">上传封面</el-button>
+              </el-upload>
+              <span class="text-faint">不填则自动使用首曲封面</span>
+            </div>
+          </div>
 
-      <!-- 曲目编排 -->
-      <view class="form-block">
-        <view class="block-head">
-          <text class="field-label">{{ $t('collectionsAdmin.tracksLabel', { count: editing.trackIds.length }) }}</text>
-          <view class="add-track-button" @click="openAddPanel"><Plus :size="15" /><text>{{ $t('collectionsAdmin.addTrack') }}</text></view>
-        </view>
-        <view v-if="!editing.trackIds.length" class="empty-sub">{{ $t('collectionsAdmin.noTracksHint') }}</view>
-        <view v-for="(trackId, index) in editing.trackIds" :key="trackId" class="track-row">
-          <text class="track-index">{{ index + 1 }}</text>
-          <view class="track-copy">
-            <text class="track-title">{{ trackInfo(trackId).title }}</text>
-            <text class="track-artists">{{ trackInfo(trackId).artists }}</text>
-          </view>
-          <view class="track-actions">
-            <view class="track-action" @click="moveTrack(trackId, -1)"><ArrowUp :size="14" /></view>
-            <view class="track-action" @click="moveTrack(trackId, 1)"><ArrowDown :size="14" /></view>
-            <view class="track-action danger" @click="removeTrack(trackId)"><Trash2 :size="14" /></view>
-          </view>
-        </view>
-      </view>
+          <el-form label-position="top">
+            <el-form-item label="标题" required>
+              <el-input v-model="form.title" maxlength="100" show-word-limit />
+            </el-form-item>
+            <el-form-item label="推荐语">
+              <el-input
+                v-model="form.description"
+                type="textarea"
+                :rows="3"
+                maxlength="500"
+                show-word-limit
+                placeholder="一句话推荐这个歌单"
+              />
+            </el-form-item>
+            <el-form-item v-if="editingId" label="发布状态">
+              <el-switch v-model="form.isPublished" active-text="已发布" inactive-text="草稿" />
+              <div v-if="!form.isPublished" class="publish-hint">
+                取消发布后歌单会从列表中隐藏（后台暂无草稿列表端点）
+              </div>
+            </el-form-item>
+          </el-form>
+        </div>
 
-      <view class="save-bar">
-        <text v-if="editMessage" class="field-message">{{ editMessage }}</text>
-        <view class="save-button" :class="{ disabled: saving }" @click="handleSave">
-          <text>{{ saving ? $t('collectionsAdmin.saving') : $t('collectionsAdmin.saveButton') }}</text>
-        </view>
-      </view>
-      <view class="bottom-space"></view>
-    </scroll-view>
+        <div class="editor-tracks">
+          <div class="track-col">
+            <div class="col-head">添加曲目</div>
+            <el-input
+              v-model="keyword"
+              placeholder="搜索曲名 / 艺人"
+              size="small"
+              clearable
+              @keyup.enter="searchTracks"
+            >
+              <template #append>
+                <el-button :icon="Search" :loading="searching" @click="searchTracks" />
+              </template>
+            </el-input>
+            <div class="candidate-list">
+              <el-empty v-if="candidates.length === 0" description="搜索并添加曲目" :image-size="56" />
+              <button
+                v-for="track in candidates"
+                :key="track.id"
+                type="button"
+                class="candidate"
+                @click="addTrack(track)"
+              >
+                <div class="candidate-copy">
+                  <strong>{{ track.title }}</strong>
+                  <span>{{ artistText(track) }}</span>
+                </div>
+                <el-icon><Plus /></el-icon>
+              </button>
+            </div>
+          </div>
 
-    <!-- ============ 添加曲目面板（编辑态内弹出） ============ -->
-    <view v-if="editing && addPanelOpen" class="add-panel">
-      <view class="add-panel-mask" @click="addPanelOpen = false"></view>
-      <view class="add-panel-body">
-        <view class="add-panel-head">
-          <text class="add-panel-title">{{ $t('collectionsAdmin.addTrack') }}</text>
-          <view class="add-panel-close" @click="addPanelOpen = false"><X :size="18" /></view>
-        </view>
-        <view class="add-search">
-          <input
-            v-model="addQuery"
-            class="add-search-input"
-            type="text"
-            :placeholder="$t('collectionsAdmin.searchPlaceholder')"
-            confirm-type="search"
-            @keydown.enter="runAddSearch(addQuery)"
-          />
-          <view class="add-search-action" @click="runAddSearch(addQuery)"><Search :size="16" /></view>
-        </view>
-        <scroll-view class="add-results" scroll-y :show-scrollbar="false">
-          <view v-if="addSearching" class="inline-hint">{{ $t('collectionsAdmin.searching') }}</view>
-          <view v-else-if="addMessage" class="inline-hint">{{ addMessage }}</view>
-          <view v-else-if="!addTrackInfo.length" class="inline-hint">{{ $t('collectionsAdmin.noResults') }}</view>
-          <view
-            v-for="track in addTrackInfo"
-            :key="track.id"
-            class="add-result-row"
-            :class="{ added: editing.trackIds.includes(track.id) }"
-            @click="addTrackToPlaylist(track)"
-          >
-            <view class="track-copy">
-              <text class="track-title">{{ track.title }}</text>
-              <text class="track-artists">{{ track.artists }}</text>
-            </view>
-            <Plus v-if="!editing.trackIds.includes(track.id)" :size="16" class="add-result-plus" />
-            <text v-else class="added-tag">{{ $t('collectionsAdmin.added') }}</text>
-          </view>
-        </scroll-view>
-      </view>
-    </view>
-  </view>
+          <div class="track-col">
+            <div class="col-head">已选曲目（{{ selectedTracks.length }}）</div>
+            <div class="selected-list">
+              <el-empty v-if="selectedTracks.length === 0" description="尚未选择曲目" :image-size="56" />
+              <div v-for="(track, index) in selectedTracks" :key="track.id" class="selected-row">
+                <span class="order">{{ index + 1 }}</span>
+                <div class="candidate-copy">
+                  <strong>{{ track.title }}</strong>
+                  <span>{{ artistText(track) }} · {{ formatTime((track.durationMs ?? 0) / 1000) }}</span>
+                </div>
+                <div class="row-ops">
+                  <el-button link :icon="ArrowUp" :disabled="index === 0" @click="moveTrack(index, -1)" />
+                  <el-button
+                    link
+                    :icon="ArrowDown"
+                    :disabled="index === selectedTracks.length - 1"
+                    @click="moveTrack(index, 1)"
+                  />
+                  <el-button link type="danger" :icon="Delete" @click="removeTrack(index)" />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="dialogOpen = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="save">保存歌单</el-button>
+      </template>
+    </el-dialog>
+  </div>
 </template>
 
-<style lang="scss" scoped>
-/* 歌单管理页：全部使用主题令牌 */
-.manage-page { min-height: 100vh; box-sizing: border-box; background: var(--sm-page-bg); }
-.page-head { display: flex; align-items: center; gap: 20rpx; padding: calc(env(safe-area-inset-top) + 28rpx) 40rpx 12rpx; }
-.back-button { display: grid; place-items: center; width: 64rpx; height: 64rpx; border: 1rpx solid var(--sm-border); border-radius: 50%; background: var(--sm-surface); color: var(--sm-text-2); }
-.page-title { flex: 1; color: var(--sm-text); font-size: 30rpx; font-weight: 800; }
-.head-action { display: flex; align-items: center; gap: 8rpx; height: 60rpx; padding: 0 26rpx; border-radius: 30rpx; background: var(--sm-accent); color: var(--sm-accent-ink); font-size: 18rpx; font-weight: 800; }
+<style scoped>
+.heading-actions {
+  display: flex;
+  gap: 10px;
+}
 
-.page-body { height: calc(100vh - 140rpx); padding: 10rpx 40rpx 0; box-sizing: border-box; }
-.inline-hint { padding: 60rpx 0; color: var(--sm-text-2); font-size: 19rpx; text-align: center; }
+.cover {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #f1f4f8;
+  color: #98a4b3;
+  font-size: 18px;
+}
 
-/* 列表态 */
-.empty-block { display: flex; flex-direction: column; align-items: center; gap: 14rpx; padding: 120rpx 0; color: var(--sm-text-2); font-size: 20rpx; }
-.empty-sub { color: var(--sm-text-3); font-size: 16rpx; text-align: center; }
-.collection-row { display: flex; align-items: center; gap: 20rpx; margin-top: 20rpx; padding: 22rpx; border: 1rpx solid var(--sm-border); border-radius: var(--sm-radius-card); background: var(--sm-surface); box-shadow: var(--sm-shadow-sm); }
-.collection-cover { display: grid; flex: none; place-items: center; width: 110rpx; height: 110rpx; border-radius: 18rpx; background: var(--sm-cover-bg); color: var(--sm-cover-ink); overflow: hidden; }
-.cover-img { width: 100%; height: 100%; }
-.collection-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 6rpx; }
-.collection-title { overflow: hidden; color: var(--sm-text); font-size: 22rpx; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
-.collection-desc { overflow: hidden; color: var(--sm-text-2); font-size: 16rpx; text-overflow: ellipsis; white-space: nowrap; }
-.collection-count { color: var(--sm-text-3); font-size: 14rpx; }
-.row-actions { display: flex; flex: none; gap: 12rpx; }
-.row-action { display: grid; place-items: center; width: 58rpx; height: 58rpx; border: 1rpx solid var(--sm-border); border-radius: 16rpx; background: var(--sm-surface-2); color: var(--sm-text-2); }
-.row-action.danger { border-color: var(--sm-danger-soft-border); background: var(--sm-danger-soft); color: var(--sm-danger); }
+.cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
 
-/* 编辑态表单 */
-.form-block { margin-top: 24rpx; padding: 28rpx; border: 1rpx solid var(--sm-border); border-radius: var(--sm-radius-card); background: var(--sm-surface); box-shadow: var(--sm-shadow-sm); }
-.field-label { display: block; margin-bottom: 14rpx; color: var(--sm-text-2); font-size: 19rpx; font-weight: 700; }
-.field-input { height: 92rpx; padding: 0 24rpx; margin-bottom: 22rpx; border: 1rpx solid var(--sm-border); border-radius: 18rpx; background: var(--sm-surface-2); color: var(--sm-text); font-size: 21rpx; }
-.field-input::placeholder { color: var(--sm-text-3); }
-.field-textarea { min-height: 140rpx; padding: 20rpx 24rpx; border: 1rpx solid var(--sm-border); border-radius: 18rpx; background: var(--sm-surface-2); color: var(--sm-text); font-size: 21rpx; }
-.field-textarea::placeholder { color: var(--sm-text-3); }
-.block-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18rpx; }
-.block-head .field-label { margin-bottom: 0; }
-.add-track-button { display: flex; align-items: center; gap: 8rpx; height: 58rpx; padding: 0 24rpx; border-radius: 29rpx; background: var(--sm-accent); color: var(--sm-accent-ink); font-size: 17rpx; font-weight: 800; }
+.cover-lg {
+  width: 96px;
+  height: 96px;
+  font-size: 28px;
+}
 
-/* 曲目行 */
-.track-row { display: flex; align-items: center; gap: 16rpx; padding: 16rpx 0; border-bottom: 1rpx solid var(--sm-divider); }
-.track-index { flex: none; width: 44rpx; color: var(--sm-text-3); font-size: 17rpx; font-weight: 700; text-align: center; }
-.track-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 4rpx; }
-.track-title { overflow: hidden; color: var(--sm-text); font-size: 20rpx; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.track-artists { overflow: hidden; color: var(--sm-text-2); font-size: 15rpx; text-overflow: ellipsis; white-space: nowrap; }
-.track-actions { display: flex; flex: none; gap: 10rpx; }
-.track-action { display: grid; place-items: center; width: 50rpx; height: 50rpx; border: 1rpx solid var(--sm-border); border-radius: 14rpx; background: var(--sm-surface-2); color: var(--sm-text-2); }
-.track-action.danger { border-color: var(--sm-danger-soft-border); background: var(--sm-danger-soft); color: var(--sm-danger); }
+.title-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
 
-.save-bar { display: flex; align-items: center; justify-content: space-between; gap: 20rpx; margin-top: 30rpx; }
-.field-message { flex: 1; color: var(--sm-danger); font-size: 16rpx; }
-.save-button { display: flex; flex: none; align-items: center; justify-content: center; height: 88rpx; padding: 0 60rpx; border-radius: 44rpx; background: var(--sm-accent); color: var(--sm-accent-ink); font-size: 21rpx; font-weight: 800; box-shadow: 0 10rpx 30rpx var(--sm-accent-glow); }
-.save-button.disabled { opacity: .6; }
+.editor {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 24px;
+}
 
-/* 添加曲目面板 */
-.add-panel { position: fixed; inset: 0; z-index: 200; }
-.add-panel-mask { position: absolute; inset: 0; background: rgba(8, 10, 14, .52); }
-.add-panel-body { position: absolute; bottom: 0; left: 0; right: 0; display: flex; max-height: 78vh; flex-direction: column; padding: 28rpx 40rpx calc(env(safe-area-inset-bottom) + 28rpx); border-radius: 28rpx 28rpx 0 0; background: var(--sm-page-bg); box-shadow: 0 -12rpx 40rpx rgba(0, 0, 0, .35); }
-.add-panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20rpx; }
-.add-panel-title { color: var(--sm-text); font-size: 24rpx; font-weight: 800; }
-.add-panel-close { display: grid; place-items: center; width: 56rpx; height: 56rpx; border-radius: 50%; background: var(--sm-surface-3); color: var(--sm-text-2); }
-.add-search { display: flex; align-items: center; gap: 14rpx; margin-bottom: 16rpx; }
-.add-search-input { flex: 1; height: 84rpx; padding: 0 24rpx; border: 1rpx solid var(--sm-border); border-radius: 20rpx; background: var(--sm-surface-2); color: var(--sm-text); font-size: 20rpx; }
-.add-search-input::placeholder { color: var(--sm-text-3); }
-.add-search-action { display: grid; place-items: center; width: 84rpx; height: 84rpx; border-radius: 20rpx; background: var(--sm-accent); color: var(--sm-accent-ink); }
-.add-results { flex: 1; min-height: 0; }
-.add-result-row { display: flex; align-items: center; gap: 16rpx; padding: 18rpx 6rpx; border-bottom: 1rpx solid var(--sm-divider); }
-.add-result-row.added { opacity: .55; }
-.add-result-plus { flex: none; color: var(--sm-accent); }
-.added-tag { flex: none; color: var(--sm-text-3); font-size: 15rpx; }
+.cover-block {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 18px;
+}
 
-.bottom-space { height: 60rpx; }
+.cover-ops {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.publish-hint {
+  margin-top: 6px;
+  color: var(--adm-text-3);
+  font-size: 12px;
+}
+
+.editor-tracks {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  min-width: 0;
+}
+
+.col-head {
+  margin-bottom: 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.candidate-list,
+.selected-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  height: 380px;
+  padding: 8px;
+  margin-top: 10px;
+  overflow-y: auto;
+  border: 1px solid var(--adm-border);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.candidate {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--adm-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.candidate:hover {
+  border-color: var(--el-color-primary-light-5);
+}
+
+.candidate-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.candidate-copy strong,
+.candidate-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.candidate-copy strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.candidate-copy span {
+  color: var(--adm-text-2);
+  font-size: 11px;
+}
+
+.selected-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--adm-border);
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.selected-row .candidate-copy {
+  flex: 1;
+}
+
+.order {
+  flex: none;
+  width: 20px;
+  color: var(--adm-text-3);
+  font-size: 12px;
+  text-align: center;
+}
+
+.row-ops {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+}
 </style>

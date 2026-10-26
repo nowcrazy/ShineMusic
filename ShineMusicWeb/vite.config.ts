@@ -107,7 +107,7 @@ export default defineConfig(({ command, mode }) => {
     mode === 'production' ? server.apiOrigin || server.appApiOrigin || '' : ''
 
   return {
-    base: './',
+    base: '/',
     plugins: [
       uniCompatPlugin(),
       vue({

@@ -1,573 +1,351 @@
 <script setup lang="ts">
 /**
- * 管理员音源抓歌页：搜索开放版权平台（Audius/Jamendo）→ 勾选曲目下载 → 后台下载 + 评分 → 直通入库或转人工审核。
- *
- * 流程：
- * 1. 输入关键词搜索（可选定单一音源或全部聚合），结果标注音质徽章（无损/高码率/标准）与许可
- * 2. 勾选感兴趣的结果，点击「下载所选」批量创建下载任务（重复任务自动跳过）
- * 3. 任务列表轮询刷新：queued → downloading → import_queued → completed/failed
- *    - completed 且 autoPublished=true：评分达标已直通入库
- *    - completed 且 autoPublished=false：评分不足，已转人工审核（可跳导入审核页处理）
- *    - failed：可一键重试
- *
- * 访问控制：onShow 校验 isAdmin，非管理员 redirectTo 首页。
+ * 音源抓歌：从 Audius / Jamendo 等外部平台搜索曲目，批量创建下载任务并跟踪结果。
  */
-import { computed, ref, onUnmounted } from 'vue'
-import { onShow } from '@dcloudio/uni-app'
-import { useI18n } from 'vue-i18n'
-import {
-  AlertCircle,
-  Check,
-  DownloadCloud,
-  ListMusic,
-  Music2,
-  RefreshCw,
-  RotateCcw,
-  Search,
-  ShieldCheck,
-} from 'lucide-vue-next'
-import { isAdmin } from '@/services/session'
-import { describeError } from '@/services/errors'
+import { onMounted, reactive, ref } from 'vue'
+import { ElMessage } from 'element-plus'
+import { Download, Refresh, Search } from '@element-plus/icons-vue'
 import {
   createDownloadTasks,
   getDownloadTasks,
   retryDownloadTask,
   searchSources,
   SourceProviderLabel,
-  SourceQualityLabel,
-  SourceTaskStatus,
-  SourceTaskStatusLabel,
   type ExternalDownloadTask,
   type SourceProviderFilter,
   type SourceProviderName,
   type SourceSearchItem,
 } from '@/services/admin-source-download'
-
-const { t } = useI18n()
-
-// —— 搜索区状态 ——
-const keyword = ref('')
-const providerFilter = ref<SourceProviderFilter>('all')
-const searching = ref(false)
-const searchError = ref('')
-const searched = ref(false)
-const results = ref<readonly SourceSearchItem[]>([])
-const providerErrors = ref<readonly { provider: string; message: string }[]>([])
-/** 已勾选的搜索结果（provider::providerTrackId 作为唯一键） */
-const selectedKeys = ref<string[]>([])
-
-// —— 任务区状态 ——
-const tasks = ref<readonly ExternalDownloadTask[]>([])
-const tasksLoading = ref(false)
-const tasksError = ref('')
-const statusFilter = ref('')
-const creating = ref(false)
-const retryingId = ref('')
-
-// 自动刷新定时器
-let pollTimer: ReturnType<typeof setInterval> | null = null
+import { describeError } from '@/services/errors'
+import { formatTime } from '@/utils/format'
+import type { ApiSourceProviderError } from '@/types/api.generated'
 
 const providerOptions: { value: SourceProviderFilter; label: string }[] = [
-  { value: 'all', label: 'sourceDownload.providerAll' },
+  { value: 'all', label: '全部平台' },
   { value: 'audius', label: 'Audius' },
   { value: 'jamendo', label: 'Jamendo' },
   { value: 'ytmusic', label: 'YT Music' },
   { value: 'soundcloud', label: 'SoundCloud' },
-  { value: 'kuwo', label: 'Kuwo' },
+  { value: 'kuwo', label: '酷我' },
 ]
 
-const statusFilters = ['', SourceTaskStatus.Queued, SourceTaskStatus.Downloading, SourceTaskStatus.ImportQueued, SourceTaskStatus.Completed, SourceTaskStatus.Failed]
+const taskStatusOptions = [
+  { value: '', label: '全部状态' },
+  { value: 'queued', label: '排队中' },
+  { value: 'downloading', label: '下载中' },
+  { value: 'import_queued', label: '入库处理中' },
+  { value: 'completed', label: '已完成' },
+  { value: 'failed', label: '失败' },
+]
 
-/** 结果唯一键（跨音源同 id 不冲突） */
-function resultKey(item: SourceSearchItem): string {
-  return `${item.provider}::${item.providerTrackId}`
+const taskStatusText: Record<string, string> = {
+  queued: '排队中',
+  downloading: '下载中',
+  import_queued: '入库处理中',
+  completed: '已完成',
+  failed: '失败',
 }
 
-/** 已勾选数 */
-const selectedCount = computed(() => selectedKeys.value.length)
+const taskStatusTone: Record<string, string> = {
+  queued: 'info',
+  downloading: 'primary',
+  import_queued: 'warning',
+  completed: 'success',
+  failed: 'danger',
+}
 
-/** 是否存在活跃任务（决定轮询是否值得继续打接口） */
-const hasActiveTasks = computed(() =>
-  tasks.value.some((task) =>
-    task.status === SourceTaskStatus.Queued ||
-    task.status === SourceTaskStatus.Downloading ||
-    task.status === SourceTaskStatus.ImportQueued))
+const qualityText: Record<string, string> = {
+  lossless: '无损',
+  high: '高品质',
+  standard: '标准',
+}
 
-// 权限拦截
-onShow(() => {
-  if (!isAdmin.value) {
-    uni.redirectTo({ url: '/pages/home/index' })
+// ===== 搜索 =====
+const searchForm = reactive({ query: '', provider: 'all' as SourceProviderFilter, limit: 20 })
+const searching = ref(false)
+const results = ref<SourceSearchItem[]>([])
+const providerErrors = ref<ApiSourceProviderError[]>([])
+const selected = ref<SourceSearchItem[]>([])
+const creating = ref(false)
+
+// ===== 任务 =====
+const taskLoading = ref(false)
+const tasks = ref<ExternalDownloadTask[]>([])
+const taskTotal = ref(0)
+const taskPage = ref(1)
+const taskPageSize = ref(20)
+const taskStatus = ref('')
+
+const selectedProvider = () => selected.value[0]?.provider ?? null
+
+function selectable(row: SourceSearchItem) {
+  const provider = selectedProvider()
+  return !provider || provider === row.provider
+}
+
+function onSelectionChange(rows: SourceSearchItem[]) {
+  selected.value = rows
+}
+
+async function runSearch() {
+  if (!searchForm.query.trim()) {
+    ElMessage.warning('请输入搜索关键词')
     return
   }
-  void loadTasks()
-  startPolling()
-})
-
-onUnmounted(() => {
-  stopPolling()
-})
-
-/** 轮询任务列表：有活跃任务时每 3 秒静默刷新，全部终态后停止 */
-function startPolling() {
-  stopPolling()
-  pollTimer = setInterval(() => {
-    if (hasActiveTasks.value) void refreshTasksSilently()
-  }, 3000)
-}
-
-function stopPolling() {
-  if (pollTimer) {
-    clearInterval(pollTimer)
-    pollTimer = null
-  }
-}
-
-/** 执行搜索 */
-async function doSearch() {
-  const query = keyword.value.trim()
-  if (!query || searching.value) return
   searching.value = true
-  searchError.value = ''
-  searched.value = false
   try {
-    const response = await searchSources(query, providerFilter.value)
-    results.value = response.results
-    providerErrors.value = response.providerErrors
-    searched.value = true
-    // 音源切换后清掉已失效的勾选
-    const validKeys = new Set(response.results.map((item) => resultKey(item)))
-    selectedKeys.value = selectedKeys.value.filter((key) => validKeys.has(key))
+    const result = await searchSources(searchForm.query.trim(), searchForm.provider, searchForm.limit)
+    results.value = [...result.results]
+    providerErrors.value = [...result.providerErrors]
+    selected.value = []
+    if (results.value.length === 0) ElMessage.info('没有找到匹配的音源')
   } catch (error) {
-    searchError.value = describeError(error, t('sourceDownload.searchFailed'))
+    ElMessage.error(describeError(error, '音源搜索失败'))
   } finally {
     searching.value = false
   }
 }
 
-/** 切换音源后自动重搜（已有关键词时） */
-function switchProvider(value: SourceProviderFilter) {
-  if (providerFilter.value === value) return
-  providerFilter.value = value
-  if (keyword.value.trim()) void doSearch()
-}
-
-/** 勾选/取消勾选 */
-function toggleSelect(item: SourceSearchItem) {
-  const key = resultKey(item)
-  const index = selectedKeys.value.indexOf(key)
-  if (index >= 0) {
-    selectedKeys.value.splice(index, 1)
-  } else {
-    selectedKeys.value.push(key)
-  }
-}
-
-function isSelected(item: SourceSearchItem): boolean {
-  return selectedKeys.value.includes(resultKey(item))
-}
-
-/** 下载所选：按音源分组批量创建任务 */
 async function downloadSelected() {
-  if (creating.value || selectedKeys.value.length === 0) return
+  const provider = selectedProvider() as SourceProviderName | null
+  if (!provider || selected.value.length === 0) {
+    ElMessage.warning('请先选择要下载的曲目')
+    return
+  }
   creating.value = true
   try {
-    // 按 provider 分组，逐组创建
-    const groups = new Map<string, string[]>()
-    for (const item of results.value) {
-      if (!isSelected(item)) continue
-      const list = groups.get(item.provider) ?? []
-      list.push(item.providerTrackId)
-      groups.set(item.provider, list)
-    }
-    let created = 0
-    let skipped = 0
-    for (const [provider, ids] of groups) {
-      const result = await createDownloadTasks(provider as SourceProviderName, ids)
-      created += result.created.length
-      skipped += result.skippedDuplicates.length
-    }
-    selectedKeys.value = []
-    if (created > 0) {
-      uni.showToast({ title: t('sourceDownload.downloadCreated', { count: created }), icon: 'none' })
-    } else if (skipped > 0) {
-      uni.showToast({ title: t('sourceDownload.downloadSkipped', { count: skipped }), icon: 'none' })
-    }
+    const result = await createDownloadTasks(
+      provider,
+      selected.value.map((item) => item.providerTrackId),
+    )
+    ElMessage.success(
+      `已创建 ${result.created.length} 个下载任务` +
+        (result.skippedDuplicates.length ? `，跳过 ${result.skippedDuplicates.length} 首重复曲目` : ''),
+    )
+    selected.value = []
     await loadTasks()
   } catch (error) {
-    uni.showToast({ title: describeError(error, t('sourceDownload.downloadFailed')), icon: 'none' })
+    ElMessage.error(describeError(error, '创建下载任务失败'))
   } finally {
     creating.value = false
   }
 }
 
-/** 加载任务列表 */
 async function loadTasks() {
-  tasksLoading.value = true
-  tasksError.value = ''
+  taskLoading.value = true
   try {
-    const result = await getDownloadTasks(statusFilter.value || undefined, 1, 50)
-    tasks.value = result.items
+    const result = await getDownloadTasks(taskStatus.value || undefined, taskPage.value, taskPageSize.value)
+    tasks.value = [...result.items]
+    taskTotal.value = result.total
   } catch (error) {
-    tasksError.value = describeError(error, t('sourceDownload.loadTasksFailed'))
+    ElMessage.error(describeError(error, '任务列表加载失败'))
   } finally {
-    tasksLoading.value = false
+    taskLoading.value = false
   }
 }
 
-/** 静默刷新任务（不打 loading，不报错） */
-async function refreshTasksSilently() {
-  try {
-    const result = await getDownloadTasks(statusFilter.value || undefined, 1, 50)
-    tasks.value = result.items
-  } catch {
-    // 静默失败
-  }
-}
-
-/** 切换任务状态筛选 */
-function switchStatusFilter(value: string) {
-  if (statusFilter.value === value) return
-  statusFilter.value = value
+function changeTaskFilter() {
+  taskPage.value = 1
   void loadTasks()
 }
 
-/** 重试失败任务 */
-async function retryTask(task: ExternalDownloadTask) {
-  if (retryingId.value) return
-  retryingId.value = task.id
+async function retry(task: ExternalDownloadTask) {
   try {
     await retryDownloadTask(task.id)
-    uni.showToast({ title: t('sourceDownload.retried'), icon: 'none' })
+    ElMessage.success('已重新排队')
     await loadTasks()
   } catch (error) {
-    uni.showToast({ title: describeError(error, t('sourceDownload.retryFailed')), icon: 'none' })
-  } finally {
-    retryingId.value = ''
+    ElMessage.error(describeError(error, '重试失败'))
   }
 }
 
-/** 跳转导入审核页（处理转人工的条目） */
-function goImportReview() {
-  uni.navigateTo({ url: '/pages/admin/import' })
-}
-
-/** 状态标签 */
-function statusLabel(status: string): string {
-  const key = SourceTaskStatusLabel[status]
-  return key ? t(key) : status
-}
-
-/** 音质标签 */
-function qualityLabel(quality: string | null | undefined): string {
-  if (!quality) return ''
-  const key = SourceQualityLabel[quality]
-  return key ? t(key) : quality
-}
-
-/** 音源展示名（ytmusic → YT Music 等，未知名称回退原始 id） */
-function providerLabel(provider: string): string {
-  return SourceProviderLabel[provider] ?? provider
-}
-
-/** 状态样式 */
-function statusClass(status: string): string {
-  switch (status) {
-    case SourceTaskStatus.Completed:
-      return 'status-ok'
-    case SourceTaskStatus.Failed:
-      return 'status-error'
-    case SourceTaskStatus.Downloading:
-    case SourceTaskStatus.ImportQueued:
-      return 'status-warn'
-    default:
-      return 'status-info'
-  }
-}
-
-/** 格式化时长 */
-function formatDuration(ms: number | null | undefined): string {
-  if (!ms) return t('sourceDownload.unknownDuration')
-  const totalSec = Math.round(ms / 1000)
-  const min = Math.floor(totalSec / 60)
-  const sec = totalSec % 60
-  return `${min}:${sec.toString().padStart(2, '0')}`
-}
+onMounted(loadTasks)
 </script>
 
 <template>
-  <scroll-view class="sd-page" scroll-y :show-scrollbar="false">
-    <!-- 页头 -->
-    <view class="page-heading">
-      <view class="heading-icon"><DownloadCloud :size="20" /></view>
-      <view class="heading-copy">
-        <text class="heading-title">{{ $t('sourceDownload.pageTitle') }}</text>
-        <text class="heading-subtitle">{{ $t('sourceDownload.headingSubtitle') }}</text>
-      </view>
-    </view>
+  <div class="page">
+    <div class="page-heading">
+      <div>
+        <h2>音源抓歌</h2>
+        <p>从外部平台搜索曲目，派发下载任务，自动入库或转人工审核</p>
+      </div>
+      <el-button :icon="Refresh" :loading="taskLoading" @click="loadTasks">刷新任务</el-button>
+    </div>
 
-    <!-- 搜索区 -->
-    <view class="search-card">
-      <view class="search-row">
-        <view class="search-input-wrap">
-          <Search :size="16" class="search-input-icon" />
-          <input
-            v-model="keyword"
-            class="search-input"
-            :placeholder="$t('sourceDownload.searchPlaceholder')"
-            confirm-type="search"
-            @keydown.enter="doSearch"
-          />
-        </view>
-        <view class="search-btn" :class="{ disabled: searching || !keyword.trim() }" @click="doSearch">
-          <text>{{ searching ? $t('sourceDownload.searching') : $t('sourceDownload.searchBtn') }}</text>
-        </view>
-      </view>
-      <view class="provider-row">
-        <view
-          v-for="option in providerOptions"
-          :key="option.value"
-          class="provider-chip"
-          :class="{ active: providerFilter === option.value }"
-          @click="switchProvider(option.value)"
+    <div class="panel">
+      <div class="panel-title">搜索音源</div>
+      <div class="filter-bar">
+        <el-input
+          v-model="searchForm.query"
+          placeholder="曲名 / 艺人"
+          style="width: 280px"
+          clearable
+          @keyup.enter="runSearch"
         >
-          <text>{{ option.label.startsWith('sourceDownload.') ? $t(option.label) : option.label }}</text>
-        </view>
-      </view>
-    </view>
+          <template #prefix><el-icon><Search /></el-icon></template>
+        </el-input>
+        <el-select v-model="searchForm.provider" style="width: 150px">
+          <el-option v-for="option in providerOptions" :key="option.value" :label="option.label" :value="option.value" />
+        </el-select>
+        <el-select v-model="searchForm.limit" style="width: 110px">
+          <el-option v-for="count in [10, 20, 30, 50]" :key="count" :label="`${count} 条`" :value="count" />
+        </el-select>
+        <el-button type="primary" :icon="Search" :loading="searching" @click="runSearch">搜索</el-button>
+        <el-button
+          type="success"
+          :icon="Download"
+          :loading="creating"
+          :disabled="selected.length === 0"
+          @click="downloadSelected"
+        >
+          下载选中（{{ selected.length }}）
+        </el-button>
+      </div>
 
-    <!-- 单源失败提示（不阻断其他源结果） -->
-    <view v-if="providerErrors.length" class="provider-error-box">
-      <AlertCircle :size="15" />
-      <text>
-        {{ $t('sourceDownload.providerErrorTitle') }}：
-        {{ providerErrors.map((e) => `${e.provider} (${e.message})`).join('；') }}
-      </text>
-    </view>
-
-    <!-- 搜索结果 -->
-    <view v-if="searchError" class="state-message error"><AlertCircle :size="17" /><text>{{ searchError }}</text></view>
-    <view v-else-if="!searched && !searching" class="state-message">
-      <Search :size="26" />
-      <text>{{ $t('sourceDownload.searchHint') }}</text>
-    </view>
-    <view v-else-if="searched && !results.length" class="state-message">
-      <Music2 :size="26" />
-      <text>{{ $t('sourceDownload.noResults') }}</text>
-    </view>
-    <view v-else class="result-list">
-      <view
-        v-for="item in results"
-        :key="resultKey(item)"
-        class="result-row"
-        :class="{ selected: isSelected(item) }"
-        @click="toggleSelect(item)"
+      <el-alert
+        v-if="providerErrors.length"
+        class="provider-errors"
+        type="warning"
+        :closable="false"
+        show-icon
+        title="部分平台搜索失败"
       >
-        <view class="result-check">
-          <view class="checkbox" :class="{ checked: isSelected(item) }">
-            <Check v-if="isSelected(item)" :size="13" :stroke-width="3" />
-          </view>
-        </view>
-        <view class="result-thumb">
-          <img v-if="item.coverUrl" :src="item.coverUrl" mode="aspectFill" class="thumb-img" />
-          <view v-else class="thumb-placeholder"><Music2 :size="18" /></view>
-        </view>
-        <view class="result-copy">
-          <text class="result-title">{{ item.title || $t('sourceDownload.untitled') }}</text>
-          <text class="result-meta">
-            {{ item.artists.join(' / ') || $t('sourceDownload.unknownArtist') }}
-            <text v-if="item.durationMs"> · {{ formatDuration(item.durationMs) }}</text>
-          </text>
-          <view class="result-badges">
-            <text class="badge provider-badge">{{ providerLabel(item.provider) }}</text>
-            <text class="badge" :class="`quality-${item.quality}`">{{ qualityLabel(item.quality) }}</text>
-            <text v-if="item.license" class="badge license-badge">{{ item.license }}</text>
-          </view>
-        </view>
-      </view>
-    </view>
+        <div v-for="error in providerErrors" :key="error.provider">
+          {{ SourceProviderLabel[error.provider] || error.provider }}：{{ error.message }}
+        </div>
+      </el-alert>
 
-    <!-- 下载所选（吸底操作条） -->
-    <view v-if="selectedCount > 0" class="download-bar">
-      <text class="download-count">{{ $t('sourceDownload.selectedCount', { count: selectedCount }) }}</text>
-      <view class="download-btn" :class="{ disabled: creating }" @click="downloadSelected">
-        <DownloadCloud :size="16" />
-        <text>{{ $t('sourceDownload.downloadSelected') }}</text>
-      </view>
-    </view>
+      <el-table
+        v-loading="searching"
+        :data="results"
+        row-key="providerTrackId"
+        style="margin-top: 14px"
+        empty-text="输入关键词搜索外部音源"
+        @selection-change="onSelectionChange"
+      >
+        <el-table-column type="selection" width="46" :selectable="selectable" />
+        <el-table-column label="曲名 / 艺人" min-width="240">
+          <template #default="{ row }">
+            <div class="title-cell">
+              <strong>{{ row.title }}</strong>
+              <span class="text-faint">{{ row.artists.join('、') || '未知艺人' }}</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="平台" width="110">
+          <template #default="{ row }">
+            <el-tag size="small" type="info">{{ SourceProviderLabel[row.provider] || row.provider }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="专辑" min-width="150">
+          <template #default="{ row }">{{ row.albumTitle || '—' }}</template>
+        </el-table-column>
+        <el-table-column label="时长" width="80">
+          <template #default="{ row }">{{ formatTime((row.durationMs ?? 0) / 1000) }}</template>
+        </el-table-column>
+        <el-table-column label="音质" width="90">
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.isLosslessAvailable ? 'success' : 'info'">
+              {{ qualityText[row.quality] || row.quality }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="来源页" width="90">
+          <template #default="{ row }">
+            <a v-if="row.sourcePageUrl" :href="row.sourcePageUrl" target="_blank" rel="noreferrer">打开</a>
+            <span v-else class="text-faint">—</span>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
 
-    <!-- 任务区 -->
-    <view class="tasks-section">
-      <view class="tasks-heading">
-        <view class="tasks-title-wrap">
-          <ListMusic :size="17" />
-          <text class="tasks-title">{{ $t('sourceDownload.tasksTitle') }}</text>
-        </view>
-        <view class="refresh-button" @click="loadTasks"><RefreshCw :size="16" /></view>
-      </view>
-      <view class="status-filter-row">
-        <view
-          v-for="value in statusFilters"
-          :key="value || 'all'"
-          class="status-chip"
-          :class="{ active: statusFilter === value }"
-          @click="switchStatusFilter(value)"
-        >
-          <text>{{ value ? statusLabel(value) : $t('sourceDownload.filterAll') }}</text>
-        </view>
-      </view>
+    <div class="panel">
+      <div class="panel-title">
+        下载任务
+        <el-select v-model="taskStatus" style="width: 150px" size="small" placeholder="全部状态" @change="changeTaskFilter">
+          <el-option v-for="option in taskStatusOptions" :key="option.value" :label="option.label" :value="option.value" />
+        </el-select>
+      </div>
 
-      <view v-if="tasksLoading" class="state-message">{{ $t('sourceDownload.loadingTasks') }}</view>
-      <view v-else-if="tasksError" class="state-message error"><AlertCircle :size="17" /><text>{{ tasksError }}</text></view>
-      <view v-else-if="!tasks.length" class="state-message">
-        <Music2 :size="26" />
-        <text>{{ $t('sourceDownload.noTasks') }}</text>
-      </view>
-      <view v-else class="task-list">
-        <view v-for="task in tasks" :key="task.id" class="task-card">
-          <view class="task-thumb">
-            <img v-if="task.coverUrl" :src="task.coverUrl" mode="aspectFill" class="thumb-img" />
-            <view v-else class="thumb-placeholder"><Music2 :size="18" /></view>
-          </view>
-          <view class="task-copy">
-            <text class="task-title">{{ task.title || $t('sourceDownload.untitled') }}</text>
-            <text class="task-meta">
-              {{ task.artists.join(' / ') || $t('sourceDownload.unknownArtist') }}
-              <text v-if="task.durationMs"> · {{ formatDuration(task.durationMs) }}</text>
-            </text>
-            <view class="task-badges">
-              <text class="badge provider-badge">{{ providerLabel(task.provider) }}</text>
-              <text v-if="task.quality" class="badge" :class="`quality-${task.quality}`">{{ qualityLabel(task.quality) }}</text>
-              <text class="badge status-badge" :class="statusClass(task.status)">{{ statusLabel(task.status) }}</text>
-              <text
-                v-if="task.status === SourceTaskStatus.Queued && task.autoRetryCount > 0"
-                class="badge retry-badge"
-              >{{ $t('sourceDownload.autoRetryBadge', { count: task.autoRetryCount, max: 3 }) }}</text>
-              <text v-if="task.autoScore != null" class="badge score-badge">{{ $t('sourceDownload.autoScoreLabel', { score: task.autoScore }) }}</text>
-              <text
-                v-if="task.status === SourceTaskStatus.Completed && task.hasLyrics === false"
-                class="badge no-lyrics-badge"
-              >{{ $t('sourceDownload.noLyricsBadge') }}</text>
-              <text v-if="task.autoPublished" class="badge published-badge">
-                <ShieldCheck :size="11" /> {{ $t('sourceDownload.autoPublishedBadge') }}
-              </text>
-              <text v-else-if="task.status === SourceTaskStatus.Completed && task.importItemId" class="badge review-badge">
-                {{ $t('sourceDownload.pendingReviewBadge') }}
-              </text>
-            </view>
-            <text v-if="task.errorMessage" class="task-error">{{ task.errorMessage }}</text>
-          </view>
-          <view class="task-actions">
-            <view
-              v-if="task.status === SourceTaskStatus.Failed"
-              class="action-btn retry"
-              :class="{ disabled: retryingId === task.id }"
-              @click.stop="retryTask(task)"
-            >
-              <RotateCcw :size="14" />
-              <text>{{ $t('sourceDownload.retryBtn') }}</text>
-            </view>
-            <view
-              v-if="task.importItemId && !task.autoPublished"
-              class="action-btn review"
-              @click.stop="goImportReview"
-            >
-              <text>{{ $t('sourceDownload.goReview') }}</text>
-            </view>
-          </view>
-        </view>
-      </view>
-    </view>
-  </scroll-view>
+      <el-table v-loading="taskLoading" :data="tasks" row-key="id" empty-text="暂无下载任务">
+        <el-table-column label="曲名 / 艺人" min-width="230">
+          <template #default="{ row }">
+            <div class="title-cell">
+              <strong>{{ row.title || row.providerTrackId }}</strong>
+              <span class="text-faint">{{ row.artists.join('、') || '—' }}</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="平台" width="110">
+          <template #default="{ row }">
+            <el-tag size="small" type="info">{{ SourceProviderLabel[row.provider] || row.provider }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="状态" width="110">
+          <template #default="{ row }">
+            <el-tag size="small" :type="(taskStatusTone[row.status] as any) || 'info'">
+              {{ taskStatusText[row.status] || row.status }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="音质" width="90">
+          <template #default="{ row }">{{ row.quality ? qualityText[row.quality] || row.quality : '—' }}</template>
+        </el-table-column>
+        <el-table-column label="自动发布" width="90">
+          <template #default="{ row }">
+            <el-tag v-if="row.autoPublished" size="small" type="success">是</el-tag>
+            <span v-else class="text-faint">否</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="失败原因" min-width="180">
+          <template #default="{ row }">
+            <span v-if="row.errorMessage" class="text-muted">{{ row.errorCode || '' }} {{ row.errorMessage }}</span>
+            <span v-else class="text-faint">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="重试" width="70">
+          <template #default="{ row }">{{ row.autoRetryCount }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="90" fixed="right">
+          <template #default="{ row }">
+            <el-button v-if="row.status === 'failed'" link type="primary" @click="retry(row)">重试</el-button>
+            <span v-else class="text-faint">—</span>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <div class="pagination">
+        <el-pagination
+          v-model:current-page="taskPage"
+          v-model:page-size="taskPageSize"
+          :total="taskTotal"
+          :page-sizes="[20, 50, 100]"
+          layout="total, sizes, prev, pager, next"
+          @current-change="loadTasks"
+          @size-change="changeTaskFilter"
+        />
+      </div>
+    </div>
+  </div>
 </template>
 
-<style lang="scss" scoped>
-/* 音源抓歌管理页：搜索区 + 结果列表 + 吸底下载条 + 任务列表 */
-.sd-page { min-height: 100vh; padding: 0 30rpx 220rpx; background: var(--sm-page-bg); box-sizing: border-box; }
-.page-heading { display: flex; align-items: center; gap: 20rpx; padding: calc(env(safe-area-inset-top) + 40rpx) 8rpx 24rpx; }
-.heading-icon { display: grid; place-items: center; width: 72rpx; height: 72rpx; border-radius: 22rpx; background: var(--sm-accent-soft); color: var(--sm-accent); }
-.heading-copy { display: flex; flex-direction: column; gap: 6rpx; }
-.heading-title { color: var(--sm-text); font-size: 34rpx; font-weight: 800; }
-.heading-subtitle { color: var(--sm-text-3); font-size: 18rpx; }
+<style scoped>
+.provider-errors {
+  margin-top: 14px;
+  font-size: 12px;
+}
 
-/* 搜索卡片 */
-.search-card { padding: 24rpx; border: 1rpx solid var(--sm-border); border-radius: 24rpx; background: var(--sm-surface); }
-.search-row { display: flex; align-items: center; gap: 16rpx; }
-.search-input-wrap { position: relative; display: flex; flex: 1; align-items: center; }
-.search-input-icon { position: absolute; left: 22rpx; color: var(--sm-text-3); }
-.search-input { flex: 1; height: 76rpx; padding: 0 22rpx 0 60rpx; border: 1rpx solid var(--sm-border); border-radius: 38rpx; background: var(--sm-surface-2); color: var(--sm-text); font-size: 22rpx; }
-.search-btn { display: flex; align-items: center; justify-content: center; height: 76rpx; padding: 0 34rpx; border-radius: 38rpx; background: var(--sm-accent); color: var(--sm-accent-ink); font-size: 22rpx; font-weight: 700; }
-.search-btn.disabled { opacity: .5; }
-.provider-row { display: flex; gap: 14rpx; margin-top: 18rpx; }
-.provider-chip { padding: 12rpx 28rpx; border: 1rpx solid var(--sm-border); border-radius: 30rpx; background: var(--sm-surface-2); color: var(--sm-text-2); font-size: 20rpx; font-weight: 600; }
-.provider-chip.active { border-color: var(--sm-accent-soft-border); background: var(--sm-accent-soft); color: var(--sm-accent); }
+.title-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
 
-/* 音源错误提示 */
-.provider-error-box { display: flex; align-items: center; gap: 12rpx; margin-top: 20rpx; padding: 18rpx 22rpx; border: 1rpx solid var(--sm-danger-soft-border); border-radius: 18rpx; background: var(--sm-danger-soft); color: var(--sm-danger); font-size: 18rpx; }
-
-/* 状态消息 */
-.state-message { display: flex; flex-direction: column; align-items: center; gap: 16rpx; padding: 70rpx 0; color: var(--sm-text-3); font-size: 22rpx; }
-.state-message.error { flex-direction: row; justify-content: center; color: var(--sm-danger); }
-
-/* 搜索结果列表 */
-.result-list { display: flex; flex-direction: column; gap: 16rpx; margin-top: 24rpx; }
-.result-row { display: flex; align-items: center; gap: 18rpx; padding: 18rpx; border: 1rpx solid var(--sm-border); border-radius: 22rpx; background: var(--sm-surface); transition: border-color .2s ease; }
-.result-row.selected { border-color: var(--sm-accent); box-shadow: 0 0 0 2rpx var(--sm-accent-soft-border); }
-.result-check { flex: none; }
-.checkbox { display: grid; place-items: center; width: 40rpx; height: 40rpx; border: 2rpx solid var(--sm-border-strong); border-radius: 12rpx; background: var(--sm-surface-2); color: var(--sm-accent-ink); }
-.checkbox.checked { border-color: var(--sm-accent); background: var(--sm-accent); }
-.result-thumb { flex: none; width: 96rpx; height: 96rpx; border-radius: 16rpx; overflow: hidden; background: var(--sm-surface-3); }
-.thumb-img { width: 100%; height: 100%; }
-.thumb-placeholder { display: grid; place-items: center; width: 100%; height: 100%; color: var(--sm-text-3); }
-.result-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 6rpx; }
-.result-title { overflow: hidden; color: var(--sm-text); font-size: 24rpx; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
-.result-meta { overflow: hidden; color: var(--sm-text-2); font-size: 18rpx; text-overflow: ellipsis; white-space: nowrap; }
-.result-badges { display: flex; flex-wrap: wrap; gap: 10rpx; margin-top: 4rpx; }
-
-/* 徽章 */
-.badge { display: inline-flex; align-items: center; gap: 5rpx; padding: 4rpx 14rpx; border-radius: 24rpx; font-size: 16rpx; font-weight: 700; }
-.provider-badge { background: var(--sm-surface-3); color: var(--sm-text-2); text-transform: uppercase; letter-spacing: .06em; }
-.quality-lossless { background: var(--sm-accent-soft); color: var(--sm-accent); }
-.quality-high { background: var(--sm-info-soft); color: var(--sm-accent-2); }
-.quality-standard { background: var(--sm-surface-3); color: var(--sm-text-3); }
-.license-badge { background: var(--sm-surface-3); color: var(--sm-text-3); }
-.status-badge.status-ok { background: var(--sm-accent-soft); color: var(--sm-accent); }
-.status-badge.status-warn { background: var(--sm-info-soft); color: var(--sm-accent-2); }
-.status-badge.status-error { background: var(--sm-danger-soft); color: var(--sm-danger); }
-.status-badge.status-info { background: var(--sm-surface-3); color: var(--sm-text-2); }
-.score-badge { background: var(--sm-accent-3-soft); color: var(--sm-accent-3); }
-.no-lyrics-badge { background: var(--sm-warn-soft, rgba(230, 162, 60, 0.12)); color: var(--sm-warn, #b26a00); }
-.retry-badge { background: var(--sm-info-soft); color: var(--sm-accent-2); }
-.published-badge { background: var(--sm-accent-soft); color: var(--sm-accent); }
-.review-badge { background: var(--sm-info-soft); color: var(--sm-accent-2); }
-
-/* 吸底下载条 */
-.download-bar { position: fixed; right: 30rpx; bottom: calc(env(safe-area-inset-bottom) + 30rpx); left: 30rpx; z-index: 50; display: flex; align-items: center; justify-content: space-between; padding: 20rpx 24rpx; border: 1rpx solid var(--sm-border-strong); border-radius: 26rpx; background: var(--sm-surface); box-shadow: 0 12rpx 40rpx rgba(0, 0, 0, .3); }
-.download-count { color: var(--sm-text-2); font-size: 20rpx; font-weight: 600; }
-.download-btn { display: flex; align-items: center; gap: 10rpx; padding: 16rpx 30rpx; border-radius: 34rpx; background: var(--sm-accent); color: var(--sm-accent-ink); font-size: 21rpx; font-weight: 700; }
-.download-btn.disabled { opacity: .5; }
-
-/* 任务区 */
-.tasks-section { margin-top: 40rpx; }
-.tasks-heading { display: flex; align-items: center; justify-content: space-between; padding: 0 8rpx; }
-.tasks-title-wrap { display: flex; align-items: center; gap: 12rpx; color: var(--sm-text); }
-.tasks-title { font-size: 26rpx; font-weight: 800; }
-.refresh-button { display: grid; place-items: center; width: 60rpx; height: 60rpx; border: 1rpx solid var(--sm-border); border-radius: 50%; background: var(--sm-surface); color: var(--sm-text-2); }
-.status-filter-row { display: flex; flex-wrap: wrap; gap: 12rpx; margin-top: 18rpx; }
-.status-chip { padding: 10rpx 24rpx; border: 1rpx solid var(--sm-border); border-radius: 28rpx; background: var(--sm-surface-2); color: var(--sm-text-2); font-size: 19rpx; font-weight: 600; }
-.status-chip.active { border-color: var(--sm-accent-soft-border); background: var(--sm-accent-soft); color: var(--sm-accent); }
-
-/* 任务卡片 */
-.task-list { display: flex; flex-direction: column; gap: 16rpx; margin-top: 20rpx; }
-.task-card { display: flex; gap: 18rpx; padding: 20rpx; border: 1rpx solid var(--sm-border); border-radius: 22rpx; background: var(--sm-surface); }
-.task-thumb { flex: none; width: 88rpx; height: 88rpx; border-radius: 16rpx; overflow: hidden; background: var(--sm-surface-3); }
-.task-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 6rpx; }
-.task-title { overflow: hidden; color: var(--sm-text); font-size: 23rpx; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
-.task-meta { overflow: hidden; color: var(--sm-text-2); font-size: 17rpx; text-overflow: ellipsis; white-space: nowrap; }
-.task-badges { display: flex; flex-wrap: wrap; gap: 8rpx; margin-top: 4rpx; }
-.task-error { color: var(--sm-danger); font-size: 16rpx; }
-.task-actions { display: flex; flex-direction: column; justify-content: center; gap: 10rpx; }
-.action-btn { display: flex; align-items: center; gap: 8rpx; padding: 12rpx 20rpx; border-radius: 26rpx; font-size: 18rpx; font-weight: 700; }
-.action-btn.retry { border: 1rpx solid var(--sm-accent-soft-border); background: var(--sm-accent-soft); color: var(--sm-accent); }
-.action-btn.retry.disabled { opacity: .5; }
-.action-btn.review { border: 1rpx solid var(--sm-border); background: var(--sm-surface-2); color: var(--sm-text-2); }
+.title-cell strong,
+.title-cell span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 </style>

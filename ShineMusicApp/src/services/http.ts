@@ -98,6 +98,8 @@ interface RequestOptions {
   withAuth?: boolean
   // 内部：401 后是否允许刷新重试
   _retry?: boolean
+  // 覆盖默认超时（毫秒）；外部平台解析等慢接口使用
+  timeoutMs?: number
 }
 
 /**
@@ -125,6 +127,27 @@ interface ErrorBody {
   error?: { code?: string; message?: string; traceId?: string }
 }
 
+// 设备信息头（审计日志用）：模块级缓存一次，形如 "Xiaomi 14 · Android 14" / "iPhone · iOS 17"。
+let cachedDeviceInfo: string | null = null
+function deviceInfoHeader(): string {
+  if (cachedDeviceInfo !== null) return cachedDeviceInfo
+  try {
+    const info = uni.getSystemInfoSync() as {
+      brand?: string
+      model?: string
+      osName?: string
+      osVersion?: string
+      platform?: string
+    }
+    const device = [info.brand, info.model].filter(Boolean).join(' ')
+    const os = [info.osName ?? info.platform, info.osVersion].filter(Boolean).join(' ')
+    cachedDeviceInfo = [device, os].filter(Boolean).join(' · ').slice(0, 250)
+  } catch {
+    cachedDeviceInfo = ''
+  }
+  return cachedDeviceInfo
+}
+
 /**
  * 执行单次 uni.request（Promise 化），负责内容类型与鉴权头注入。
  * @param method HTTP 方法
@@ -134,10 +157,13 @@ interface ErrorBody {
  * @returns resolve 为 { status, data }（HTTP 错误状态也在此返回，由上层统一抛错）；
  *          reject 仅发生在 uni.request 网络层失败，包装为 ApiError(0, 'network_error')
  */
-function sendRequest(method: HttpMethod, url: string, data: unknown, withAuth: boolean) {
+function sendRequest(method: HttpMethod, url: string, data: unknown, withAuth: boolean, timeoutMs?: number) {
   return new Promise<{ status: number; data: unknown }>((resolve, reject) => {
     const header: Record<string, string> = {}
     if (data !== undefined && method !== 'GET') header['Content-Type'] = 'application/json'
+    // 显式声明客户端类型与设备信息，后端审计日志据此区分 PC / App 并记录机型。
+    header['X-Client-Type'] = 'app'
+    header['X-Device-Info'] = deviceInfoHeader()
     const token = getAccessToken()
     if (withAuth && token) header.Authorization = `Bearer ${token}`
     uni.request({
@@ -145,7 +171,7 @@ function sendRequest(method: HttpMethod, url: string, data: unknown, withAuth: b
       method: method as any,
       data: data as AnyObject | undefined,
       header,
-      timeout: REQUEST_TIMEOUT_MS,
+      timeout: timeoutMs ?? REQUEST_TIMEOUT_MS,
       success: ({ statusCode, data: body }) => resolve({ status: statusCode, data: body }),
       fail: (error) => reject(new ApiError(0, 'network_error', error.errMsg || t('services.networkError'))),
     })
@@ -195,13 +221,13 @@ export async function request<T>(
   data?: unknown,
   options: RequestOptions = {},
 ): Promise<T> {
-  const { withAuth = true, _retry = false } = options
-  const { status, data: body } = await sendRequest(method, resolveUrl(path), data, withAuth)
+  const { withAuth = true, _retry = false, timeoutMs } = options
+  const { status, data: body } = await sendRequest(method, resolveUrl(path), data, withAuth, timeoutMs)
 
   if (status === 401 && !_retry && withAuth && getRefreshToken() && refreshHandler) {
     const refreshed = await refreshHandler()
     if (refreshed) {
-      return request<T>(method, path, data, { withAuth, _retry: true })
+      return request<T>(method, path, data, { withAuth, _retry: true, timeoutMs })
     }
   }
 
@@ -226,7 +252,8 @@ export async function request<T>(
  * 路径均为以 /api/v1 开头的后端相对路径。
  */
 export const http = {
-  get: <T>(path: string, withAuth = true) => request<T>('GET', path, undefined, { withAuth }),
+  get: <T>(path: string, withAuth = true, timeoutMs?: number) =>
+    request<T>('GET', path, undefined, { withAuth, timeoutMs }),
   post: <T>(path: string, body?: unknown, withAuth = true) =>
     request<T>('POST', path, body ?? {}, { withAuth }),
   put: <T>(path: string, body?: unknown, withAuth = true) =>

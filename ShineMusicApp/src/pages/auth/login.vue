@@ -107,14 +107,14 @@ function editServerBase() {
     <text class="auth-title">{{ $t('auth.loginTitle') }}</text>
     <text class="auth-sub">{{ $t('auth.loginSubtitle') }}</text>
 
-    <!-- 登录表单：邮箱 / 密码 / 行内错误 / 提交按钮；两个输入框均支持回车提交 -->
+    <!-- 登录表单：邮箱或用户名 / 密码 / 行内错误 / 提交按钮；两个输入框均支持回车提交 -->
     <view class="field">
-      <text class="field-label">{{ $t('auth.email') }}</text>
+      <text class="field-label">{{ $t('auth.loginId') }}</text>
       <input
         v-model="email"
         class="field-input"
         type="text"
-        :placeholder="$t('auth.emailPlaceholder')"
+        :placeholder="$t('auth.loginIdPlaceholder')"
         confirm-type="next"
         @confirm="focusPassword"
       />

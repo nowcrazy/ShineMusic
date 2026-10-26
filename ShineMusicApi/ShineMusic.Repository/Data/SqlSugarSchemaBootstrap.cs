@@ -16,20 +16,92 @@ namespace ShineMusic.Repository.Data;
 /// <summary>SqlSugar CodeFirst 初始化器：空库启动时创建全部实体表结构。</summary>
 public static class SqlSugarSchemaBootstrap
 {
-    /// <summary>库为空（核心表 AspNetUsers 不存在）时对所有 [SugarTable] 实体执行 CodeFirst 建表；否则跳过。</summary>
+    /// <summary>库为空（核心表 AspNetUsers 不存在）时对所有 [SugarTable] 实体执行 CodeFirst 建表；否则仅补建缺失的新表与新列。</summary>
     public static void Initialize(ISqlSugarClient db, ILogger logger)
     {
-        if (db.DbMaintenance.IsAnyTable("AspNetUsers", false))
-        {
-            logger.LogInformation("SqlSugar CodeFirst skipped: database schema already exists.");
-            return;
-        }
         var entityTypes = typeof(ShineMusic.Model.Entities.ApplicationUser).Assembly
             .GetTypes()
             .Where(type => type is { IsClass: true, IsAbstract: false } &&
                            type.GetCustomAttribute<SugarTable>() is not null)
             .ToArray();
-        logger.LogInformation("SqlSugar CodeFirst initializing {Count} entity tables (fresh database).", entityTypes.Length);
-        db.CodeFirst.InitTables(entityTypes);
+
+        if (!db.DbMaintenance.IsAnyTable("AspNetUsers", false))
+        {
+            logger.LogInformation("SqlSugar CodeFirst initializing {Count} entity tables (fresh database).", entityTypes.Length);
+            db.CodeFirst.InitTables(entityTypes);
+            return;
+        }
+
+        logger.LogInformation("SqlSugar CodeFirst skipped: database schema already exists.");
+
+        // UserPlaylistPendingTracks：SqlSugar CodeFirst 在 PG 下建表会把标识符强制转小写，
+        // 而运行时用带引号的 PascalCase 标识符，两者不兼容。统一走手写 DDL 建表，
+        // 并清掉历史残留的全小写表。无条件调用（内部幂等）。
+        EnsurePendingTracksTable(db, logger);
+
+        // 存量库：只对“尚不存在的表”执行建表（新实体的安全落地通道），绝不触碰已有表结构。
+        foreach (var type in entityTypes)
+        {
+            var tableName = type.GetCustomAttribute<SugarTable>()!.TableName;
+            if (tableName == "UserPlaylistPendingTracks") continue; // 已由上面的 Ensure 方法处理
+            if (db.DbMaintenance.IsAnyTable(tableName, false)) continue;
+            logger.LogInformation("SqlSugar CodeFirst creating missing table {Table} ({Entity}).", tableName, type.Name);
+            db.CodeFirst.InitTables(type);
+        }
+
+        // 存量库：对既有表补“缺失的新列”（只增不改；列级 AddColumn 不影响既有列类型与数据）。
+        EnsureColumn(db, logger, "AdminAuditEntries", nameof(ShineMusic.Model.Entities.AdminAuditEntry.Ip));
+        EnsureColumn(db, logger, "AdminAuditEntries", nameof(ShineMusic.Model.Entities.AdminAuditEntry.ClientType));
+        EnsureColumn(db, logger, "AdminAuditEntries", nameof(ShineMusic.Model.Entities.AdminAuditEntry.DeviceInfo));
+        EnsureColumn(db, logger, "AspNetUsers", nameof(ShineMusic.Model.Entities.ApplicationUser.TempAdminUntilUtc), "timestamptz");
+    }
+
+    /// <summary>列不存在时直接 AddColumn 补可空列（默认 varchar(255)）；绝不走 CodeFirst 表同步（会误改既有列为 NOT NULL）。</summary>
+    private static void EnsureColumn(ISqlSugarClient db, ILogger logger, string tableName, string columnName, string dataType = "varchar", int length = 255)
+    {
+        if (db.DbMaintenance.IsAnyColumn(tableName, columnName)) return;
+        logger.LogInformation("SqlSugar schema patch: adding column {Table}.{Column}.", tableName, columnName);
+        db.DbMaintenance.AddColumn(tableName, new DbColumnInfo
+        {
+            DbColumnName = columnName,
+            DataType = dataType,
+            // 长度仅对字符类型有意义；timestamptz 等类型传 0 避免生成 timestamptz(255) 之类的非法 DDL
+            Length = dataType == "varchar" ? length : 0,
+            IsNullable = true,
+        });
+    }
+
+    /// <summary>
+    /// 手动建 UserPlaylistPendingTracks（PascalCase 带引号），规避 SqlSugar CodeFirst 在 PG 下
+    /// 强制小写标识符的问题。先清掉历史残留的全小写表，再按实体定义精确建表。
+    /// </summary>
+    private static void EnsurePendingTracksTable(ISqlSugarClient db, ILogger logger)
+    {
+        // 清掉 CodeFirst 误建的全小写表（无数据，安全删除）。
+        db.Ado.ExecuteCommand("DROP TABLE IF EXISTS userplaylistpendingtracks");
+
+        if (db.DbMaintenance.IsAnyTable("UserPlaylistPendingTracks", false)) return;
+
+        logger.LogInformation("SqlSugar schema patch: creating table UserPlaylistPendingTracks.");
+        const string ddl = """
+            CREATE TABLE "UserPlaylistPendingTracks" (
+                "Id" uuid NOT NULL PRIMARY KEY,
+                "PlaylistId" uuid NOT NULL,
+                "Title" character varying NOT NULL,
+                "ArtistsJson" text NOT NULL,
+                "AlbumTitle" character varying NULL,
+                "DurationMs" integer NULL,
+                "CoverUrl" character varying NULL,
+                "SourcePlatform" character varying NOT NULL,
+                "SourceTrackId" character varying NULL,
+                "SourceUrl" character varying NULL,
+                "SortOrder" integer NOT NULL,
+                "Status" character varying NOT NULL,
+                "DownloadTaskId" uuid NULL,
+                "CreatedAtUtc" timestamp with time zone NOT NULL,
+                "UpdatedAtUtc" timestamp with time zone NOT NULL
+            );
+            """;
+        db.Ado.ExecuteCommand(ddl);
     }
 }

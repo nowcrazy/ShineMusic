@@ -15,7 +15,7 @@ import type {
   ApiSourceSearch,
   ApiSourceSearchItem,
 } from '@/types/api.generated'
-import { API_PREFIX, http } from './http'
+import { API_PREFIX, http, request } from './http'
 
 export type SourceProviderName = 'audius' | 'jamendo' | 'ytmusic' | 'soundcloud' | 'kuwo';
 export type SourceProviderFilter = 'all' | SourceProviderName
@@ -26,7 +26,7 @@ export const SourceProviderLabel: Record<string, string> = {
   jamendo: 'Jamendo',
   ytmusic: 'YT Music',
   soundcloud: 'SoundCloud',
-  kuwo: 'Kuwo',
+  kuwo: '酷我',
 }
 
 export type SourceSearchItem = ApiSourceSearchItem
@@ -57,7 +57,8 @@ export const SourceQualityLabel: Record<string, string> = {
   standard: 'sourceDownload.quality.standard',
 }
 
-/** 搜索音源平台。provider 缺省为 all（并行聚合各启用源，单源失败见 providerErrors）。 */
+/** 搜索音源平台。provider 缺省为 all（并行聚合各启用源，单源失败见 providerErrors）。
+ *  聚合搜索可能触发多个外部源串行请求，超时放大到 90s。 */
 export async function searchSources(
   query: string,
   provider: SourceProviderFilter = 'all',
@@ -67,7 +68,9 @@ export async function searchSources(
   params.set('query', query)
   params.set('provider', provider)
   params.set('limit', String(limit))
-  return http.get<ApiSourceSearch>(`${API_PREFIX}/admin/source-downloads/search?${params.toString()}`)
+  return request<ApiSourceSearch>('GET', `${API_PREFIX}/admin/source-downloads/search?${params.toString()}`, undefined, {
+    timeoutMs: 90000,
+  })
 }
 
 /** 批量创建下载任务，返回新建任务与被跳过的重复曲目。 */

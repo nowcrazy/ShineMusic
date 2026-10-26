@@ -25,6 +25,9 @@ public sealed record YtDlpEntry(
     string? Artist,
     string? Album);
 
+/// <summary>yt-dlp 歌单（播放列表）元数据：标题 + 条目列表（--flat-playlist --dump-single-json 输出）。</summary>
+public sealed record YtDlpPlaylist(string Title, IReadOnlyList<YtDlpEntry> Entries);
+
 /// <summary>yt-dlp 子进程桥接服务（单例，进程退出时由 DI 容器释放信号量）。</summary>
 public sealed class YtDlpBridge(
     IOptions<SourceDownloadOptions> options,
@@ -183,9 +186,58 @@ public sealed class YtDlpBridge(
         throw new SourceUnavailableException(MapProcessError(result.StdErr));
     }
 
+    /// <summary>
+    /// 抓取歌单（播放列表）元数据：--flat-playlist --dump-single-json 一次性输出整个歌单的 JSON。
+    /// 返回歌单标题与条目列表；失败抛 <see cref="SourceUnavailableException"/>。
+    /// </summary>
+    public async Task<YtDlpPlaylist> GetPlaylistAsync(string playlistUrl, CancellationToken cancellationToken)
+    {
+        await EnsureAvailableAsync(cancellationToken);
+        var args = new List<string>
+        {
+            playlistUrl,
+            "--flat-playlist",
+            "--dump-single-json",
+            "--no-warnings",
+            "--ignore-errors"
+        };
+        AppendCommonArgs(args);
+        var result = await RunProcessAsync(args, TimeSpan.FromSeconds(Math.Clamp(options.Value.YtDlp.SearchTimeoutSeconds, 30, 300)), cancellationToken);
+        var firstLine = result.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault();
+        if (firstLine is null)
+            throw new SourceUnavailableException(MapProcessError(result.StdErr));
+        try
+        {
+            using var doc = JsonDocument.Parse(firstLine);
+            var root = doc.RootElement;
+            var title = GetString(root, "title") ?? "YouTube Music 歌单";
+            var entries = new List<YtDlpEntry>();
+            if (root.TryGetProperty("entries", out var array) && array.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in array.EnumerateArray())
+                {
+                    var entry = ParseEntry(item.GetRawText());
+                    if (entry is not null)
+                        entries.Add(entry);
+                }
+            }
+            if (entries.Count == 0)
+                throw new SourceUnavailableException("The playlist is empty or could not be parsed.");
+            return new YtDlpPlaylist(title.Trim(), entries);
+        }
+        catch (JsonException)
+        {
+            throw new SourceUnavailableException("The playlist metadata returned by yt-dlp could not be parsed.");
+        }
+    }
+
     /// <summary>按配置向参数列表追加通用参数：cookies 文件（YouTube 风控）与 JS 运行时（YouTube 签名解密必需）。</summary>
     private void AppendCommonArgs(List<string> args)
     {
+        // 代理（国内访问 YouTube/SoundCloud 必需）：配置后所有 yt-dlp 调用统一走代理
+        var proxy = options.Value.YtDlp.Proxy;
+        if (!string.IsNullOrWhiteSpace(proxy))
+            args.AddRange(["--proxy", proxy.Trim()]);
         var cookiesFile = options.Value.YtDlp.CookiesFile;
         if (!string.IsNullOrWhiteSpace(cookiesFile))
         {

@@ -17,6 +17,7 @@ import {
   AudioLines,
   Bell,
   ChevronRight,
+  Download,
   Heart,
   History,
   Inbox,
@@ -652,6 +653,11 @@ function openCreatePlaylist() {
   createSheetVisible.value = true
 }
 
+/** 跳转歌单解析导入页（粘贴外部平台歌单链接生成新歌单） */
+function goPlaylistImport() {
+  uni.navigateTo({ url: '/pages/playlist/import' })
+}
+
 /** 关闭新建歌单弹层（取消/点击遮罩） */
 function closeCreatePlaylist() {
   if (creatingPlaylist.value) return
@@ -1137,7 +1143,10 @@ function coverOf(collection: ApiCollectionSummary) {
             <view v-if="capabilities.capabilities.userCollections" class="library-block">
               <view class="section-heading">
                 <view><text class="section-kicker">MY PLAYLISTS</text><text class="section-title">{{ $t('homePage.myPlaylists') }}</text></view>
-                <view class="create-playlist" @tap="openCreatePlaylist"><Plus :size="17" /><text>{{ $t('homePage.create') }}</text></view>
+                <view class="playlist-heading-actions">
+                  <view class="create-playlist" @tap="goPlaylistImport"><Download :size="17" /><text>{{ $t('homePage.import') }}</text></view>
+                  <view class="create-playlist" @tap="openCreatePlaylist"><Plus :size="17" /><text>{{ $t('homePage.create') }}</text></view>
+                </view>
               </view>
               <view v-if="!myPlaylists.length" class="inline-error">{{ $t('homePage.noPlaylists') }}</view>
               <view
@@ -1396,6 +1405,7 @@ function coverOf(collection: ApiCollectionSummary) {
 .profile-email { overflow: hidden; color: var(--sm-text-2); font-size: 17rpx; text-overflow: ellipsis; white-space: nowrap; }
 .profile-chevron { flex: none; color: var(--sm-text-3); }
 .create-playlist { display: flex; align-items: center; gap: 6rpx; padding-bottom: 4rpx; color: var(--sm-accent); font-size: 19rpx; font-weight: 700; }
+.playlist-heading-actions { display: flex; align-items: center; gap: 28rpx; }
 /* 新建歌单受控弹层：居中 Dialog + 半透明遮罩 */
 .sheet-mask { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; padding: 40rpx; background: var(--sm-mask); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
 .sheet-dialog { width: 100%; max-width: 560rpx; padding: 40rpx 36rpx 32rpx; border-radius: 28rpx; background: var(--sm-surface-3); border: 1rpx solid var(--sm-border-strong); box-shadow: var(--sm-shadow); }

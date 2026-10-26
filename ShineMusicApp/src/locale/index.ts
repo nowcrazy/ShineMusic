@@ -12,6 +12,7 @@ import { adminImportMessages } from './messages/adminImport'
 import { adminManageMessages } from './messages/adminManage'
 import { platformMessages } from './messages/platform'
 import { sourceDownloadMessages } from './messages/sourceDownload'
+import { playlistImportMessages } from './messages/playlistImport'
 import { loadLocale, saveLocale, isSupported } from './utils'
 import { DEFAULT_LOCALE, SUPPORTED, type Locale } from './config'
 
@@ -101,6 +102,7 @@ function buildAllMessages(): Record<string, unknown> {
     adminManageMessages,
     platformMessages,
     sourceDownloadMessages,
+    playlistImportMessages,
   ]
   const out: Record<string, unknown> = {}
   for (const [locale, tree] of Object.entries(allMessages)) {

@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using ShineMusic.Model.Contracts;
 using ShineMusic.Model.Entities;
+using ShineMusic.Repository.Data;
 using ShineMusic.Service;
 using SqlSugar;
 
@@ -30,6 +31,22 @@ public sealed class StorageManagementController : ControllerBase
         CancellationToken cancellationToken)
     {
         return Results.Ok(await storage.AuditAsync(db, cancellationToken));
+    }
+
+    /// <summary>
+    /// 【GET /api/v1/admin/storage/file?key=】按存储键读取库内文件内容（仅管理员）。
+    /// 供治理页图片查看/音频试听；路径经 TryResolve 校验杜绝穿越，支持 Range（音频拖动）。
+    /// </summary>
+    [HttpGet("storage/file", Name = "GetStorageFile")]
+    public IResult GetStorageFile(
+        [FromQuery] string? key,
+        LibraryStoragePaths libraryPaths)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+            return ApiResults.ValidationError(HttpContext, "key", "A storage key is required.");
+        if (!libraryPaths.TryResolve(key, out var path) || !System.IO.File.Exists(path))
+            return ApiResults.NotFound(HttpContext);
+        return Microsoft.AspNetCore.Http.Results.File(path, StorageFileKinds.ContentTypeFor(key), enableRangeProcessing: true);
     }
 
     /// <summary>

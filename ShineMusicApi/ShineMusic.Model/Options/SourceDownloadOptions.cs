@@ -25,6 +25,12 @@ public sealed class SourceDownloadOptions
     /// <summary>下载行为限制（超时/体积/并发）。</summary>
     public SourceDownloadLimits Download { get; set; } = new();
 
+    /// <summary>
+    /// 聚合搜索的单源预算（秒）：任一源超过该时长即放弃该源（标注 providerErrors 超时），
+    /// 其余源的结果照常返回；防止个别源（如不可达的 YouTube）挂起拖垮整体响应。默认 25 秒。
+    /// </summary>
+    public int SearchBudgetSeconds { get; set; } = 25;
+
     /// <summary>评分自动入库总开关：false 时音源条目一律转人工审核。</summary>
     public bool AutoPublishEnabled { get; set; } = true;
 
@@ -80,6 +86,12 @@ public sealed class YtDlpSourceOptions
 
     /// <summary>可选 cookies 文件路径（YouTube 触发风控 403/登录校验时使用；留空表示不携带）。</summary>
     public string CookiesFile { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 可选 HTTP/SOCKS 代理（传给 yt-dlp --proxy，如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080）。
+    /// 国内网络访问 YouTube/SoundCloud 需要配置；留空表示直连。
+    /// </summary>
+    public string Proxy { get; set; } = string.Empty;
 
     /// <summary>
     /// 传给 yt-dlp --js-runtimes 的 JS 运行时（YouTube 签名/挑战解密必需，2026 年起无运行时则拿不到音频格式）。

@@ -162,6 +162,7 @@ public sealed class UserCollectionController : ControllerBase
     public async Task<IResult> GetPlaylist(
         Guid playlistId,
         ISqlSugarClient db,
+        ShineMusic.Service.PlaylistImport.PlaylistImportService importService,
         CancellationToken cancellationToken)
     {
         if (!HttpContext.User.TryGetUserId(out var userId))
@@ -170,6 +171,9 @@ public sealed class UserCollectionController : ControllerBase
             .FirstAsync(item => item.Id == playlistId && item.UserId == userId, cancellationToken);
         if (playlist is null)
             return ApiResults.NotFound(HttpContext);
+
+        // 懒结算：先把下载已发布完成的 pending 行转正为正式曲目，再组装响应。
+        await importService.ResolvePendingAsync(playlistId, cancellationToken);
 
         // 先查关联（含 SortOrder），再按 Id 集查已发布曲目并水合，最后按关联顺序内存排列。
         var links = await db.Queryable<UserPlaylistTrack>()
@@ -190,13 +194,55 @@ public sealed class UserCollectionController : ControllerBase
             .Where(track => track is not null)
             .Select(track => track!)
             .ToList();
+        var pendings = await db.Queryable<UserPlaylistPendingTrack>()
+            .Where(item => item.PlaylistId == playlistId)
+            .OrderBy(item => item.SortOrder)
+            .ToListAsync(cancellationToken);
         return Results.Ok(new PlaylistDetailDto(
             playlist.Id,
             playlist.Name,
             playlist.Description,
             orderedTracks.Select(CatalogController.ToDto).ToArray(),
             AsUtc(playlist.UpdatedAtUtc),
-            playlist.ArtworkId.HasValue ? $"/api/v1/artwork/{playlist.ArtworkId.Value}" : null));
+            playlist.ArtworkId.HasValue ? $"/api/v1/artwork/{playlist.ArtworkId.Value}" : null,
+            pendings.Count == 0
+                ? null
+                : pendings.Select(item => new PlaylistPendingTrackDto(
+                    item.Id,
+                    item.Title,
+                    DeserializeArtists(item.ArtistsJson),
+                    item.AlbumTitle,
+                    item.DurationMs,
+                    item.CoverUrl,
+                    item.SortOrder,
+                    item.Status)).ToArray()));
+    }
+
+    /// <summary>删除歌单中的一条待补齐（pending）曲目。</summary>
+    [HttpDelete("playlists/{playlistId:guid}/pending/{pendingId:guid}", Name = "RemovePlaylistPendingTrack")]
+    public async Task<IResult> RemovePendingTrack(
+        Guid playlistId,
+        Guid pendingId,
+        ISqlSugarClient db,
+        CancellationToken cancellationToken)
+    {
+        if (!HttpContext.User.TryGetUserId(out var userId))
+            return Results.Unauthorized();
+        var playlistExists = await db.Queryable<UserPlaylist>().AnyAsync(item => item.Id == playlistId && item.UserId == userId, cancellationToken);
+        if (!playlistExists)
+            return ApiResults.NotFound(HttpContext);
+        await db.Deleteable<UserPlaylistPendingTrack>()
+            .Where(item => item.Id == pendingId && item.PlaylistId == playlistId)
+            .ExecuteCommandAsync(cancellationToken);
+        return Results.NoContent();
+    }
+
+    /// <summary>把 JSON 数组字符串解析为字符串列表；解析失败返回空列表。</summary>
+    private static IReadOnlyList<string> DeserializeArtists(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return [];
+        try { return System.Text.Json.JsonSerializer.Deserialize<List<string>>(json) ?? []; }
+        catch (System.Text.Json.JsonException) { return []; }
     }
 
     [HttpPatch("playlists/{playlistId:guid}", Name = "UpdatePlaylist")]

@@ -46,7 +46,7 @@ public sealed class ImportStagingService
     /// <param name="DisplayName">净化后的原始文件名。</param>
     /// <param name="Extension">小写扩展名（不含点）。</param>
     /// <param name="StorageKey">隔离区存储键（uploads/{批次}/{条目Id}.{扩展名}）。</param>
-    /// <param name="ContentHash">文件内容 SHA-256 十六进制串（大写）。</param>
+    /// <param name="ContentHash">文件内容 SHA-256 十六进制串（小写）。</param>
     /// <param name="SizeBytes">文件字节数。</param>
     public sealed record StagedAudio(Guid ItemId, string DisplayName, string Extension, string StorageKey, string ContentHash, long SizeBytes);
 
@@ -137,7 +137,7 @@ public sealed class ImportStagingService
                     if (fileBytes == 0)
                         throw new EmptyUploadException();
                     createdPaths.Add(destination);
-                    result.Audio.Add(new StagedAudio(itemId, displayName, extension, storageKey, Convert.ToHexString(hash.GetHashAndReset()), fileBytes));
+                    result.Audio.Add(new StagedAudio(itemId, displayName, extension, storageKey, Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant(), fileBytes));
                 }
 
                 // 配对同名歌词：写入 {批次}/{条目Id}.lrc，与音频同目录同名，后台解析时旁挂层直接命中。

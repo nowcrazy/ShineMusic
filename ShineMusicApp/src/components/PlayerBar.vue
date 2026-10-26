@@ -185,7 +185,8 @@ const overlayStyle = computed(() => {
 // ===== 歌词展示 =====
 interface LyricLine { time: number; text: string }
 
-/** 解析 LRC 字符串为带时间戳（秒）的行数组；非 LRC 行原样保留，time 为 -1 */
+/** 解析 LRC 字符串为带时间戳（秒）的行数组；元数据标签行（[ti:]/[ar:]/[offset:] 等）剔除，其余非时间行原样保留，time 为 -1 */
+const LRC_META_TAG = /^\s*\[[a-zA-Z#][^\]]*\]\s*$/
 function parseLrc(content: string): LyricLine[] {
   const lines = content.split(/\r?\n/)
   const result: LyricLine[] = []
@@ -193,7 +194,7 @@ function parseLrc(content: string): LyricLine[] {
     const matches = [...line.matchAll(/\[(\d{1,2}):(\d{1,2})(?:\.(\d{1,3}))?\]/g)]
     if (!matches.length) {
       const text = line.trim()
-      if (text) result.push({ time: -1, text })
+      if (text && !LRC_META_TAG.test(text)) result.push({ time: -1, text })
       continue
     }
     const lastTagEnd = matches[matches.length - 1].index! + matches[matches.length - 1][0].length

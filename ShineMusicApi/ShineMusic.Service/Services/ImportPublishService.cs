@@ -389,7 +389,13 @@ public sealed class ImportPublishService(
                     await db.Insertable(new TrackArtist { TrackId = track.Id, ArtistId = artist.Id }).ExecuteCommandAsync(cancellationToken);
                 if (album is not null)
                     foreach (var artist in resolvedArtists)
-                        await db.Insertable(new AlbumArtist { AlbumId = album.Id, ArtistId = artist.Id }).ExecuteCommandAsync(cancellationToken);
+                    {
+                        // 已有专辑 + 已有艺人的组合可能已建过关联（同专辑多首曲目分批发布），跳过避免主键冲突。
+                        var albumId2 = album.Id;
+                        var artistId = artist.Id;
+                        if (!await db.Queryable<AlbumArtist>().AnyAsync(link => link.AlbumId == albumId2 && link.ArtistId == artistId, cancellationToken))
+                            await db.Insertable(new AlbumArtist { AlbumId = albumId2, ArtistId = artistId }).ExecuteCommandAsync(cancellationToken);
+                    }
                 foreach (var genre in resolvedGenres)
                     await db.Insertable(new TrackGenre { TrackId = track.Id, GenreId = genre.Id }).ExecuteCommandAsync(cancellationToken);
                 await db.Insertable(originalAsset).ExecuteCommandAsync(cancellationToken);

@@ -12,8 +12,10 @@
  * - DELETE /import-items/{id}             （拒绝，删除隔离区文件）
  */
 import type { ApiPageResult } from '@/types/music'
+import type { ApiLibraryImportItemWithUploader } from '@/types/api.generated'
 import { t } from '@/locale'
 import { getAccessToken } from './tokens'
+import { refreshAccessToken } from './http'
 import { API_PREFIX, http, resolveUrl } from './http'
 
 /** 导入源文件信息 */
@@ -187,11 +189,17 @@ export async function uploadImportFilesBatch(files: File[], songRequestId?: stri
   if (songRequestId) form.append('songRequestId', songRequestId)
 
   // 不手动设置 Content-Type，交由浏览器生成带 boundary 的 multipart 头。
-  const response = await fetch(resolveUrl(`${API_PREFIX}/admin/library/imports`), {
-    method: 'POST',
-    headers: buildAuthHeader(),
-    body: form,
-  })
+  const send = () =>
+    fetch(resolveUrl(`${API_PREFIX}/admin/library/imports`), {
+      method: 'POST',
+      headers: buildAuthHeader(),
+      body: form,
+    })
+  let response = await send()
+  // 上传绕过 http 层，401 时复用统一的单飞刷新并重试一次。
+  if (response.status === 401 && (await refreshAccessToken())) {
+    response = await send()
+  }
   const body = await response.json().catch(() => null)
   if (!response.ok) {
     throw new Error(body?.error?.message ?? t('services.uploadFailedWithStatus', { status: response.status }))
@@ -226,6 +234,25 @@ export async function getImportBatch(batchId: string): Promise<LibraryImportBatc
 /** 获取单个导入条目详情 */
 export async function getImportItem(itemId: string): Promise<LibraryImportItem> {
   return http.get<LibraryImportItem>(`${API_PREFIX}/admin/library/import-items/${itemId}`)
+}
+
+/**
+ * 导入条目总列表（跨批次，按状态筛选），附带批次上传者 Id。
+ *
+ * @param status 条目状态（可选，如 pending_review / pending_publication）
+ */
+export async function listImportItems(
+  status?: string,
+  page = 1,
+  pageSize = 20,
+): Promise<ApiPageResult<ApiLibraryImportItemWithUploader>> {
+  const params = new URLSearchParams()
+  if (status) params.set('status', status)
+  params.set('page', String(page))
+  params.set('pageSize', String(pageSize))
+  return http.get<ApiPageResult<ApiLibraryImportItemWithUploader>>(
+    `${API_PREFIX}/admin/library/import-items?${params.toString()}`,
+  )
 }
 
 /** 获取试听地址（转码后的 m4a 流）。

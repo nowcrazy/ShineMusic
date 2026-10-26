@@ -67,7 +67,8 @@ export async function searchSources(
   params.set('query', query)
   params.set('provider', provider)
   params.set('limit', String(limit))
-  return http.get<ApiSourceSearch>(`${API_PREFIX}/admin/source-downloads/search?${params.toString()}`)
+  // 多音源并行聚合，后端耗时可超 20s（默认 15s 超时会必现失败），放宽到 60s。
+  return http.get<ApiSourceSearch>(`${API_PREFIX}/admin/source-downloads/search?${params.toString()}`, true, 60000)
 }
 
 /** 批量创建下载任务，返回新建任务与被跳过的重复曲目。 */

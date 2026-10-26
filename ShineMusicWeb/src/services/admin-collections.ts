@@ -9,7 +9,12 @@
  *
  * 前台读取复用 services/catalog 的 getCollections/getCollection（匿名端点）。
  */
-import type { ApiCollectionSummary, ApiTrack, ApiPageResult } from '@/types/music'
+import type {
+  ApiCollectionDetail,
+  ApiCollectionSummary,
+  ApiPageResult,
+  ApiTrack,
+} from '@/types/music'
 import { API_PREFIX, http } from './http'
 
 /** 创建歌单入参 */
@@ -62,4 +67,17 @@ export function searchTracksForCollection(query: string, page = 1, pageSize = 50
   params.set('page', String(page))
   params.set('pageSize', String(pageSize))
   return http.get<ApiPageResult<ApiTrack>>(`${API_PREFIX}/tracks?${params.toString()}`)
+}
+
+/** 读取已发布歌单列表（管理端暂只有前台读取端点，未发布歌单不会出现在此列表）。 */
+export function listCollections(page = 1, pageSize = 50): Promise<ApiPageResult<ApiCollectionSummary>> {
+  const params = new URLSearchParams()
+  params.set('page', String(page))
+  params.set('pageSize', String(pageSize))
+  return http.get<ApiPageResult<ApiCollectionSummary>>(`${API_PREFIX}/collections?${params.toString()}`)
+}
+
+/** 读取歌单详情（含按顺序排列的曲目）。 */
+export function getCollectionDetail(collectionId: string): Promise<ApiCollectionDetail> {
+  return http.get<ApiCollectionDetail>(`${API_PREFIX}/collections/${collectionId}`)
 }
