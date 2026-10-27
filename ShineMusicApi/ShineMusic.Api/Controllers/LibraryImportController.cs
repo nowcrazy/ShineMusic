@@ -1,18 +1,18 @@
 using System.Security.Claims;
 using System.Text.Json;
-using ShineMusic.Service.Messaging;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Options;
 using Microsoft.Net.Http.Headers;
+using ShineMusic.Api.Extensions;
 using ShineMusic.Model.Contracts;
 using ShineMusic.Model.Entities;
-using ShineMusic.Api.Extensions;
-using ShineMusic.Repository.Data;
-using SqlSugar;
 using ShineMusic.Model.Options;
+using ShineMusic.Repository.Data;
 using ShineMusic.Service;
+using ShineMusic.Service.Messaging;
+using SqlSugar;
 
 namespace ShineMusic.Api.Controllers;
 
@@ -164,7 +164,7 @@ public sealed class LibraryImportController : ControllerBase
         CancellationToken cancellationToken = default)
     {
         page = Math.Clamp(page, 1, 1000);
-        pageSize = Math.Clamp(pageSize, 1, 100);
+        pageSize = Math.Clamp(pageSize, 1, 1000);
         // 仅拉取未被软删除的条目；若批次内所有条目都已被删除，则该批次也不展示。
         var query = db.Queryable<LibraryImportBatch>()
             .Where(batch => SqlFunc.Subqueryable<LibraryImportItem>()
@@ -548,6 +548,71 @@ public sealed class LibraryImportController : ControllerBase
         return Results.Ok(new PublishImportItemResultDto(result.TrackId!.Value, result.Status!));
     }
 
+    /// <summary>
+    /// 批量发布所有「自动发布候选」条目：pending_review + AutoScore ≥ 阈值 + 转码成功 + 非用户上传。
+    /// 管理员在审核面板点「一键发布高分」时调用；逐条走 ImportPublishService.PublishAsync，
+    /// 失败条目记录原因后继续下一条，最终返回成功/失败明细供前端展示。
+    /// </summary>
+    [HttpPost("import-items/bulk-publish-candidates", Name = "BulkPublishImportCandidates")]
+    public async Task<IResult> BulkPublishCandidates(
+        [FromQuery] int? threshold,
+        ISqlSugarClient db,
+        ImportPublishService publisher,
+        IOptions<SourceDownloadOptions> sourceOptions,
+        IOptions<LibraryImportOptions> importOptions,
+        CancellationToken cancellationToken)
+    {
+        var actorId = Guid.Parse(HttpContext.User.FindFirstValue("sub")!);
+        var traceId = HttpContext.TraceIdentifier;
+
+        // 阈值优先 SourceDownload（音源抓歌），fallback LibraryImport（手动上传），最低 50
+        var effectiveThreshold = threshold ?? Math.Max(50, sourceOptions.Value.AutoPublishThreshold);
+
+        var candidates = await db.Queryable<LibraryImportItem>()
+            .Where(item =>
+                item.Status == LibraryImportItemStatuses.PendingReview &&
+                item.AutoScore >= effectiveThreshold &&
+                item.TranscodeStatus == "succeeded" &&
+                !item.IsUserUpload &&
+                item.MetadataReviewed &&
+                !string.IsNullOrWhiteSpace(item.TranscodedStorageKey))
+            .ToListAsync(cancellationToken);
+
+        if (candidates.Count == 0)
+            return Results.Ok(new BulkPublishResultDto(0, 0, Array.Empty<BulkPublishItemResult>()));
+
+        var results = new List<BulkPublishItemResult>(candidates.Count);
+        var success = 0;
+        foreach (var item in candidates)
+        {
+            try
+            {
+                var publishResult = await publisher.PublishAsync(
+                    item,
+                    new ImportPublishContext(actorId, traceId, IsAutomatic: false),
+                    forceFulfill: false,
+                    overrideReason: null,
+                    cancellationToken);
+
+                if (publishResult.Error is null)
+                {
+                    success++;
+                    results.Add(new BulkPublishItemResult(item.Id, item.DisplayName, true, publishResult.TrackId, null));
+                }
+                else
+                {
+                    results.Add(new BulkPublishItemResult(item.Id, item.DisplayName, false, null, publishResult.Error.Message));
+                }
+            }
+            catch (Exception ex)
+            {
+                results.Add(new BulkPublishItemResult(item.Id, item.DisplayName, false, null, ex.Message));
+            }
+        }
+
+        return Results.Ok(new BulkPublishResultDto(candidates.Count, success, results.ToArray()));
+    }
+
     [HttpDelete("import-items/{itemId:guid}/song-request", Name = "UnlinkImportItemSongRequest")]
     public async Task<IResult> UnlinkSongRequest(
         Guid itemId,
@@ -667,25 +732,65 @@ public sealed class LibraryImportController : ControllerBase
 
     /// <summary>
     /// 管理端导入条目列表：按状态筛选（如 pending_publication 为待审核转公开的用户上传），
-    /// 附带批次上传者信息，供审核界面展示来源。
+    /// 附带上批次上传者信息，供审核界面展示来源；支持按 标题/评分/状态/时长/创建时间 排序。
     /// </summary>
+    /// <param name="sort">排序字段：created（默认）/ title / score / status / duration。</param>
+    /// <param name="order">排序方向：desc（默认）/ asc。</param>
+    /// <param name="db">数据库上下文。</param>
+    /// <param name="fulfillmentOptions">点歌履约配置（用于附带可发布信息）。</param>
+    /// <param name="status">条目状态过滤，空表示全部。</param>
+    /// <param name="q">关键词：匹配曲名 / 艺人 / 专辑 / 源文件名，空表示不过滤。</param>
+    /// <param name="page">页码，默认 1。</param>
+    /// <param name="pageSize">每页条数，1~1000，默认 20。</param>
+    /// <param name="cancellationToken">请求取消令牌。</param>
     [HttpGet("import-items", Name = "ListLibraryImportItems")]
     public async Task<IResult> ListItems(
         ISqlSugarClient db,
         IOptions<SongRequestFulfillmentOptions> fulfillmentOptions,
         [FromQuery] string? status,
+        [FromQuery] string? q,
+        [FromQuery] string? sort,
+        [FromQuery] string? order,
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 20,
         CancellationToken cancellationToken = default)
     {
         page = Math.Clamp(page, 1, 1000);
-        pageSize = Math.Clamp(pageSize, 1, 100);
+        pageSize = Math.Clamp(pageSize, 1, 1000);
         var query = db.Queryable<LibraryImportItem>().Where(item => !item.IsDeleted);
         if (!string.IsNullOrWhiteSpace(status))
             query = query.Where(item => item.Status == status);
+        if (!string.IsNullOrWhiteSpace(q))
+        {
+            var term = q.Trim();
+            query = query.Where(item =>
+                (item.Title != null && item.Title.Contains(term)) ||
+                (item.AlbumTitle != null && item.AlbumTitle.Contains(term)) ||
+                item.ArtistsJson.Contains(term) ||
+                item.DisplayName.Contains(term));
+        }
         var total = await query.CountAsync(cancellationToken);
+        var ascending = string.Equals(order, "asc", StringComparison.OrdinalIgnoreCase);
+        // 空值（未评分/无标题）统一排在末尾：先按是否存在排序，再按字段排序。
+        query = sort?.ToLowerInvariant() switch
+        {
+            "title" => ascending
+                ? query.OrderBy(item => item.Title == null).OrderBy(item => item.Title)
+                : query.OrderBy(item => item.Title == null).OrderByDescending(item => item.Title),
+            "score" => ascending
+                ? query.OrderBy(item => item.AutoScore == null).OrderBy(item => item.AutoScore)
+                : query.OrderBy(item => item.AutoScore == null).OrderByDescending(item => item.AutoScore),
+            "status" => ascending
+                ? query.OrderBy(item => item.Status)
+                : query.OrderByDescending(item => item.Status),
+            "duration" => ascending
+                ? query.OrderBy(item => item.DurationMs == null).OrderBy(item => item.DurationMs)
+                : query.OrderBy(item => item.DurationMs == null).OrderByDescending(item => item.DurationMs),
+            _ => ascending
+                ? query.OrderBy(item => item.CreatedAtUtc)
+                : query.OrderByDescending(item => item.CreatedAtUtc),
+        };
         var items = await query
-            .OrderByDescending(item => item.CreatedAtUtc)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
             .ToListAsync(cancellationToken);
@@ -818,7 +923,49 @@ public sealed class LibraryImportController : ControllerBase
         AsUtc(item.CreatedAtUtc),
         AsUtc(item.UpdatedAtUtc),
         item.SongRequestId,
-        BuildMatch(item, request, options));
+        BuildMatch(item, request, options),
+        item.AutoScore,
+        // autoPublished：本记录是自动发布的（Published 且 SourceProvider != null 且 MetadataReviewed 在直通路径上被标记）
+        item.Status == LibraryImportItemStatuses.Published && item.MetadataReviewed,
+        ParseBreakdown(item.AutoScoreBreakdownJson));
+
+    /// <summary>把 AutoScoreBreakdownJson 解析成强类型 DTO；JSON 缺失或不完整时返回 null。</summary>
+    private static ImportScoreBreakdownDto? ParseBreakdown(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            // 兼容两种命名：早期写入的 PascalCase（SourceScoreDimension 直接序列化）与 camelCase。
+            static bool TryGet(JsonElement el, string camelName, out JsonElement value)
+            {
+                if (el.TryGetProperty(camelName, out value)) return true;
+                var pascal = char.ToUpperInvariant(camelName[0]) + camelName[1..];
+                return el.TryGetProperty(pascal, out value);
+            }
+
+            if (!TryGet(root, "total", out var total)) return null;
+
+            static ScoreSegmentDto? ReadSeg(JsonElement root, string name)
+            {
+                if (!TryGet(root, name, out var seg)) return null;
+                return new ScoreSegmentDto(
+                    TryGet(seg, "score", out var s) ? s.GetDouble() : 0,
+                    TryGet(seg, "maxScore", out var m) ? m.GetDouble() : 0,
+                    TryGet(seg, "reason", out var r) ? r.GetString() ?? string.Empty : string.Empty);
+            }
+
+            var quality = ReadSeg(root, "quality");
+            var metadata = ReadSeg(root, "metadata");
+            var lyrics = ReadSeg(root, "lyrics");
+            if (quality is null || metadata is null || lyrics is null) return null;
+
+            return new ImportScoreBreakdownDto(total.GetDouble(), quality, metadata, lyrics);
+        }
+        catch { return null; }
+    }
 
     /// <summary>
     /// 读取时计算「待上架曲目」与「目标需求」的匹配结果：元数据被修正后提示立即刷新，

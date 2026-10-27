@@ -75,8 +75,18 @@ public interface IMusicSourceProvider
     Task<SourceDownloadInfo> ResolveDownloadAsync(string providerTrackId, CancellationToken cancellationToken);
 }
 
-/// <summary>音源平台不可用或目标曲目不可下载。</summary>
+/// <summary>平台不可用或曲目不可下载时抛出。</summary>
 public sealed class SourceUnavailableException(string message) : Exception(message);
+
+/// <summary>
+/// 支持「按音质从高到低」逐档尝试的音源（如酷我：无损 → 有损）。
+/// 下载编排层会依次尝试候选，直到某档下载落地的文件通过有效性校验（时长匹配）为止。
+/// </summary>
+public interface IQualityLadderProvider
+{
+    /// <summary>按音质从高到低返回候选下载信息；全部不可用时抛出 <see cref="SourceUnavailableException"/>。</summary>
+    Task<IReadOnlyList<SourceDownloadInfo>> ResolveDownloadCandidatesAsync(string providerTrackId, CancellationToken cancellationToken);
+}
 
 /// <summary>provider 自下载结果：最终落地的音频文件与容器格式。</summary>
 /// <param name="FilePath">音频文件绝对路径（由调用方负责归属到隔离区存储键）。</param>

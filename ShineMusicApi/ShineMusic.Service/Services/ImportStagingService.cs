@@ -7,8 +7,8 @@ using System.Security.Cryptography;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
 using ShineMusic.Model.Entities;
-using ShineMusic.Repository.Data;
 using ShineMusic.Model.Options;
+using ShineMusic.Repository.Data;
 
 namespace ShineMusic.Service;
 

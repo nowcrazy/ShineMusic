@@ -317,7 +317,7 @@ public sealed class InvitationController : ControllerBase
     /// <summary>把 DateTime 的 Kind 显式指定为 Utc，保证序列化为带 Z 的 ISO 时间。</summary>
     private static DateTime AsUtc(DateTime value) => DateTime.SpecifyKind(value, DateTimeKind.Utc);
 
-    /// <summary>解析并校验分页参数：page 默认 1 且 ≥1；pageSize 默认 20，范围 1~100。</summary>
+    /// <summary>解析并校验分页参数：page 默认 1 且 ≥1；pageSize 默认 20，范围 1~1000。</summary>
     /// <param name="ctx">DI 上下文，用于构造错误响应。</param>
     /// <param name="page">查询字符串 page。</param>
     /// <param name="pageSize">查询字符串 pageSize。</param>
@@ -332,8 +332,8 @@ public sealed class InvitationController : ControllerBase
         error = null;
         if (pageNumber < 1)
             error = ApiResults.ValidationError(ctx, "page", "page must be at least 1.");
-        else if (size is < 1 or > 100)
-            error = ApiResults.ValidationError(ctx, "pageSize", "pageSize must be between 1 and 100.");
+        else if (size is < 1 or > 1000)
+            error = ApiResults.ValidationError(ctx, "pageSize", "pageSize must be between 1 and 1000.");
         return error is null;
     }
 

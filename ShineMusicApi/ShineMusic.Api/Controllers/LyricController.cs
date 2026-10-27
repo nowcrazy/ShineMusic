@@ -4,9 +4,9 @@
 
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ShineMusic.Api.Extensions;
 using ShineMusic.Model.Contracts;
 using ShineMusic.Model.Entities;
-using ShineMusic.Api.Extensions;
 using ShineMusic.Service;
 using SqlSugar;
 

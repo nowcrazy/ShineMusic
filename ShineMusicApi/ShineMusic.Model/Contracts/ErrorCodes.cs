@@ -103,4 +103,8 @@ public static class ErrorCodes
     public const string SourceDownloadFailed = "source_download_failed";
     /// <summary>同一音频内容已在曲库或导入队列中，无需重复抓取。</summary>
     public const string SourceDuplicate = "source_duplicate";
+
+    // ===== 上游依赖（Upstream） =====
+    /// <summary>上游依赖服务不可达（如 RabbitMQ Management API 未启用或网络不通），区别于本服务内部错误。</summary>
+    public const string UpstreamUnavailable = "upstream_unavailable";
 }

@@ -40,16 +40,16 @@ public sealed class RabbitMessageBus(
     IOptions<RabbitOptions> options,
     ILogger<RabbitMessageBus> logger) : IRabbitMessageBus, IAsyncDisposable
 {
-    private readonly SemaphoreSlim connectionLock = new(1, 1);
-    private readonly SemaphoreSlim publishLock = new(1, 1);
-    private IConnection? connection;
-    private IChannel? publishChannel;
+    private readonly SemaphoreSlim _connectionLock = new(1, 1);
+    private readonly SemaphoreSlim _publishLock = new(1, 1);
+    private IConnection? _connection;
+    private IChannel? _publishChannel;
 
     /// <inheritdoc />
     public async Task PublishAsync(string queue, Guid id, CancellationToken cancellationToken = default)
     {
         var body = Encoding.UTF8.GetBytes(id.ToString("N"));
-        await publishLock.WaitAsync(cancellationToken);
+        await _publishLock.WaitAsync(cancellationToken);
         try
         {
             var channel = await GetPublishChannelAsync(cancellationToken);
@@ -58,15 +58,23 @@ public sealed class RabbitMessageBus(
         }
         finally
         {
-            publishLock.Release();
+            _publishLock.Release();
         }
     }
 
-    /// <summary>为消费方创建独立通道（已声明队列并设置 prefetch）。</summary>
+    /// <summary>
+    /// 为消费方创建独立通道（已声明队列并设置 prefetch）。
+    /// 同时把 ConsumerDispatchConcurrency 设为 prefetch，使预取数真正代表本通道的并行处理上限；
+    /// 默认值 1 时整条通道逐条串行处理（预取只做缓冲）。
+    /// </summary>
     public async Task<IChannel> CreateChannelAsync(string queue, ushort prefetch, CancellationToken cancellationToken)
     {
         var current = await GetConnectionAsync(cancellationToken);
-        var channel = await current.CreateChannelAsync(cancellationToken: cancellationToken);
+        var channelOptions = new CreateChannelOptions(
+            publisherConfirmationsEnabled: false,
+            publisherConfirmationTrackingEnabled: false,
+            consumerDispatchConcurrency: prefetch);
+        var channel = await current.CreateChannelAsync(channelOptions, cancellationToken);
         await DeclareQueueAsync(channel, queue, cancellationToken);
         await channel.BasicQosAsync(0, prefetch, false, cancellationToken);
         return channel;
@@ -78,26 +86,26 @@ public sealed class RabbitMessageBus(
 
     private async Task<IChannel> GetPublishChannelAsync(CancellationToken cancellationToken)
     {
-        if (publishChannel is { IsOpen: true })
-            return publishChannel;
-        if (publishChannel is not null)
-            await publishChannel.DisposeAsync();
+        if (_publishChannel is { IsOpen: true })
+            return _publishChannel;
+        if (_publishChannel is not null)
+            await _publishChannel.DisposeAsync();
         var current = await GetConnectionAsync(cancellationToken);
-        publishChannel = await current.CreateChannelAsync(cancellationToken: cancellationToken);
-        await DeclareQueueAsync(publishChannel, QueueNames.Downloads, cancellationToken);
-        await DeclareQueueAsync(publishChannel, QueueNames.Imports, cancellationToken);
-        return publishChannel;
+        _publishChannel = await current.CreateChannelAsync(cancellationToken: cancellationToken);
+        await DeclareQueueAsync(_publishChannel, QueueNames.Downloads, cancellationToken);
+        await DeclareQueueAsync(_publishChannel, QueueNames.Imports, cancellationToken);
+        return _publishChannel;
     }
 
     private async Task<IConnection> GetConnectionAsync(CancellationToken cancellationToken)
     {
-        if (connection is { IsOpen: true })
-            return connection;
-        await connectionLock.WaitAsync(cancellationToken);
+        if (_connection is { IsOpen: true })
+            return _connection;
+        await _connectionLock.WaitAsync(cancellationToken);
         try
         {
-            if (connection is { IsOpen: true })
-                return connection;
+            if (_connection is { IsOpen: true })
+                return _connection;
             var rabbit = options.Value;
             var factory = new ConnectionFactory
             {
@@ -109,24 +117,24 @@ public sealed class RabbitMessageBus(
                 // 单连接多路复用：下载/导入两个消费通道共享，并发上限给足两者的和。
                 ConsumerDispatchConcurrency = 8
             };
-            connection = await factory.CreateConnectionAsync(cancellationToken);
+            _connection = await factory.CreateConnectionAsync(cancellationToken);
             logger.LogInformation("RabbitMQ connection established to {HostName}:{Port}.", rabbit.HostName, rabbit.Port);
-            return connection;
+            return _connection;
         }
         finally
         {
-            connectionLock.Release();
+            _connectionLock.Release();
         }
     }
 
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
-        if (publishChannel is not null)
-            await publishChannel.DisposeAsync();
-        if (connection is not null)
-            await connection.DisposeAsync();
-        connectionLock.Dispose();
-        publishLock.Dispose();
+        if (_publishChannel is not null)
+            await _publishChannel.DisposeAsync();
+        if (_connection is not null)
+            await _connection.DisposeAsync();
+        _connectionLock.Dispose();
+        _publishLock.Dispose();
     }
 }

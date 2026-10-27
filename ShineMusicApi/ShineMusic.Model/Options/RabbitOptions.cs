@@ -15,6 +15,9 @@ public sealed class RabbitOptions
     /// <summary>AMQP 端口。</summary>
     public int Port { get; set; } = 5672;
 
+    /// <summary>Management HTTP API 端口（管理后台队列监控用；需启用 rabbitmq_management 插件）。</summary>
+    public int ManagementPort { get; set; } = 15672;
+
     /// <summary>用户名。</summary>
     public string UserName { get; set; } = "guest";
 

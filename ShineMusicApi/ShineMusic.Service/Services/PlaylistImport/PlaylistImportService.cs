@@ -4,8 +4,8 @@
 
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using ShineMusic.Model.Entities;
 using ShineMusic.Model.Contracts;
+using ShineMusic.Model.Entities;
 using ShineMusic.Service.SourceDownload;
 using SqlSugar;
 
@@ -30,6 +30,15 @@ public sealed record PlaylistParsePreview(
 
 /// <summary>导入结果汇总。</summary>
 public sealed record PlaylistImportResult(Guid PlaylistId, int Total, int Matched, int Pending);
+
+/// <summary>重新补齐结果：转正 / 重建任务 / 仍无音源 / 保持不动 的分项数量。</summary>
+public sealed record PlaylistRematchResult(
+    Guid PlaylistId,
+    int Total,
+    int Promoted,
+    int Retried,
+    int NoSource,
+    int Unchanged);
 
 /// <summary>歌单导入编排服务。</summary>
 public sealed partial class PlaylistImportService(
@@ -362,6 +371,64 @@ public sealed partial class PlaylistImportService(
             SortOrder = sortOrder,
             AddedAtUtc = DateTime.UtcNow
         }).ExecuteCommandAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// 重新补齐歌单的待处理曲目：对 pending / no_source / failed 以及「下载任务已丢失」的 downloading 行重跑匹配——
+    /// 先按标题+艺人+时长匹配曲库直接转正，否则重新搜索酷我音源并重建下载任务。
+    /// 单曲失败不阻塞后续；逐条节流 250ms，避开音源平台搜索限流（批量导入时一次性打 200+ 请求容易触发）。
+    /// </summary>
+    public async Task<PlaylistRematchResult> RematchPendingAsync(Guid playlistId, CancellationToken cancellationToken)
+    {
+        var playlist = await db.Queryable<UserPlaylist>()
+            .FirstAsync(candidate => candidate.Id == playlistId, cancellationToken)
+            ?? throw new InvalidOperationException("歌单不存在。");
+        var pendings = await db.Queryable<UserPlaylistPendingTrack>()
+            .Where(item => item.PlaylistId == playlistId)
+            .OrderBy(item => item.SortOrder)
+            .ToListAsync(cancellationToken);
+
+        int promoted = 0, retried = 0, noSource = 0, unchanged = 0;
+        foreach (var pending in pendings)
+        {
+            // 下载中的行：任务仍在流水线就保持不动；任务已被删除则视为丢失，重新匹配。
+            if (pending.Status == PendingStatuses.Downloading && pending.DownloadTaskId is { } taskId)
+            {
+                var alive = await db.Queryable<ExternalDownloadTask>()
+                    .AnyAsync(candidate => candidate.Id == taskId, cancellationToken);
+                if (alive)
+                {
+                    unchanged++;
+                    continue;
+                }
+            }
+
+            var artists = DeserializeArtists(pending.ArtistsJson);
+            var matched = await MatchLibraryAsync(pending.Title, artists, pending.DurationMs, cancellationToken);
+            if (matched.HasValue)
+            {
+                await PromotePendingAsync(pending, matched.Value, cancellationToken);
+                promoted++;
+                continue;
+            }
+
+            pending.DownloadTaskId = null;
+            pending.Status = PendingStatuses.Pending;
+            pending.UpdatedAtUtc = DateTime.UtcNow;
+            var track = new ParsedPlaylistTrack(
+                pending.Title, artists, pending.AlbumTitle, pending.DurationMs, pending.SourceTrackId, pending.SourceUrl);
+            await TryStartSilentDownloadAsync(pending, track, playlist.UserId, cancellationToken);
+            await db.Updateable(pending).ExecuteCommandAsync(cancellationToken);
+            if (pending.Status == PendingStatuses.Downloading)
+                retried++;
+            else if (pending.Status == PendingStatuses.NoSource)
+                noSource++;
+            else
+                unchanged++;
+            await Task.Delay(250, cancellationToken);
+        }
+
+        return new PlaylistRematchResult(playlistId, pendings.Count, promoted, retried, noSource, unchanged);
     }
 
     /// <summary>更新 pending 行状态。</summary>

@@ -12,9 +12,9 @@
 // =============================================================================
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ShineMusic.Api.Extensions;
 using ShineMusic.Model.Contracts;
 using ShineMusic.Model.Entities;
-using ShineMusic.Api.Extensions;
 using SqlSugar;
 
 namespace ShineMusic.Api.Controllers;
@@ -156,9 +156,9 @@ public sealed class FollowController : ControllerBase
         if (pageNumber < 1)
             error = Results.BadRequest(
                 new ApiErrorResponse(new ApiErrorDetail(ErrorCodes.ValidationError, "page: page must be at least 1.", string.Empty)));
-        else if (size < 1 || size > 100)
+        else if (size < 1 || size > 1000)
             error = Results.BadRequest(
-                new ApiErrorResponse(new ApiErrorDetail(ErrorCodes.ValidationError, "pageSize: pageSize must be between 1 and 100.", string.Empty)));
+                new ApiErrorResponse(new ApiErrorDetail(ErrorCodes.ValidationError, "pageSize: pageSize must be between 1 and 1000.", string.Empty)));
         return error is null;
     }
 }

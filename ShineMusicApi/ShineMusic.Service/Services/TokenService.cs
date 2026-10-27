@@ -11,8 +11,8 @@ using System.Text;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using ShineMusic.Model.Entities;
-using ShineMusic.Repository.Data;
 using ShineMusic.Model.Options;
+using ShineMusic.Repository.Data;
 
 namespace ShineMusic.Service;
 

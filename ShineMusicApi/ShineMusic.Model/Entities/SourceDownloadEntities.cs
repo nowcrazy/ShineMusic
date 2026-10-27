@@ -44,62 +44,78 @@ public sealed class ExternalDownloadTask
     public required string ProviderTrackId { get; set; }
 
     /// <summary>平台返回的曲目标题（创建任务时的快照，入库时预填给导入条目）。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? Title { get; set; }
 
     /// <summary>艺人列表快照，JSON 数组字符串。</summary>
+    [SugarColumn(ColumnDataType = "text")]
     public string ArtistsJson { get; set; } = "[]";
 
     /// <summary>专辑标题快照。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? AlbumTitle { get; set; }
 
     /// <summary>流派列表快照，JSON 数组字符串（入库预填时经 GenreMoodMapper 映射为中文 mood）。</summary>
+    [SugarColumn(ColumnDataType = "text")]
     public string GenresJson { get; set; } = "[]";
 
     /// <summary>时长（毫秒）快照。</summary>
+    [SugarColumn(IsNullable = true)]
     public long? DurationMs { get; set; }
 
     /// <summary>音质等级快照：lossless（有无损原文件）/ high（≥256k）/ standard。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? Quality { get; set; }
 
     /// <summary>曲目许可信息（如 CC-BY、CC0 等，来自平台）。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? License { get; set; }
 
     /// <summary>曲目在音源平台的页面链接（溯源/试听用）。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? SourcePageUrl { get; set; }
 
     /// <summary>封面图 URL（平台 CDN 地址，下载阶段拉取落隔离区）。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? CoverUrl { get; set; }
 
     /// <summary>任务状态，取值见 <see cref="ExternalDownloadTaskStatuses"/>。</summary>
     public string Status { get; set; } = ExternalDownloadTaskStatuses.Queued;
 
     /// <summary>导入流水线完成后的自动评分（0-100）；未评分为 null。</summary>
+    [SugarColumn(IsNullable = true)]
     public int? AutoScore { get; set; }
 
     /// <summary>是否因评分达标被自动直通入库（false 表示转人工审核或未处理完）。</summary>
     public bool AutoPublished { get; set; }
 
     /// <summary>失败错误码（机器可读）。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? ErrorCode { get; set; }
 
     /// <summary>面向用户的脱敏错误信息。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? ErrorMessage { get; set; }
 
     /// <summary>自动重试已发生的次数（失败时按 30s/2min/10min 指数退避重排队，达 3 次才转 failed 终态）。</summary>
     public int AutoRetryCount { get; set; }
 
     /// <summary>下次自动重试的最早时间（UTC）；null 表示立即可被拾取。仅 queued 状态下有意义。</summary>
+    [SugarColumn(IsNullable = true, ColumnDataType = "timestamptz")]
     public DateTime? NextRetryAtUtc { get; set; }
 
     /// <summary>移交导入流水线后关联的导入条目 Id（跳转审核页用）。</summary>
+    [SugarColumn(IsNullable = true)]
     public Guid? ImportItemId { get; set; }
 
     /// <summary>发起任务的管理员用户 Id。</summary>
     public Guid CreatedByUserId { get; set; }
 
     /// <summary>任务创建时间（UTC）。</summary>
+    [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 
     /// <summary>最近状态/字段更新时间（UTC）。</summary>
+    [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
 }

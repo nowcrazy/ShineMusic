@@ -73,8 +73,10 @@ const taskLoading = ref(false)
 const tasks = ref<ExternalDownloadTask[]>([])
 const taskTotal = ref(0)
 const taskPage = ref(1)
-const taskPageSize = ref(20)
+const taskPageSize = ref(100)
 const taskStatus = ref('')
+/** 任务关键词：服务端匹配曲名 / 艺人 / 专辑。 */
+const taskKeyword = ref('')
 
 const selectedProvider = () => selected.value[0]?.provider ?? null
 
@@ -130,7 +132,12 @@ async function downloadSelected() {
 async function loadTasks() {
   taskLoading.value = true
   try {
-    const result = await getDownloadTasks(taskStatus.value || undefined, taskPage.value, taskPageSize.value)
+    const result = await getDownloadTasks(
+      taskStatus.value || undefined,
+      taskPage.value,
+      taskPageSize.value,
+      taskKeyword.value.trim() || undefined,
+    )
     tasks.value = [...result.items]
     taskTotal.value = result.total
   } catch (error) {
@@ -258,6 +265,17 @@ onMounted(loadTasks)
     <div class="panel">
       <div class="panel-title">
         下载任务
+        <el-input
+          v-model="taskKeyword"
+          placeholder="搜索曲名 / 艺人 / 专辑"
+          size="small"
+          clearable
+          class="task-keyword"
+          @keyup.enter="changeTaskFilter"
+          @clear="changeTaskFilter"
+        >
+          <template #prefix><el-icon><Search /></el-icon></template>
+        </el-input>
         <el-select v-model="taskStatus" style="width: 150px" size="small" placeholder="全部状态" @change="changeTaskFilter">
           <el-option v-for="option in taskStatusOptions" :key="option.value" :label="option.label" :value="option.value" />
         </el-select>
@@ -315,7 +333,7 @@ onMounted(loadTasks)
           v-model:current-page="taskPage"
           v-model:page-size="taskPageSize"
           :total="taskTotal"
-          :page-sizes="[20, 50, 100]"
+          :page-sizes="[100, 150, 200, 500, 1000]"
           layout="total, sizes, prev, pager, next"
           @current-change="loadTasks"
           @size-change="changeTaskFilter"
@@ -329,6 +347,11 @@ onMounted(loadTasks)
 .provider-errors {
   margin-top: 14px;
   font-size: 12px;
+}
+
+.task-keyword {
+  width: 240px;
+  margin-left: 12px;
 }
 
 .title-cell {

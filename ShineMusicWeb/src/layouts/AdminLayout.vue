@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 管理后台主布局：左侧固定导航 + 顶部面包屑与账号菜单 + 右侧内容区。
+ * 管理后台主布局：左侧固定导航 + 顶部访问标签条与账号菜单 + 右侧内容区。
  */
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -8,14 +8,17 @@ import { ElMessageBox, ElMessage } from 'element-plus'
 import {
   ArrowDown,
   ChatDotRound,
+  Close,
   Coin,
   Collection,
   Document,
   Download,
   EditPen,
+  Bell,
   Expand,
   Fold,
   Headset,
+  HomeFilled,
   Key,
   Link,
   Odometer,
@@ -47,6 +50,7 @@ const menuItems = [
   { path: '/source-download', label: '音源抓歌', icon: Download },
   { path: '/playlist-import', label: '歌单解析', icon: Link },
   { path: '/storage', label: '存储治理', icon: Coin },
+  { path: '/mq', label: '消息队列', icon: Bell },
 ]
 
 const userName = computed(() => currentUser.value?.displayName || currentUser.value?.email || '管理员')
@@ -66,6 +70,13 @@ watch(
 
 function goBreadcrumb(path: string) {
   if (path !== route.path) void router.push(path)
+}
+
+/** 关闭面包屑：调用 store 移除对应条目；如果关的是当前页则自动跳回前一条。 */
+function closeBreadcrumb(path: string, e: MouseEvent) {
+  e.stopPropagation()
+  const jumpTarget = store.closeBreadcrumb(path, route.path)
+  if (jumpTarget && jumpTarget !== route.path) void router.push(jumpTarget)
 }
 
 // ---------------------------------------------------------------------------
@@ -237,17 +248,36 @@ async function handleLogout() {
               <Fold v-else />
             </el-icon>
           </el-button>
-          <el-breadcrumb separator="/" class="breadcrumb">
-            <el-breadcrumb-item>管理后台</el-breadcrumb-item>
-            <el-breadcrumb-item v-for="item in store.breadcrumbs" :key="item.path">
-              <a
-                class="crumb-link"
-                :class="{ active: item.path === route.path }"
-                @click="goBreadcrumb(item.path)"
-                >{{ item.title }}</a
+          <nav class="tabstrip" aria-label="页面标签">
+            <button
+              type="button"
+              class="tab home"
+              :class="{ active: route.path === '/dashboard' }"
+              @click="goBreadcrumb('/dashboard')"
+            >
+              <el-icon :size="14"><HomeFilled /></el-icon>
+              <span class="tab-label">管理后台</span>
+            </button>
+            <button
+              v-for="item in store.breadcrumbs"
+              :key="item.path"
+              type="button"
+              class="tab"
+              :class="{ active: item.path === route.path }"
+              :title="item.title"
+              @click="goBreadcrumb(item.path)"
+            >
+              <span class="tab-label">{{ item.title }}</span>
+              <el-icon
+                class="tab-close"
+                :size="12"
+                title="关闭此标签"
+                @click="closeBreadcrumb(item.path, $event)"
               >
-            </el-breadcrumb-item>
-          </el-breadcrumb>
+                <Close />
+              </el-icon>
+            </button>
+          </nav>
         </div>
 
         <el-dropdown trigger="click">
@@ -455,33 +485,82 @@ async function handleLogout() {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: 1;
+  min-width: 0;
 }
 
 .collapse-btn {
   padding: 6px;
   color: var(--adm-text-2);
+  flex: none;
 }
 
-.breadcrumb {
-  max-width: 56vw;
+/* 访问记录标签条：单行横向滚动，不再换行堆叠成多行面包屑 */
+.tabstrip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 62vw;
   overflow-x: auto;
-  white-space: nowrap;
+  scrollbar-width: none;
 }
 
-.crumb-link {
-  color: inherit;
+.tabstrip::-webkit-scrollbar {
+  display: none;
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  max-width: 168px;
+  padding: 4px 10px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--adm-text-2);
+  font-size: 13px;
+  line-height: 1.5;
   cursor: pointer;
-  text-decoration: none;
+  transition: background 0.15s, color 0.15s;
 }
 
-.crumb-link:hover {
+.tab:hover {
+  background: #f3f5f8;
   color: var(--adm-primary);
 }
 
-.crumb-link.active {
-  color: var(--adm-text);
+.tab.active {
+  background: var(--adm-primary-soft);
+  color: var(--adm-primary);
   font-weight: 600;
-  cursor: default;
+}
+
+.tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-close {
+  opacity: 0;
+  margin-left: 2px;
+  padding: 1px;
+  border-radius: 50%;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.tab:hover .tab-close,
+.tab.active .tab-close {
+  opacity: 0.55;
+}
+
+.tab-close:hover {
+  opacity: 1;
+  color: var(--adm-danger);
+  background: rgba(220, 90, 69, 0.12);
 }
 
 .account {

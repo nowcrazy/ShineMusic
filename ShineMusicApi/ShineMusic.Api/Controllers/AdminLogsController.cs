@@ -30,7 +30,7 @@ public sealed class AdminLogsController : ControllerBase
         ISqlSugarClient db)
     {
         page = page <= 0 ? 1 : page;
-        pageSize = pageSize is <= 0 or > 100 ? 20 : pageSize;
+        pageSize = pageSize is <= 0 or > 1000 ? 20 : pageSize;
 
         var queryable = db.Queryable<LoginAuditEntry>();
         if (result is "success" or "failure")
@@ -67,7 +67,7 @@ public sealed class AdminLogsController : ControllerBase
         ISqlSugarClient db)
     {
         page = page <= 0 ? 1 : page;
-        pageSize = pageSize is <= 0 or > 100 ? 20 : pageSize;
+        pageSize = pageSize is <= 0 or > 1000 ? 20 : pageSize;
 
         var queryable = db.Queryable<AdminAuditEntry>();
         if (!string.IsNullOrWhiteSpace(query))

@@ -5,7 +5,7 @@
  * - 「曲目文件」按曲目分组聚合音频与封面，展开可查看/预览每个文件；
  * - 图片（封面）支持查看大图，音频支持在线试听，孤儿文件同样可预览。
  */
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, Folder, Headset, Picture, Refresh, Search, View } from '@element-plus/icons-vue'
 import { cleanupStorage, fetchStorageFileBlob, getStorageAudit } from '@/services/admin-storage'
@@ -23,8 +23,8 @@ const activeTab = ref<TabName>('groups')
 const groupPage = ref(1)
 const orphanPage = ref(1)
 const missingPage = ref(1)
-const listPageSize = 15
-const groupPageSize = 10
+const listPageSize = ref(100)
+const groupPageSize = ref(100)
 
 /** 取存储键顶层目录（original/、artwork/ 等），无目录归入 (根)。 */
 function topDir(key: string) {
@@ -54,6 +54,7 @@ const metrics = computed(() => {
   const data = audit.value
   if (!data) return []
   return [
+    { label: '在库歌曲', value: data.trackCount, hint: '每首对应原件 · 播放件 · 封面', tab: 'groups' as TabName },
     { label: '数据库引用文件', value: data.referencedFileCount, hint: '曲目音频、封面等登记在库的文件', tab: 'groups' as TabName },
     { label: '磁盘文件', value: data.diskFileCount, hint: '存储目录中实际存在的文件', tab: 'groups' as TabName },
     { label: '缺失文件', value: data.missingFileCount, hint: '库中有记录但磁盘不存在', tone: data.missingFileCount > 0 ? 'danger' : '', tab: 'missing' as TabName },
@@ -78,7 +79,7 @@ const filteredGroups = computed(() => {
 })
 
 const groupPageRows = computed(() =>
-  filteredGroups.value.slice((groupPage.value - 1) * groupPageSize, groupPage.value * groupPageSize))
+  filteredGroups.value.slice((groupPage.value - 1) * groupPageSize.value, groupPage.value * groupPageSize.value))
 
 function groupKeyOf(group: ApiStorageFileGroup) {
   return group.trackId ?? '__other__'
@@ -120,9 +121,9 @@ const filteredMissing = computed(() => {
 })
 
 const orphanPageRows = computed(() =>
-  filteredOrphans.value.slice((orphanPage.value - 1) * listPageSize, orphanPage.value * listPageSize))
+  filteredOrphans.value.slice((orphanPage.value - 1) * listPageSize.value, orphanPage.value * listPageSize.value))
 const missingPageRows = computed(() =>
-  filteredMissing.value.slice((missingPage.value - 1) * listPageSize, missingPage.value * listPageSize))
+  filteredMissing.value.slice((missingPage.value - 1) * listPageSize.value, missingPage.value * listPageSize.value))
 
 const orphanGroups = computed(() => groupByDir(filteredOrphans.value))
 
@@ -193,7 +194,7 @@ function onPreviewClosed() {
   previewUrl.value = ''
 }
 
-/** 惰性加载曲目组的封面缩略图（展开行或点击封面占位时触发）。 */
+/** 加载曲目组的封面缩略图：列表页可见行在渲染时预取，展开行与点击封面时复用缓存。 */
 async function ensureCoverThumb(group: ApiStorageFileGroup) {
   const cover = coverFileOf(group)
   if (!cover) return
@@ -262,6 +263,15 @@ async function cleanup() {
 }
 
 onMounted(runAudit)
+
+/** 当前页的曲目行渲染后立即预取封面，避免列表默认显示空白占位。 */
+watch(
+  groupPageRows,
+  (rows) => {
+    for (const group of rows) void ensureCoverThumb(group)
+  },
+  { immediate: true },
+)
 
 onBeforeUnmount(() => {
   for (const url of ownedUrls) URL.revokeObjectURL(url)
@@ -438,9 +448,11 @@ onBeforeUnmount(() => {
             <div class="pagination">
               <el-pagination
                 v-model:current-page="groupPage"
-                :page-size="groupPageSize"
+                v-model:page-size="groupPageSize"
                 :total="filteredGroups.length"
-                layout="total, prev, pager, next"
+                :page-sizes="[100, 150, 200, 500, 1000]"
+                layout="total, sizes, prev, pager, next"
+                @size-change="groupPage = 1"
               />
             </div>
           </el-tab-pane>
@@ -492,9 +504,11 @@ onBeforeUnmount(() => {
             <div class="pagination">
               <el-pagination
                 v-model:current-page="orphanPage"
-                :page-size="listPageSize"
+                v-model:page-size="listPageSize"
                 :total="filteredOrphans.length"
-                layout="total, prev, pager, next"
+                :page-sizes="[100, 150, 200, 500, 1000]"
+                layout="total, sizes, prev, pager, next"
+                @size-change="orphanPage = 1"
               />
             </div>
           </el-tab-pane>
@@ -523,9 +537,11 @@ onBeforeUnmount(() => {
             <div class="pagination">
               <el-pagination
                 v-model:current-page="missingPage"
-                :page-size="listPageSize"
+                v-model:page-size="listPageSize"
                 :total="filteredMissing.length"
-                layout="total, prev, pager, next"
+                :page-sizes="[100, 150, 200, 500, 1000]"
+                layout="total, sizes, prev, pager, next"
+                @size-change="missingPage = 1"
               />
             </div>
             <p class="text-faint list-tip">缺失文件说明数据库仍有引用但磁盘已丢失，需人工核查或从备份恢复。</p>

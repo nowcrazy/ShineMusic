@@ -217,7 +217,7 @@ public sealed class SongRequestArchiveService(
     }
 }
 
-/// <summary>导入失败重扫定时器：每 5 分钟一轮。</summary>
+/// <summary>导入失败重扫定时器：每 15 秒一轮（开发调试期缩短，生产可改回 5 分钟）。</summary>
 public sealed class LibraryImportRetrySweepService(
     IServiceScopeFactory scopeFactory,
     ILogger<LibraryImportRetrySweepService> logger) : PeriodicJobService(scopeFactory, logger)

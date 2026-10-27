@@ -52,13 +52,10 @@ const eqPresetName = computed(() => t(`player.eqPresets.${state.eqPreset}`))
 const props = withDefaults(defineProps<{ withTabbar?: boolean }>(), { withTabbar: false })
 const bottomOffset = computed(() => `calc(env(safe-area-inset-bottom) + ${props.withTabbar ? 132 : 24}rpx)`)
 
-// 播放进度百分比（0-100），无总时长时按 0 处理
-const progress = computed(() => {
-  const total = state.currentTrack?.duration || 0
-  if (!total) return 0
-  return Math.min(100, (state.currentTime / total) * 100)
-})
-const elapsedLabel = computed(() => formatTime(state.currentTime))
+// 播放进度百分比（0-100），无总时长时按 0 处理；拖动中以手指位置为准
+const trackDuration = computed(() => state.currentTrack?.duration || 0)
+const progress = computed(() => (dragging.value ? dragFraction.value * 100 : ratioOf(state.currentTime)))
+const elapsedLabel = computed(() => formatTime(dragging.value ? dragSeconds.value : state.currentTime))
 const durationLabel = computed(() => formatTime(state.currentTrack?.duration ?? 0))
 const artistAlbumLabel = computed(() =>
   state.currentTrack?.album
@@ -495,33 +492,75 @@ function onArtTouchEnd(event: TouchEvent) {
   }
 }
 
-// —— 进度条拖动 seek：缓存进度条节点位置，按触点横坐标换算播放位置 ——
-let seekRect: { left: number; width: number } | null = null
+// —— 进度条拖动 seek：拖动期间只更新本地位置（滑块跟手），松手时才向引擎发起一次 seek ——
+// 关键：App 端 BackgroundAudioManager 在 touchmove 里被高频调用 seek() 会让原生播放器卡死
+// （进度不再前进、滑块被旧进度拽回），所以手势与媒体 seek 必须解耦。
+const dragging = ref(false) // 是否正在拖动进度条
+const dragFraction = ref(0) // 拖动位置（0~1），仅拖动期间有效
+const dragSeconds = computed(() => trackDuration.value * dragFraction.value)
+let seekRect: { left: number; width: number } | null = null // 进度条节点位置缓存
+let dragClientX = 0 // 最近一次触点横坐标
+let measuring = false // 是否正在测量进度条节点（避免重复查询）
 
-function fractionFromEvent(event: TouchEvent): number | null {
-  if (!seekRect || !event.changedTouches.length) return null
-  const x = event.changedTouches[0].clientX
-  return Math.min(1, Math.max(0, (x - seekRect.left) / seekRect.width))
+/** 秒数 → 进度百分比（0~100），无总时长时按 0 处理 */
+function ratioOf(seconds: number): number {
+  const total = trackDuration.value
+  if (!total) return 0
+  return Math.min(100, Math.max(0, (seconds / total) * 100))
 }
 
-function onSeekStart(event: TouchEvent) {
+/** 按触点横坐标更新拖动位置；节点位置未知时忽略 */
+function applyDragPoint(x: number) {
+  if (!seekRect || !(seekRect.width > 0)) return
+  dragFraction.value = Math.min(1, Math.max(0, (x - seekRect.left) / seekRect.width))
+}
+
+/** 测量进度条节点位置；完成后若仍在拖动，按最新触点重算（首次测量可能是异步的） */
+function measureSeekTrack() {
+  if (measuring) return
+  measuring = true
   uni
     .createSelectorQuery()
     .select('.seek-track')
     .boundingClientRect((rect) => {
+      measuring = false
       const nodeRect = Array.isArray(rect) ? rect[0] : rect
-      if (nodeRect && typeof nodeRect.left === 'number' && typeof nodeRect.width === 'number') {
-        seekRect = { left: nodeRect.left, width: nodeRect.width }
-        const fraction = fractionFromEvent(event)
-        if (fraction !== null && state.currentTrack) seek(state.currentTrack.duration * fraction)
-      }
+      if (!nodeRect || typeof nodeRect.left !== 'number' || typeof nodeRect.width !== 'number') return
+      seekRect = { left: nodeRect.left, width: nodeRect.width }
+      if (dragging.value) applyDragPoint(dragClientX)
     })
     .exec()
 }
 
+/** 取触点横坐标（touchstart/touchmove/touchend 的取值字段不同） */
+function touchX(event: TouchEvent): number | null {
+  const touch = event.changedTouches?.[0] ?? event.touches?.[0]
+  return touch ? touch.clientX : null
+}
+
+function onSeekStart(event: TouchEvent) {
+  if (!trackDuration.value) return
+  const x = touchX(event)
+  if (x === null) return
+  dragging.value = true
+  dragClientX = x
+  applyDragPoint(x)
+  measureSeekTrack()
+}
+
 function onSeekMove(event: TouchEvent) {
-  const fraction = fractionFromEvent(event)
-  if (fraction !== null && state.currentTrack) seek(state.currentTrack.duration * fraction)
+  if (!dragging.value) return
+  const x = touchX(event)
+  if (x === null) return
+  dragClientX = x
+  applyDragPoint(x)
+}
+
+/** 松手（或手势中断）：按最终位置跳转一次，避免高频 seek 卡住原生播放器 */
+function onSeekEnd() {
+  if (!dragging.value) return
+  dragging.value = false
+  if (trackDuration.value) seek(trackDuration.value * dragFraction.value)
 }
 </script>
 
@@ -625,9 +664,9 @@ function onSeekMove(event: TouchEvent) {
         <view v-for="(style, index) in barStyles" :key="index" class="vbar" :style="style"></view>
       </view>
 
-      <!-- 进度条：touchstart/touchmove 拖动 seek -->
+      <!-- 进度条：touchstart/touchmove 拖动跟手，touchend 时一次性 seek -->
       <view class="seek-area">
-        <view class="seek-track" @touchstart="onSeekStart" @touchmove="onSeekMove">
+        <view class="seek-track" @touchstart="onSeekStart" @touchmove="onSeekMove" @touchend="onSeekEnd" @touchcancel="onSeekEnd">
           <view :style="{ width: `${progress}%` }"></view>
           <view class="seek-knob" :style="{ left: `${progress}%` }"></view>
         </view>

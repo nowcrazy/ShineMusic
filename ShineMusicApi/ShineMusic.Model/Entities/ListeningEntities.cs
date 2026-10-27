@@ -47,9 +47,11 @@ public sealed class ListeningEvent
     public string EventType { get; set; } = ListeningEventTypes.Play;
 
     /// <summary>事件发生时的播放进度（毫秒）；用于判断“是否完整收听”等，可空。</summary>
+    [SugarColumn(IsNullable = true)]
     public long? PositionMs { get; set; }
 
     /// <summary>事件发生时间（UTC）。</summary>
+    [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime OccurredAtUtc { get; set; } = DateTime.UtcNow;
 }
 
@@ -91,9 +93,11 @@ public sealed class UserTrackFeedback
     public string Kind { get; set; } = UserFeedbackKinds.Like;
 
     /// <summary>首次反馈时间（UTC）。</summary>
+    [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 
     /// <summary>最近一次变更时间（UTC）。</summary>
+    [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
 }
 
@@ -120,5 +124,6 @@ public sealed class DailyRecommendationItem
     public int Rank { get; set; }
 
     /// <summary>生成时间（UTC）。</summary>
+    [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 }

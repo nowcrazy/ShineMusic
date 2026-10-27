@@ -3,15 +3,15 @@
 // 下载与入库的实际执行由 RabbitMQ 消费端（SourceDownloadJob + LibraryImportJob）完成。
 
 using System.Text.Json;
-using ShineMusic.Service.Messaging;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
+using ShineMusic.Api.Extensions;
 using ShineMusic.Model.Contracts;
 using ShineMusic.Model.Entities;
-using ShineMusic.Api.Extensions;
 using ShineMusic.Model.Options;
 using ShineMusic.Service;
+using ShineMusic.Service.Messaging;
 using ShineMusic.Service.SourceDownload;
 using SqlSugar;
 
@@ -130,22 +130,31 @@ public sealed class SourceDownloadController : ControllerBase
         }
     }
 
-    /// <summary>任务列表：按状态筛选 + 分页（默认按创建时间倒序）。</summary>
+    /// <summary>任务列表：按状态筛选 + 关键词（曲名/艺人/专辑）+ 分页（默认按创建时间倒序）。</summary>
     [HttpGet("tasks", Name = "ListSourceDownloadTasks")]
     public async Task<IResult> ListTasks(
         [FromQuery] string? status,
+        [FromQuery] string? q,
         [FromQuery] int? page,
         [FromQuery] int? pageSize,
         ISqlSugarClient db,
         CancellationToken cancellationToken)
     {
         var effectivePage = Math.Max(1, page ?? 1);
-        var effectivePageSize = Math.Clamp(pageSize ?? 20, 1, 100);
+        var effectivePageSize = Math.Clamp(pageSize ?? 20, 1, 1000);
         var query = db.Queryable<ExternalDownloadTask>();
         if (!string.IsNullOrWhiteSpace(status))
         {
             var normalized = status.Trim().ToLowerInvariant();
             query = query.Where(task => task.Status == normalized);
+        }
+        if (!string.IsNullOrWhiteSpace(q))
+        {
+            var term = q.Trim();
+            query = query.Where(task =>
+                (task.Title != null && task.Title.Contains(term)) ||
+                (task.AlbumTitle != null && task.AlbumTitle.Contains(term)) ||
+                task.ArtistsJson.Contains(term));
         }
         var total = await query.CountAsync(cancellationToken);
         var items = await query

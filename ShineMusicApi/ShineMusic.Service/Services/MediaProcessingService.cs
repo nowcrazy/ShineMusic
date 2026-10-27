@@ -16,8 +16,8 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ShineMusic.Model.Contracts;
 using ShineMusic.Model.Entities;
-using ShineMusic.Repository.Data;
 using ShineMusic.Model.Options;
+using ShineMusic.Repository.Data;
 
 namespace ShineMusic.Service;
 

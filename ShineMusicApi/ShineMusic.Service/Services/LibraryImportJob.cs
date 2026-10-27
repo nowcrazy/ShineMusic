@@ -11,11 +11,12 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
+using ShineMusic.Model.Contracts;
 using ShineMusic.Model.Entities;
 using ShineMusic.Model.Options;
 using ShineMusic.Repository.Data;
-using ShineMusic.Model.Contracts;
 using ShineMusic.Service.Messaging;
+using ShineMusic.Service.SourceDownload;
 using SqlSugar;
 
 namespace ShineMusic.Service;
@@ -632,48 +633,198 @@ public sealed class LibraryImportJob(
 }
 
 /// <summary>
-/// 转码/处理失败的自动重试扫描：把「processing_failed 且未达重试上限且错误码可重试」的条目
-/// 重置回 uploaded 并重新投递（计数 +1），覆盖 ffmpeg 抖动/资源竞争等瞬时失败场景。
-/// 由定时器每 5 分钟驱动（LibraryImportRetrySweepService）。
+/// 导入条目自动恢复扫描（每 5 分钟驱动）：
+///   1. processing_failed 且错误码可重试的条目（ffmpeg 抖动/资源竞争等瞬时失败），
+///      重置回 uploaded 并重新投递，最多重试 <see cref="MaxProcessingRetries"/> 次；
+///   2. validating / parsing_metadata / transcoding 中间态卡住超过 10 分钟的条目
+///      （进程重启/崩溃遗留），强制重置回 uploaded 并重新投递；
+/// 两类都覆盖「消息已投递但消费端在业务流程中崩溃」的场景，避免条目永远卡死。
+/// 注：Where 表达式里只用编译器内联的 const / 闭包局部变量；private static readonly 字段
+///     不能被 SqlSugar Expression 解析器访问，会抛 "Field can't be private"。
 /// </summary>
 public sealed class LibraryImportRetrySweepJob(
     ISqlSugarClient db,
     IRabbitMessageBus messageBus,
+    ImportPublishService publishService,
+    IOptions<SourceDownloadOptions> sourceDownloadOptions,
+    IOptions<LibraryImportOptions> libraryImportOptions,
     ILogger<LibraryImportRetrySweepJob> logger)
 {
-    /// <summary>转码/处理失败的自动重试上限（超出后停留在 processing_failed，需人工处理）。</summary>
+    /// <summary>processing_failed 的自动重试上限（超出后停留在 failed，需人工处理）。</summary>
     private const int MaxProcessingRetries = 2;
 
-    /// <summary>执行一轮失败条目扫描与重投递（定时器触发，单轮最多 20 条）。</summary>
-    /// <remarks>
-    /// 永久性失败错误码（unsupported_media_format / upload_too_large / resource_not_found /
-    /// duplicate_private_upload）重试不会改变结果，直接在查询条件中排除。
-    /// </remarks>
+    /// <summary>中间态卡住判定阈值（分钟）：超过此时间未推进视为进程异常中断。</summary>
+    private const int IntermediateStuckMinutes = 10;
+
+    /// <summary>自动发布兜底重试判定阈值（分钟）：降级为 pending_review 的高分条目，
+    /// 超过该时间未被发布 → 再次尝试自动 PublishAsync。</summary>
+    private const int AutoPublishStuckMinutes = 5;
+
+    /// <summary>每轮扫描的条目上限（避免瞬时批量投递压垮队列）。</summary>
+    private const int BatchLimit = 20;
+
+    /// <summary>执行一轮恢复扫描与重投递。</summary>
     public async Task SweepAsync(CancellationToken cancellationToken)
     {
-        var candidates = await db.Queryable<LibraryImportItem>()
+        var now = DateTime.UtcNow;
+        // 卡在 lambda 外预计算好 DateTime 阈值；SqlSugar 可解析闭包捕获的局部变量。
+        var stuckThreshold = now.AddMinutes(-IntermediateStuckMinutes);
+        var autoPublishStuckThreshold = now.AddMinutes(-AutoPublishStuckMinutes);
+
+        // ===== 1) processing_failed 可重试条目 =====
+        // 永久性失败错误码（unsupported / upload_too_large / resource_not_found / duplicate_private_upload）
+        // 重试不会改变结果，直接在 WHERE 中显式排除（不用 HashSet.Contains，SqlSugar 解析不了）。
+        var failedCandidates = await db.Queryable<LibraryImportItem>()
             .Where(item => item.Status == LibraryImportItemStatuses.ProcessingFailed
                 && item.ProcessingRetryCount < MaxProcessingRetries
-                && (item.ErrorCode == null ||
-                    (item.ErrorCode != ErrorCodes.UnsupportedMediaFormat &&
-                     item.ErrorCode != ErrorCodes.UploadTooLarge &&
-                     item.ErrorCode != ErrorCodes.ResourceNotFound &&
-                     item.ErrorCode != "duplicate_private_upload")))
+                && (item.ErrorCode == null
+                    || (item.ErrorCode != ErrorCodes.UnsupportedMediaFormat
+                        && item.ErrorCode != ErrorCodes.UploadTooLarge
+                        && item.ErrorCode != ErrorCodes.ResourceNotFound
+                        && item.ErrorCode != "duplicate_private_upload")))
             .OrderBy(item => item.UpdatedAtUtc)
-            .Take(20)
+            .Take(BatchLimit)
             .ToListAsync(cancellationToken);
-        foreach (var item in candidates)
+
+        // ===== 2) 中间态卡住条目（UpdatedAtUtc 距今超过阈值）=====
+        // 同样用显式 OR 枚举状态，不用 HashSet.Contains。
+        var stuckCandidates = await db.Queryable<LibraryImportItem>()
+            .Where(item =>
+                    (item.Status == LibraryImportItemStatuses.Validating
+                     || item.Status == LibraryImportItemStatuses.ParsingMetadata
+                     || item.Status == LibraryImportItemStatuses.Transcoding)
+                && item.UpdatedAtUtc < stuckThreshold)
+            .OrderBy(item => item.UpdatedAtUtc)
+            .Take(BatchLimit)
+            .ToListAsync(cancellationToken);
+
+        var totalRecovered = 0;
+
+        foreach (var item in failedCandidates)
         {
             item.Status = LibraryImportItemStatuses.Uploaded;
             item.TranscodeStatus = "queued";
             item.ErrorCode = null;
             item.ErrorMessage = null;
             item.ProcessingRetryCount++;
-            item.UpdatedAtUtc = DateTime.UtcNow;
+            item.UpdatedAtUtc = now;
             await db.Updateable(item).ExecuteCommandAsync(cancellationToken);
             await messageBus.PublishAsync(QueueNames.Imports, item.Id, cancellationToken);
-            logger.LogInformation("Import item {ImportItemId} re-queued for processing retry {Attempt}/{Max}.",
-                item.Id, item.ProcessingRetryCount, MaxProcessingRetries);
+            logger.LogInformation(
+                "Import item {ImportItemId} ({Status}) re-queued for processing retry {Attempt}/{Max}.",
+                item.Id, item.Status, item.ProcessingRetryCount, MaxProcessingRetries);
+            totalRecovered++;
+        }
+
+        foreach (var item in stuckCandidates)
+        {
+            var previousStatus = item.Status;
+            item.Status = LibraryImportItemStatuses.Uploaded;
+            item.TranscodeStatus = "queued";
+            item.ErrorCode = null;
+            item.ErrorMessage = null;
+            item.UpdatedAtUtc = now;
+            await db.Updateable(item).ExecuteCommandAsync(cancellationToken);
+            await messageBus.PublishAsync(QueueNames.Imports, item.Id, cancellationToken);
+            logger.LogInformation(
+                "Import item {ImportItemId} ({Status}) stuck for {Minutes}m > {Threshold}m; reset to uploaded and re-published.",
+                item.Id, previousStatus,
+                (int)(now - item.UpdatedAtUtc).TotalMinutes, IntermediateStuckMinutes);
+            totalRecovered++;
+        }
+
+        // ===== 3) 自动发布兜底：pending_review 但 AutoScore ≥ 阈值 且 转码成功 且 超过滞后期 =====
+        // 场景：ImportJob 的自动发布条件满足但 PublishAsync 当时失败（文件短暂不可用、瞬态错误），
+        // 降级为 pending_review；后续无人触发再次发布。这里周期重试，直到发布成功或耗尽重试机会。
+        // 注意：用户上传 (IsUserUpload=true) 不走此自动发布路径（需要人工审核）。
+        var srcThreshold = sourceDownloadOptions.Value.AutoPublishThreshold;
+        var libThreshold = libraryImportOptions.Value.AutoPublishThreshold;
+        var autoPublishCandidates = await db.Queryable<LibraryImportItem>()
+            .Where(item => item.Status == LibraryImportItemStatuses.PendingReview
+                && item.TranscodeStatus == "succeeded"
+                && item.MetadataReviewed == false
+                && item.IsUserUpload == false
+                && item.UpdatedAtUtc < autoPublishStuckThreshold
+                && item.AutoScore != null
+                && (
+                    // 音源抓歌条目：AutoPublishEnabled 开 + 分数 ≥ 阈值
+                    (item.SourceProvider != null
+                        && sourceDownloadOptions.Value.AutoPublishEnabled
+                        && item.AutoScore >= srcThreshold)
+                    ||
+                    // 管理员手动导入条目：AutoPublishEnabled 开 + 分数 ≥ 阈值
+                    (item.SourceProvider == null
+                        && libraryImportOptions.Value.AutoPublishEnabled
+                        && item.AutoScore >= libThreshold)
+                ))
+            .OrderBy(item => item.UpdatedAtUtc)
+            .Take(BatchLimit)
+            .ToListAsync(cancellationToken);
+
+        foreach (var item in autoPublishCandidates)
+        {
+            // 标记为 ReadyToPublish + MetadataReviewed，与 LibraryImportJob 直通路径一致；
+            // PublishAsync 内部仍会守卫校验转码文件完整性。
+            item.MetadataReviewed = true;
+            item.Status = LibraryImportItemStatuses.ReadyToPublish;
+            item.UpdatedAtUtc = now;
+            await db.Updateable(item).ExecuteCommandAsync(cancellationToken);
+
+            var publishResult = await publishService.PublishAsync(
+                item,
+                new ImportPublishContext(Guid.Empty, $"auto-publish-sweep:{item.Id:N}", IsAutomatic: true),
+                forceFulfill: false,
+                overrideReason: null,
+                cancellationToken);
+
+            if (publishResult.Succeeded)
+            {
+                // 对音源抓歌条目，还需要把 ExternalDownloadTask 的终态回写
+                if (item.SourceProvider is not null)
+                    await UpdateExternalDownloadCompletedAsync(item, autoPublished: true, cancellationToken);
+                logger.LogInformation(
+                    "Import item {ImportItemId} auto-published via sweep (score {Score}).",
+                    item.Id, item.AutoScore);
+                totalRecovered++;
+            }
+            else
+            {
+                // 发布仍然失败：回退到 pending_review，下一轮继续重试（有 UpdatedAtUtc 滞后期门控）。
+                item.MetadataReviewed = false;
+                item.Status = LibraryImportItemStatuses.PendingReview;
+                item.UpdatedAtUtc = now;
+                await db.Updateable(item).ExecuteCommandAsync(cancellationToken);
+                logger.LogWarning(
+                    "Import item {ImportItemId} sweep auto-publish failed (score {Score}): {Message}; will retry next round.",
+                    item.Id, item.AutoScore, publishResult.Error?.Message);
+            }
+        }
+
+        if (totalRecovered > 0)
+            logger.LogInformation("Import retry sweep recovered {Total} item(s) (failed={Failed}, stuck={Stuck}, autoPublish={AutoPublish}).",
+                totalRecovered, failedCandidates.Count, stuckCandidates.Count, autoPublishCandidates.Count);
+    }
+
+    /// <summary>
+    /// 发布成功后回写音源下载任务的终态：匹配 ImportItemId 或 (Provider, ProviderTrackId) 关联的任务。
+    /// 与 LibraryImportJob.UpdateExternalTaskAsync 逻辑一致但走 sweep 时的简化版本（不需要回扫评分）。
+    /// </summary>
+    private async Task UpdateExternalDownloadCompletedAsync(
+        LibraryImportItem item, bool autoPublished, CancellationToken cancellationToken)
+    {
+        // 优先：任务记录里直接存了 ImportItemId
+        var byImportItem = await db.Queryable<ExternalDownloadTask>()
+            .Where(task => task.ImportItemId == item.Id)
+            .ToListAsync(cancellationToken);
+
+        foreach (var task in byImportItem)
+        {
+            task.Status = ExternalDownloadTaskStatuses.Completed;
+            task.NextRetryAtUtc = null;
+            task.AutoScore = item.AutoScore;
+            task.AutoPublished = autoPublished;
+            task.UpdatedAtUtc = DateTime.UtcNow;
+            await db.Updateable(task).ExecuteCommandAsync(cancellationToken);
         }
     }
 }

@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
-import { isAdmin, isAuthenticated, restoreSession } from '@/services/session'
+import { enforceIdleTimeout, isAdmin, isAuthenticated, restoreSession } from '@/services/session'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -85,6 +85,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/pages/admin/storage.vue'),
         meta: { title: '存储治理' },
       },
+      {
+        path: 'mq',
+        name: 'mq',
+        component: () => import('@/pages/admin/mq.vue'),
+        meta: { title: '消息队列' },
+      },
     ],
   },
   { path: '/:pathMatch(.*)*', redirect: '/dashboard' },
@@ -104,6 +110,8 @@ function ensureSession() {
 
 router.beforeEach(async (to) => {
   await ensureSession()
+  // 空闲超时兜底：标签页长时间挂起后直接点导航，也要先清理会话再跳登录页。
+  enforceIdleTimeout()
   const publicPage = to.meta.public === true
 
   if (publicPage) {

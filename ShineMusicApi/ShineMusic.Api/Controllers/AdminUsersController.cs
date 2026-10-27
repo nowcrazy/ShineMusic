@@ -23,7 +23,7 @@ public sealed class AdminUsersController : ControllerBase
 {
     /// <summary>
     /// 【GET /api/v1/admin/users】用户分页列表。
-    /// 查询参数：query（邮箱/用户名/昵称模糊）、page、pageSize（1-100，默认 20）。
+    /// 查询参数：query（邮箱/用户名/昵称模糊）、page、pageSize（1-1000，默认 20）。
     /// </summary>
     [HttpGet(Name = "GetAdminUsers")]
     public async Task<IResult> GetUsers(
@@ -34,7 +34,7 @@ public sealed class AdminUsersController : ControllerBase
         UserService userService)
     {
         page = page <= 0 ? 1 : page;
-        pageSize = pageSize is <= 0 or > 100 ? 20 : pageSize;
+        pageSize = pageSize is <= 0 or > 1000 ? 20 : pageSize;
 
         var queryable = db.Queryable<ApplicationUser>();
         if (!string.IsNullOrWhiteSpace(query))

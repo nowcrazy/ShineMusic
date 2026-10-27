@@ -196,7 +196,13 @@ public sealed class ImportPublishService(
             ReleaseYear = item.ReleaseYear,
             DurationMs = item.DurationMs,
             AddedAt = DateTimeOffset.UtcNow,
-            PublishedAt = DateTimeOffset.UtcNow
+            PublishedAt = DateTimeOffset.UtcNow,
+            // OwnerUserId：曲目的"归属用户"。
+            // 自动发布直通时 actor 是系统（Guid.Empty），需要从批次反查实际导入人。
+            OwnerUserId = await db.Queryable<LibraryImportBatch>()
+                .Where(batch => batch.Id == item.BatchId)
+                .Select(batch => batch.CreatedByUserId)
+                .FirstAsync(cancellationToken)
         };
         var artistNames = DeserializeList(item.ArtistsJson);
         var genreNames = DeserializeList(item.GenresJson);

@@ -1,5 +1,6 @@
 // RabbitMQ 消费端：downloads / imports 两个队列的常驻监听。
-// 每个消费端独占一个通道（prefetch 控制并发），消息分发由客户端 ConsumerDispatchConcurrency 决定。
+// 每个消费端独占一个通道，通道的 ConsumerDispatchConcurrency 与 prefetch 同值，
+// 因此队列内部并行度 = Prefetch（配置 1 即逐条串行，>1 时同一进程内可并行处理）。
 // 异常隔离：单条消息失败只 nack（不重回队列）+ 记日志，不会导致整个消费者崩溃；
 // 业务失败（SourceDownloadJob / LibraryImportJob）已在内部吞掉并更新状态，消费端几乎不会抛异常。
 // 消费循环自动重连：连接断开后外层循环 5s 重试，RabbitMQ.Client 自身也启用了 AutomaticRecoveryEnabled。

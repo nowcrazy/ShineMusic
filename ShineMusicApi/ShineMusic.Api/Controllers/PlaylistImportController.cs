@@ -2,12 +2,14 @@
 
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using ShineMusic.Model.Contracts;
-using ShineMusic.Model.Options;
 using ShineMusic.Api.Extensions;
+using ShineMusic.Model.Contracts;
+using ShineMusic.Model.Entities;
+using ShineMusic.Model.Options;
 using ShineMusic.Service;
 using ShineMusic.Service.PlaylistImport;
 using ShineMusic.Service.SourceDownload;
+using SqlSugar;
 
 namespace ShineMusic.Api.Controllers;
 
@@ -76,6 +78,29 @@ public sealed class PlaylistImportController : ControllerBase
             return ApiResults.ValidationError(HttpContext, "url", exception.Message);
         }
     }
+    /// <summary>重新补齐歌单中待下载/无音源/下载任务丢失的曲目。</summary>
+    /// <remarks>
+    /// 对 pending / no_source / failed 以及「下载任务已丢失」的 downloading 行重跑匹配：
+    /// 先按标题+艺人+时长命中曲库直接转正，否则重新搜索音源并重建下载任务。逐条节流，耗时按曲目数量线性增长。
+    /// </remarks>
+    [HttpPost("playlists/{playlistId:guid}/rematch", Name = "RematchPlaylistPending")]
+    public async Task<IResult> Rematch(
+        Guid playlistId,
+        ISqlSugarClient db,
+        PlaylistImportService importService,
+        CancellationToken cancellationToken)
+    {
+        if (!HttpContext.User.TryGetUserId(out var userId))
+            return Results.Unauthorized();
+        var playlist = await db.Queryable<UserPlaylist>()
+            .FirstAsync(candidate => candidate.Id == playlistId, cancellationToken);
+        if (playlist is null || playlist.UserId != userId)
+            return Results.NotFound();
+
+        var result = await importService.RematchPendingAsync(playlistId, cancellationToken);
+        return Results.Ok(new PlaylistRematchResponse(
+            result.PlaylistId, result.Total, result.Promoted, result.Retried, result.NoSource, result.Unchanged));
+    }
 }
 
 /// <summary>解析预览请求体。</summary>
@@ -110,3 +135,18 @@ public sealed record PlaylistImportParseResponse(
 /// <param name="Matched">已匹配曲库直接入歌单的数量。</param>
 /// <param name="Pending">进入待补齐（静默下载）的数量。</param>
 public sealed record PlaylistImportResponse(Guid PlaylistId, int Total, int Matched, int Pending);
+
+/// <summary>重新补齐响应：各分项处理结果。</summary>
+/// <param name="PlaylistId">歌单 Id。</param>
+/// <param name="Total">参与检查的待处理曲目总数。</param>
+/// <param name="Promoted">命中曲库直接转正的曲目数。</param>
+/// <param name="Retried">成功重建下载任务的曲目数。</param>
+/// <param name="NoSource">仍未找到可用音源的曲目数。</param>
+/// <param name="Unchanged">下载仍在进行中、保持不动的曲目数。</param>
+public sealed record PlaylistRematchResponse(
+    Guid PlaylistId,
+    int Total,
+    int Promoted,
+    int Retried,
+    int NoSource,
+    int Unchanged);

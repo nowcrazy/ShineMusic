@@ -105,6 +105,7 @@ public sealed class StorageGovernanceService
 
         return new StorageAuditDto(
             referencedKeys.Count,
+            groups.Count(group => group.TrackId is not null),
             diskFiles.Count,
             missing.Count,
             orphans.Count,

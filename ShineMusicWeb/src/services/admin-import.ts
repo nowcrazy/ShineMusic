@@ -12,7 +12,11 @@
  * - DELETE /import-items/{id}             （拒绝，删除隔离区文件）
  */
 import type { ApiPageResult } from '@/types/music'
-import type { ApiLibraryImportItemWithUploader } from '@/types/api.generated'
+import type {
+  ApiBulkPublishResult,
+  ApiImportScoreBreakdown,
+  ApiLibraryImportItemWithUploader,
+} from '@/types/api.generated'
 import { t } from '@/locale'
 import { getAccessToken } from './tokens'
 import { refreshAccessToken } from './http'
@@ -83,6 +87,12 @@ export interface LibraryImportItem {
   songRequestId: string | null
   /** 与关联需求的匹配结果；未关联或元数据未解析时为 null */
   songRequestMatch: SongRequestMatch | null
+  /** 自动评分总分（0-100）；未评分时为 null */
+  autoScore?: number | null
+  /** 是否由评分闸门自动发布 */
+  autoPublished: boolean
+  /** 评分分项明细（音质/元数据/歌词） */
+  scoreBreakdown?: ApiImportScoreBreakdown | null
 }
 
 /** 导入批次 */
@@ -240,16 +250,25 @@ export async function getImportItem(itemId: string): Promise<LibraryImportItem> 
  * 导入条目总列表（跨批次，按状态筛选），附带批次上传者 Id。
  *
  * @param status 条目状态（可选，如 pending_review / pending_publication）
+ * @param sort 排序字段：created（默认）/ title / score / status / duration
+ * @param order 排序方向：desc（默认）/ asc
+ * @param q 关键词：匹配曲名 / 艺人 / 专辑 / 源文件名
  */
 export async function listImportItems(
   status?: string,
   page = 1,
   pageSize = 20,
+  sort?: string,
+  order?: string,
+  q?: string,
 ): Promise<ApiPageResult<ApiLibraryImportItemWithUploader>> {
   const params = new URLSearchParams()
   if (status) params.set('status', status)
   params.set('page', String(page))
   params.set('pageSize', String(pageSize))
+  if (sort) params.set('sort', sort)
+  if (order) params.set('order', order)
+  if (q) params.set('q', q)
   return http.get<ApiPageResult<ApiLibraryImportItemWithUploader>>(
     `${API_PREFIX}/admin/library/import-items?${params.toString()}`,
   )
@@ -334,6 +353,17 @@ export async function publishImportItem(
 /** 拒绝导入条目，删除隔离区文件 */
 export async function rejectImportItem(itemId: string): Promise<void> {
   return http.delete<void>(`${API_PREFIX}/admin/library/import-items/${itemId}`)
+}
+
+/**
+ * 一键发布所有「自动发布候选」：pending_review + AutoScore ≥ 阈值 + 转码成功 + 非用户上传。
+ * 后端逐条走 PublishAsync，失败条目记录原因后继续。
+ */
+export async function bulkPublishCandidates(threshold?: number): Promise<ApiBulkPublishResult> {
+  const query = threshold != null ? `?threshold=${threshold}` : ''
+  return http.post<ApiBulkPublishResult>(
+    `${API_PREFIX}/admin/library/import-items/bulk-publish-candidates${query}`,
+  )
 }
 
 /**

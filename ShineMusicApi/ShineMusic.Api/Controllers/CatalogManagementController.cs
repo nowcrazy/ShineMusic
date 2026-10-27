@@ -436,8 +436,8 @@ public sealed class CatalogManagementController : ControllerBase
         error = null;
         if (pageNumber < 1)
             error = ApiResults.ValidationError(ctx, "page", "page must be at least 1.");
-        else if (size is < 1 or > 100)
-            error = ApiResults.ValidationError(ctx, "pageSize", "pageSize must be between 1 and 100.");
+        else if (size is < 1 or > 1000)
+            error = ApiResults.ValidationError(ctx, "pageSize", "pageSize must be between 1 and 1000.");
         return error is null;
     }
 

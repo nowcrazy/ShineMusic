@@ -10,7 +10,7 @@ import {
   type UploadRawFile,
   type UploadUserFile,
 } from 'element-plus'
-import { Delete, Refresh, Upload, UploadFilled, View } from '@element-plus/icons-vue'
+import { Delete, InfoFilled, Refresh, Search, Upload, UploadFilled, View } from '@element-plus/icons-vue'
 import {
   dismissImportItem,
   enrichImportItem,
@@ -20,6 +20,7 @@ import {
   rejectImportItem,
   updateImportItem,
   uploadImportFilesBatch,
+  bulkPublishCandidates,
 } from '@/services/admin-import'
 import { describeError } from '@/services/errors'
 import { formatTime } from '@/utils/format'
@@ -57,17 +58,23 @@ const statusTone: Record<string, string> = {
 }
 
 const activeStatus = ref('')
+/** 关键词：服务端匹配曲名 / 艺人 / 专辑 / 源文件名。 */
+const keyword = ref('')
 const loading = ref(false)
 const items = ref<ApiLibraryImportItem[]>([])
 const total = ref(0)
 const page = ref(1)
-const pageSize = ref(20)
+const pageSize = ref(100)
+/** 服务端排序：默认按创建时间倒序；评分/标题/状态/时长可按列头切换。 */
+const sortField = ref('created')
+const sortOrder = ref('desc')
 
 const drawerOpen = ref(false)
 const current = ref<ApiLibraryImportItem | null>(null)
 const saving = ref(false)
 const enriching = ref(false)
 const publishing = ref(false)
+const bulkPublishing = ref(false)
 const forceFulfill = ref(false)
 const overrideReason = ref('')
 const form = reactive({
@@ -93,10 +100,48 @@ const canReject = (item: ApiLibraryImportItem) => !['published', 'rejected'].inc
 const canDismiss = (item: ApiLibraryImportItem) =>
   ['published', 'rejected', 'processing_failed'].includes(item.status)
 
+/** AutoScore 分段颜色：≥85 绿（优质）、75-84 黄（达自动发布线）、<75 红（需人工）、null 灰（未评分）。 */
+function scoreTone(score: number | null | undefined) {
+  if (score == null) return { color: 'var(--adm-text-3)', tone: 'info' as const, label: '未评' }
+  if (score >= 85) return { color: '#22c55e', tone: 'success' as const, label: '优' }
+  if (score >= 75) return { color: '#f59e0b', tone: 'warning' as const, label: '良' }
+  return { color: '#ef4444', tone: 'danger' as const, label: '低分' }
+}
+
+/** 待审核条目里高分可自动发布的统计提示。 */
+const pendingScoreStats = computed(() => {
+  const pending = items.value.filter(i => i.status === 'pending_review')
+  const autoPublish = pending.filter(i => (i.autoScore ?? 0) >= 75).length
+  const lowQuality = pending.length - autoPublish
+  return { total: pending.length, autoPublish, lowQuality }
+})
+
+/** 把后端 scoreBreakdown 转成模板渲染用的数组（label 为中文）。 */
+function scoreSegments(bd: NonNullable<ApiLibraryImportItem['scoreBreakdown']>) {
+  const tone = (seg: { score: number; maxScore: number }) => {
+    const pct = seg.maxScore > 0 ? seg.score / seg.maxScore : 0
+    if (pct >= 0.85) return '#22c55e'
+    if (pct >= 0.5) return '#f59e0b'
+    return '#ef4444'
+  }
+  return [
+    { label: '音质', score: bd.quality.score, max: bd.quality.maxScore, pct: (bd.quality.score / bd.quality.maxScore) * 100, reason: bd.quality.reason, color: tone(bd.quality) },
+    { label: '元数据', score: bd.metadata.score, max: bd.metadata.maxScore, pct: (bd.metadata.score / bd.metadata.maxScore) * 100, reason: bd.metadata.reason, color: tone(bd.metadata) },
+    { label: '歌词', score: bd.lyrics.score, max: bd.lyrics.maxScore, pct: (bd.lyrics.score / bd.lyrics.maxScore) * 100, reason: bd.lyrics.reason, color: tone(bd.lyrics) },
+  ]
+}
+
 async function loadItems() {
   loading.value = true
   try {
-    const result = await listImportItems(activeStatus.value || undefined, page.value, pageSize.value)
+    const result = await listImportItems(
+      activeStatus.value || undefined,
+      page.value,
+      pageSize.value,
+      sortField.value,
+      sortOrder.value,
+      keyword.value.trim() || undefined,
+    )
     items.value = result.items.map((row) => row.item)
     total.value = result.total
   } catch (error) {
@@ -106,7 +151,28 @@ async function loadItems() {
   }
 }
 
+/** 列头排序：prop 为列绑定的字段名，order 为 ascending/descending（取消排序回落到创建时间倒序）。 */
+function handleSortChange({ prop, order }: { prop: string; order: 'ascending' | 'descending' | null }) {
+  const fieldMap: Record<string, string> = {
+    title: 'title',
+    status: 'status',
+    score: 'score',
+    duration: 'duration',
+    createdAt: 'created',
+  }
+  sortField.value = order ? fieldMap[prop] ?? 'created' : 'created'
+  sortOrder.value = order === 'ascending' ? 'asc' : 'desc'
+  page.value = 1
+  void loadItems()
+}
+
 function changeTab() {
+  page.value = 1
+  void loadItems()
+}
+
+/** 关键词/状态查询：回到第一页重新拉取。 */
+function search() {
   page.value = 1
   void loadItems()
 }
@@ -195,6 +261,49 @@ async function publish() {
     ElMessage.error(describeError(error, '发布失败'))
   } finally {
     publishing.value = false
+  }
+}
+
+/** 一键发布所有自动发布候选（分数 ≥ 75 的 pending_review 条目）。 */
+async function handleBulkPublish() {
+  const candidateCount = pendingScoreStats.value.autoPublish
+  if (candidateCount === 0) {
+    ElMessage.info('当前没有可一键发布的高分条目')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `将一键发布 ${candidateCount} 条高分待审核曲目（分数 ≥ 75，非用户上传，转码已完成）。低分曲目（< 75）不受影响。`,
+      '一键发布高分曲目',
+      {
+        confirmButtonText: '确认发布',
+        cancelButtonText: '取消',
+        type: 'warning',
+      },
+    )
+  } catch {
+    return // 用户取消
+  }
+
+  bulkPublishing.value = true
+  try {
+    const result = await bulkPublishCandidates()
+    if (result.success === result.total) {
+      ElMessage.success(`全部 ${result.total} 条发布成功！`)
+    } else {
+      const failed = result.items.filter(i => !i.published)
+      ElMessage.warning({
+        message: `发布完成：成功 ${result.success}/${result.total}。${failed.length} 条失败，详情请看控制台。`,
+        duration: 5000,
+      })
+      // 失败明细只在 console 打，不堆 UI
+      failed.forEach(f => console.warn(`[bulk-publish 失败] ${f.displayName}`, f.error))
+    }
+    await loadItems()
+  } catch (error) {
+    ElMessage.error(describeError(error, '一键发布失败'))
+  } finally {
+    bulkPublishing.value = false
   }
 }
 
@@ -300,8 +409,66 @@ onMounted(loadItems)
         <el-tab-pane v-for="tab in statusTabs" :key="tab.name" :label="tab.label" :name="tab.name" />
       </el-tabs>
 
-      <el-table v-loading="loading" :data="items" row-key="id" empty-text="当前状态暂无条目">
-        <el-table-column label="文件 / 曲名" min-width="230">
+      <div class="toolbar">
+        <el-input
+          v-model="keyword"
+          placeholder="搜索曲名 / 艺人 / 专辑"
+          clearable
+          class="keyword-input"
+          @keyup.enter="search"
+          @clear="search"
+        >
+          <template #prefix><el-icon><Search /></el-icon></template>
+        </el-input>
+        <el-button type="primary" :icon="Search" @click="search">查询</el-button>
+        <el-select
+          v-model="activeStatus"
+          placeholder="状态筛选"
+          class="status-select"
+          @change="changeTab"
+        >
+          <el-option label="全部状态" value="" />
+          <el-option v-for="(label, value) in statusText" :key="value" :label="label" :value="value" />
+        </el-select>
+        <span class="text-faint sort-hint">点击列头可排序：曲名 / 状态 / 评分</span>
+      </div>
+
+      <!-- 分段统计提示：仅在全部/pending_review tab 下显示 -->
+      <div
+        v-if="(!activeStatus || activeStatus === 'pending_review') && pendingScoreStats.total > 0"
+        class="score-hint"
+      >
+        <el-icon size="14"><InfoFilled /></el-icon>
+        <span class="score-hint-text">
+          当前待审核 <b>{{ pendingScoreStats.total }}</b> 条 ·
+          <span v-if="pendingScoreStats.autoPublish > 0" class="hint-good">
+            {{ pendingScoreStats.autoPublish }} 条高分可一键发布
+          </span>
+          <span v-if="pendingScoreStats.autoPublish > 0 && pendingScoreStats.lowQuality > 0"> · </span>
+          <span v-if="pendingScoreStats.lowQuality > 0" class="hint-warn">
+            {{ pendingScoreStats.lowQuality }} 条低质量需人工处理
+          </span>
+        </span>
+        <el-button
+          v-if="pendingScoreStats.autoPublish > 0"
+          size="small"
+          type="primary"
+          :loading="bulkPublishing"
+          class="bulk-publish-btn"
+          @click="handleBulkPublish"
+        >
+          一键发布高分
+        </el-button>
+      </div>
+
+      <el-table
+        v-loading="loading"
+        :data="items"
+        row-key="id"
+        empty-text="当前状态暂无条目"
+        @sort-change="handleSortChange"
+      >
+        <el-table-column label="文件 / 曲名" prop="title" sortable="custom" min-width="230">
           <template #default="{ row }">
             <div class="file-cell">
               <strong>{{ row.metadata.title || row.sourceFile.displayName }}</strong>
@@ -314,11 +481,37 @@ onMounted(loadItems)
         <el-table-column label="艺人" min-width="140">
           <template #default="{ row }">{{ row.metadata.artists.join('、') || '—' }}</template>
         </el-table-column>
-        <el-table-column label="状态" width="110">
+        <el-table-column label="状态" prop="status" sortable="custom" width="120">
           <template #default="{ row }">
-            <el-tag size="small" :type="(statusTone[row.status] as any) || 'info'">
-              {{ statusText[row.status] || row.status }}
-            </el-tag>
+            <div class="status-cell">
+              <el-tag size="small" :type="(statusTone[row.status] as any) || 'info'">
+                {{ statusText[row.status] || row.status }}
+              </el-tag>
+              <el-tag
+                v-if="row.status === 'published' && row.autoPublished"
+                size="small"
+                type="success"
+                effect="plain"
+                class="auto-publish-badge"
+              >自动</el-tag>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="评分" prop="score" sortable="custom" width="90" align="center">
+          <template #default="{ row }">
+            <template v-if="row.autoScore != null">
+              <span
+                class="score-value"
+                :style="{ color: scoreTone(row.autoScore).color }"
+                :title="`自动评分 ${row.autoScore}/100 · ${scoreTone(row.autoScore).label}`"
+              >
+                {{ row.autoScore }}
+              </span>
+              <span class="score-label" :style="{ color: scoreTone(row.autoScore).color }">
+                {{ scoreTone(row.autoScore).label }}
+              </span>
+            </template>
+            <span v-else class="text-faint">—</span>
           </template>
         </el-table-column>
         <el-table-column label="转码" width="120">
@@ -353,7 +546,7 @@ onMounted(loadItems)
           v-model:current-page="page"
           v-model:page-size="pageSize"
           :total="total"
-          :page-sizes="[20, 50, 100]"
+          :page-sizes="[100, 150, 200, 500, 1000]"
           layout="total, sizes, prev, pager, next"
           @current-change="loadItems"
           @size-change="changeTab"
@@ -395,6 +588,50 @@ onMounted(loadItems)
             </el-tag>
           </div>
           <audio v-if="previewUrl" class="preview" :src="previewUrl" controls preload="none" />
+        </div>
+
+        <!-- 自动评分面板 -->
+        <div v-if="current.autoScore != null || current.scoreBreakdown" class="score-card">
+          <div class="score-card-header">
+            <span class="score-card-title">
+              自动评分
+              <el-tag
+                v-if="current.autoPublished"
+                size="small"
+                type="success"
+                effect="plain"
+                class="auto-publish-badge"
+              >已自动发布</el-tag>
+            </span>
+            <span
+              v-if="current.autoScore != null"
+              class="score-big"
+              :style="{ color: scoreTone(current.autoScore).color }"
+            >{{ current.autoScore }}</span>
+          </div>
+
+          <template v-if="current.scoreBreakdown">
+            <div class="score-segments">
+              <div
+                v-for="seg in scoreSegments(current.scoreBreakdown)"
+                :key="seg.label"
+                class="score-seg"
+              >
+                <div class="score-seg-head">
+                  <span class="score-seg-label">{{ seg.label }}</span>
+                  <span class="score-seg-val">{{ seg.score }}/{{ seg.max }}</span>
+                </div>
+                <div class="score-seg-bar">
+                  <div
+                    class="score-seg-fill"
+                    :style="{ width: seg.pct + '%', background: seg.color }"
+                  />
+                </div>
+                <div v-if="seg.reason" class="score-seg-reason">{{ seg.reason }}</div>
+              </div>
+            </div>
+          </template>
+          <div v-else class="score-no-breakdown">（详细分项数据未返回，可能是历史导入未重新评分）</div>
         </div>
 
         <el-form label-position="top" class="edit-form">
@@ -504,6 +741,69 @@ onMounted(loadItems)
   font-size: 12px;
 }
 
+/* === 状态列：自动发布标记 === */
+.status-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.auto-publish-badge {
+  font-size: 11px;
+  padding: 0 4px;
+  height: 18px;
+  line-height: 16px;
+  opacity: 0.85;
+}
+
+/* === 评分列 === */
+.score-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.score-label {
+  font-size: 11px;
+  margin-left: 2px;
+  opacity: 0.85;
+}
+
+/* === 分段统计提示条 === */
+.score-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: -4px 0 12px;
+  padding: 6px 12px;
+  background: var(--adm-bg-soft);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--adm-text-2);
+}
+
+.score-hint-text { flex: 1; }
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.status-select { width: 200px; }
+
+.keyword-input { width: 280px; }
+
+.sort-hint { font-size: 12px; }
+
+.bulk-publish-btn {
+  margin-left: auto;
+}
+
+.hint-good { color: #22c55e; font-weight: 500; }
+.hint-warn { color: #f59e0b; font-weight: 500; }
+
 .match-alert {
   margin-bottom: 16px;
 }
@@ -523,6 +823,94 @@ onMounted(loadItems)
   border-radius: 8px;
   background: #fafbfc;
   font-size: 13px;
+}
+
+/* === 自动评分面板 === */
+.score-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  margin-bottom: 20px;
+  border: 1px solid var(--adm-border);
+  border-radius: 8px;
+  background: linear-gradient(180deg, var(--adm-bg-soft, #fafbfc), transparent 70%);
+}
+
+.score-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.score-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--adm-text-1);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.score-big {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-weight: 700;
+  font-size: 28px;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+.score-segments {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.score-seg {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.score-seg-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+}
+
+.score-seg-label {
+  color: var(--adm-text-1);
+  font-weight: 500;
+}
+
+.score-seg-val {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: var(--adm-text-2);
+}
+
+.score-seg-bar {
+  height: 6px;
+  background: var(--adm-border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.score-seg-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.score-seg-reason {
+  font-size: 11px;
+  color: var(--adm-text-3);
+  line-height: 1.4;
+}
+
+.score-no-breakdown {
+  font-size: 12px;
+  color: var(--adm-text-3);
+  font-style: italic;
 }
 
 .source-row {

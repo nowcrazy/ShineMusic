@@ -3,11 +3,11 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Options;
 using Microsoft.Net.Http.Headers;
+using ShineMusic.Api.Extensions;
 using ShineMusic.Model.Contracts;
 using ShineMusic.Model.Entities;
-using ShineMusic.Repository.Data;
-using ShineMusic.Api.Extensions;
 using ShineMusic.Model.Options;
+using ShineMusic.Repository.Data;
 using ShineMusic.Service;
 using SqlSugar;
 
@@ -22,7 +22,7 @@ namespace ShineMusic.Api.Controllers;
 public sealed class CatalogController : ControllerBase
 {
     private const int DefaultPageSize = 20;
-    private const int MaximumPageSize = 100;
+    private const int MaximumPageSize = 1000;
 
     [HttpGet("tracks", Name = "GetTracks")]
     [Tags("Tracks")]

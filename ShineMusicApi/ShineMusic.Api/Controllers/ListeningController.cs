@@ -14,9 +14,9 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using ShineMusic.Api.Extensions;
 using ShineMusic.Model.Contracts;
 using ShineMusic.Model.Entities;
-using ShineMusic.Api.Extensions;
 using ShineMusic.Model.Options;
 using ShineMusic.Service;
 using SqlSugar;
@@ -188,8 +188,8 @@ public sealed class ListeningController : ControllerBase
         error = null;
         if (pageNumber < 1)
             error = ApiResults.ValidationError(HttpContext, "page", "page must be at least 1.");
-        else if (size < 1 || size > 100)
-            error = ApiResults.ValidationError(HttpContext, "pageSize", "pageSize must be between 1 and 100.");
+        else if (size < 1 || size > 1000)
+            error = ApiResults.ValidationError(HttpContext, "pageSize", "pageSize must be between 1 and 1000.");
         return error is null;
     }
 }

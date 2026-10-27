@@ -1,4 +1,3 @@
-using ShineMusic.Model.Entities;
 // 职责：提供曲库存储目录的路径解析与安全校验。
 // LibraryStoragePaths 面向正式曲库目录，QuarantineStoragePaths 面向上传隔离目录；
 // 两者都把外部传入的“存储键（storageKey）”拼接到受信任的根目录下，
@@ -6,6 +5,7 @@ using ShineMusic.Model.Entities;
 
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Options;
+using ShineMusic.Model.Entities;
 using ShineMusic.Model.Options;
 
 namespace ShineMusic.Repository.Data;

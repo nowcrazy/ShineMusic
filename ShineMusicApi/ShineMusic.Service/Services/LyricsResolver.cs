@@ -11,8 +11,8 @@
 using System.Text;
 using Microsoft.Extensions.Options;
 using ShineMusic.Model.Entities;
-using ShineMusic.Repository.Data;
 using ShineMusic.Model.Options;
+using ShineMusic.Repository.Data;
 using ShineMusic.Service.Lyrics;
 
 namespace ShineMusic.Service;

@@ -4,16 +4,16 @@
 // 未命中的新歌进入处理队列，完成后自动私有入库（仅上传者可听），
 // 是否转公开进入公共曲库由管理员在审核队列决定。
 
-using ShineMusic.Service.Messaging;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Net.Http.Headers;
 using Microsoft.Extensions.Options;
+using Microsoft.Net.Http.Headers;
+using ShineMusic.Api.Extensions;
 using ShineMusic.Model.Contracts;
 using ShineMusic.Model.Entities;
-using ShineMusic.Api.Extensions;
 using ShineMusic.Model.Options;
 using ShineMusic.Service;
+using ShineMusic.Service.Messaging;
 using SqlSugar;
 
 namespace ShineMusic.Api.Controllers;

@@ -46,6 +46,21 @@ export interface PlaylistImportResult {
   pending: number
 }
 
+/** 重新补齐结果：各分项处理数量 */
+export interface PlaylistRematchResult {
+  playlistId: string
+  /** 参与检查的待处理曲目总数 */
+  total: number
+  /** 命中曲库直接转正的曲目数 */
+  promoted: number
+  /** 成功重建下载任务的曲目数 */
+  retried: number
+  /** 仍未找到可用音源的曲目数 */
+  noSource: number
+  /** 下载仍在进行中、保持不动的曲目数 */
+  unchanged: number
+}
+
 /** 解析歌单预览（外部平台请求较慢，超时放宽到 60s）。 */
 export async function parsePlaylistImport(url: string): Promise<PlaylistImportParseResult> {
   return request<PlaylistImportParseResult>('POST', `${API_PREFIX}/me/playlist-imports/parse`, { url }, {
@@ -58,4 +73,19 @@ export async function importPlaylist(url: string, name?: string): Promise<Playli
   return request<PlaylistImportResult>('POST', `${API_PREFIX}/me/playlist-imports/import`, { url, name }, {
     timeoutMs: 120000,
   })
+}
+
+/**
+ * 重新补齐歌单中待下载/无音源/下载任务丢失的曲目。
+ *
+ * 后端逐条重跑匹配（先查曲库、再搜索音源），每条约 250ms 节流，
+ * 200+ 首预计 1~3 分钟，超时放宽到 600s。
+ */
+export async function rematchPlaylist(playlistId: string): Promise<PlaylistRematchResult> {
+  return request<PlaylistRematchResult>(
+    'POST',
+    `${API_PREFIX}/me/playlist-imports/playlists/${playlistId}/rematch`,
+    undefined,
+    { timeoutMs: 600000 },
+  )
 }

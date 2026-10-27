@@ -42,8 +42,13 @@ const loading = ref(false)
 const items = ref<ApiSongRequest[]>([])
 const total = ref(0)
 const page = ref(1)
-const pageSize = ref(20)
-const filter = reactive({ status: '' as SongRequestStatus | '', sort: 'votes' as 'votes' | 'createdAt' })
+const pageSize = ref(100)
+const filter = reactive({
+  status: '' as SongRequestStatus | '',
+  sort: 'votes' as 'votes' | 'createdAt',
+  /** 关键词：服务端匹配曲名 / 艺人 / 专辑。 */
+  q: '',
+})
 
 const dialogOpen = ref(false)
 const current = ref<ApiSongRequest | null>(null)
@@ -60,6 +65,7 @@ async function load() {
   try {
     const result = await getAdminSongRequests({
       status: filter.status,
+      q: filter.q.trim() || undefined,
       sort: filter.sort,
       page: page.value,
       pageSize: pageSize.value,
@@ -153,6 +159,16 @@ onMounted(load)
 
     <div class="panel">
       <div class="filter-bar">
+        <el-input
+          v-model="filter.q"
+          placeholder="搜索曲名 / 艺人 / 专辑"
+          clearable
+          style="width: 260px"
+          @keyup.enter="search"
+          @clear="search"
+        >
+          <template #prefix><el-icon><Search /></el-icon></template>
+        </el-input>
         <el-select v-model="filter.status" style="width: 150px" placeholder="全部状态" @change="search">
           <el-option v-for="option in statusOptions" :key="option.value" :label="option.label" :value="option.value" />
         </el-select>
@@ -208,7 +224,7 @@ onMounted(load)
           v-model:current-page="page"
           v-model:page-size="pageSize"
           :total="total"
-          :page-sizes="[20, 50, 100]"
+          :page-sizes="[100, 150, 200, 500, 1000]"
           layout="total, sizes, prev, pager, next"
           @current-change="load"
           @size-change="search"

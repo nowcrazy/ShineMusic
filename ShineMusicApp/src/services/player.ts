@@ -864,9 +864,13 @@ export function setEqPreset(id: string) {
  * @param seconds 目标位置，单位秒；乐观更新 currentTime，随后以 onTimeUpdate 回调为准
  */
 export function seek(seconds: number) {
+  const wasPlaying = state.isPlaying
   engine?.seek(seconds)
   state.currentTime = seconds
   persistState(true)
+  // App 端 BackgroundAudioManager 在部分 Android 机型 seek 后会停在原地不再前进：
+  // 播放中跳转后补一次 play() 让原生播放器继续；暂停态不补，避免自动开始播放。
+  if (wasPlaying) engine?.play()
 }
 
 /** 停止播放并复位播放态（不清理当前曲目与队列，区别于切换曲目）。 */

@@ -82,6 +82,9 @@ public sealed record SongRequestMatchDto(
 /// <param name="UpdatedAt">导入项最近更新时间（UTC）。</param>
 /// <param name="SongRequestId">关联的点歌需求标识；未关联时为 null。</param>
 /// <param name="SongRequestMatch">与关联需求的匹配结果；未关联或元数据未解析时为 null。</param>
+/// <param name="AutoScore">自动评分总分（0-100）；未评分或评分机制未启用时为 null。</param>
+/// <param name="AutoPublished">是否由评分闸门自动发布；false 表示人工审核后发布或尚未发布。</param>
+/// <param name="ScoreBreakdown">评分分项明细（音质/元数据/歌词），供审核面板直接展示；JSON 缺失时为 null。</param>
 public sealed record LibraryImportItemDto(
     Guid Id,
     string Status,
@@ -92,7 +95,19 @@ public sealed record LibraryImportItemDto(
     DateTime CreatedAt,
     DateTime UpdatedAt,
     Guid? SongRequestId,
-    SongRequestMatchDto? SongRequestMatch);
+    SongRequestMatchDto? SongRequestMatch,
+    double? AutoScore,
+    bool AutoPublished,
+    ImportScoreBreakdownDto? ScoreBreakdown);
+
+/// <summary>自动评分分项明细。原始 JSON 字段拆解为强类型，供前端抽屉面板直接渲染。</summary>
+public sealed record ImportScoreBreakdownDto(
+    double Total,
+    ScoreSegmentDto Quality,
+    ScoreSegmentDto Metadata,
+    ScoreSegmentDto Lyrics);
+
+public sealed record ScoreSegmentDto(double Score, double MaxScore, string Reason);
 
 /// <summary>
 /// 一次批量上传形成的导入批次，包含批次内全部导入项。
@@ -136,6 +151,29 @@ public sealed record LibraryImportItemWithUploaderDto(LibraryImportItemDto Item,
 /// <param name="TrackId">入库曲目标识。</param>
 /// <param name="Status">导入项发布后的状态标识（通常为 published）。</param>
 public sealed record PublishImportItemResultDto(Guid TrackId, string Status);
+
+/// <summary>
+/// 批量发布候选（一键发布高分）结果。
+/// </summary>
+/// <param name="Total">本次扫描到的候选条目总数。</param>
+/// <param name="Success">实际发布成功的条数。</param>
+/// <param name="Items">每条的发布结果明细（成功/失败原因）。</param>
+public sealed record BulkPublishResultDto(int Total, int Success, IReadOnlyList<BulkPublishItemResult> Items);
+
+/// <summary>
+/// 批量发布中单条的结果。
+/// </summary>
+/// <param name="ItemId">导入项标识。</param>
+/// <param name="DisplayName">源文件显示名（前端方便识别）。</param>
+/// <param name="Published">是否发布成功。</param>
+/// <param name="TrackId">成功时返回的曲目标识；失败时为 null。</param>
+/// <param name="Error">失败原因；成功时为 null。</param>
+public sealed record BulkPublishItemResult(
+    Guid ItemId,
+    string DisplayName,
+    bool Published,
+    Guid? TrackId,
+    string? Error);
 
 /// <summary>
 /// 元数据/歌词一键补全结果：更新后的导入项与本次实际补齐的字段清单。

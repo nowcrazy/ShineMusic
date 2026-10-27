@@ -42,12 +42,13 @@ public sealed class ApplicationUser : IdentityUser<Guid>
     /// <summary>展示名（昵称），最长 100 字符（在 DbContext 中限制）。</summary>
     public required string DisplayName { get; set; }
     /// <summary>账号创建时间（UTC）。</summary>
+    [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
     /// <summary>
     /// 临时管理员有效期截止（UTC）：仅当用户拥有 tempadmin 角色时有意义，
     /// 自授予起 3 天；过期后读取角色时自动降级为普通用户并清空本字段。
     /// </summary>
-    [SugarColumn(IsNullable = true)]
+    [SugarColumn(IsNullable = true, ColumnDataType = "timestamptz")]
     public DateTime? TempAdminUntilUtc { get; set; }
 }
 
@@ -70,12 +71,16 @@ public sealed class RefreshToken
     /// <summary>刷新令牌的 SHA256 哈希（唯一索引）；用于服务端比对，杜绝明文泄露风险。</summary>
     public required string TokenHash { get; set; }
     /// <summary>签发时间（UTC）。</summary>
+    [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
     /// <summary>过期时间（UTC）；(UserId, ExpiresAtUtc) 复合索引用于快速清理/查询有效令牌。</summary>
+    [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime ExpiresAtUtc { get; set; }
     /// <summary>吊销时间（UTC）；非空即表示已登出/被撤销，不可再用于换取新令牌。</summary>
+    [SugarColumn(IsNullable = true, ColumnDataType = "timestamptz")]
     public DateTime? RevokedAtUtc { get; set; }
     /// <summary>轮换链：本次令牌被刷新后，记录接替它的新令牌哈希，便于检测令牌重用。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? ReplacedByTokenHash { get; set; }
 }
 
@@ -91,8 +96,10 @@ public sealed class Invitation
     [SugarColumn(IsPrimaryKey = true)]
     public Guid Id { get; set; } = Guid.NewGuid();
     /// <summary>受邀邮箱地址；CDK/注册码类邀请（issued 状态）生成时尚无邮箱，为空，注册时由用户自填。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? Email { get; set; }
     /// <summary>归一化（大写）邮箱，用于按邮箱+状态检索的复合索引；CDK 邀请为空。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? NormalizedEmail { get; set; }
     /// <summary>邀请令牌的哈希（唯一索引）；邮件链接中携带明文令牌，库内只存哈希。</summary>
     public required string TokenHash { get; set; }
@@ -101,12 +108,16 @@ public sealed class Invitation
     /// <summary>创建该邀请的管理员用户 Id。</summary>
     public Guid CreatedByUserId { get; set; }
     /// <summary>创建时间（UTC）。</summary>
+    [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
     /// <summary>邀请过期时间（UTC）；到期后注册链接失效，状态可流转为 expired。</summary>
+    [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime ExpiresAtUtc { get; set; }
     /// <summary>邀请邮件发送成功时间（UTC）；为空表示尚未成功发出。</summary>
+    [SugarColumn(IsNullable = true, ColumnDataType = "timestamptz")]
     public DateTime? SentAtUtc { get; set; }
     /// <summary>被兑换（用户完成注册）的时间（UTC）；进入 redeemed 终态。</summary>
+    [SugarColumn(IsNullable = true, ColumnDataType = "timestamptz")]
     public DateTime? RedeemedAtUtc { get; set; }
 }
 
@@ -152,6 +163,7 @@ public sealed class Favorite
     [SugarColumn(IsPrimaryKey = true)]
     public Guid TrackId { get; set; }
     /// <summary>收藏时间（UTC）；(UserId, CreatedAtUtc) 复合索引支撑“按收藏时间倒序列表”。</summary>
+    [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 }
 
@@ -171,12 +183,16 @@ public sealed class UserPlaylist
     /// <summary>歌单名称，最长 100 字符。</summary>
     public required string Name { get; set; }
     /// <summary>歌单描述。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? Description { get; set; }
     /// <summary>封面 Id（可空）。</summary>
+    [SugarColumn(IsNullable = true)]
     public Guid? ArtworkId { get; set; }
     /// <summary>创建时间（UTC）。</summary>
+    [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
     /// <summary>最近更新时间（UTC）；(UserId, UpdatedAtUtc) 复合索引支撑“我的歌单按更新排序”。</summary>
+    [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
     /// <summary>歌单内曲目关联集合（一对多，显式配置外键 PlaylistId）。</summary>
     [SugarColumn(IsIgnore = true)]
@@ -199,6 +215,7 @@ public sealed class UserPlaylistTrack
     /// <summary>歌单内排序序号，决定用户歌单的曲目顺序。</summary>
     public int SortOrder { get; set; }
     /// <summary>加入歌单的时间（UTC）。</summary>
+    [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime AddedAtUtc { get; set; } = DateTime.UtcNow;
 }
 
@@ -220,26 +237,34 @@ public sealed class UserPlaylistPendingTrack
     /// <summary>艺人名列表的 JSON 数组字符串。</summary>
     public required string ArtistsJson { get; set; }
     /// <summary>专辑名（可空）。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? AlbumTitle { get; set; }
     /// <summary>时长（毫秒，可空）。</summary>
+    [SugarColumn(IsNullable = true)]
     public int? DurationMs { get; set; }
     /// <summary>封面地址（可空，外部平台 CDN）。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? CoverUrl { get; set; }
     /// <summary>来源平台标识：netease / qqmusic / kuwo / ytmusic。</summary>
     public required string SourcePlatform { get; set; }
     /// <summary>来源平台曲目 Id（可空）。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? SourceTrackId { get; set; }
     /// <summary>来源页面地址（可空）。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? SourceUrl { get; set; }
     /// <summary>原歌单内排序序号（0 起），转正时作为 UserPlaylistTrack.SortOrder。</summary>
     public int SortOrder { get; set; }
     /// <summary>状态：pending（待下载）/ downloading（下载中）/ no_source（无可用源）/ failed（获取失败）。</summary>
     public string Status { get; set; } = "pending";
     /// <summary>关联的音源下载任务 Id（可空，未找到可用源时为空）。</summary>
+    [SugarColumn(IsNullable = true)]
     public Guid? DownloadTaskId { get; set; }
     /// <summary>创建时间（UTC）。</summary>
+    [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
     /// <summary>最近更新时间（UTC）。</summary>
+    [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
 }
 
@@ -263,25 +288,33 @@ public sealed class SongRequestRecord
     /// <summary>归一化艺术家名，用于查重复合索引。</summary>
     public required string NormalizedArtistName { get; set; }
     /// <summary>用户填写的专辑名（原文，可空）。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? AlbumTitle { get; set; }
     /// <summary>归一化专辑名，可空；参与查重复合索引。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? NormalizedAlbumTitle { get; set; }
     /// <summary>提交者附言（补充说明）。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? Note { get; set; }
     /// <summary>审核流程状态，取值见 <see cref="SongRequestStatuses"/>，默认 open。</summary>
     public string Status { get; set; } = SongRequestStatuses.Open;
     /// <summary>管理员处理备注（拒绝原因/处理说明等）。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? AdminNote { get; set; }
     /// <summary>匹配到的曲库曲目 Id：该点歌被满足并上架后，回填对应 Track。</summary>
+    [SugarColumn(IsNullable = true)]
     public Guid? MatchedTrackId { get; set; }
     /// <summary>归档时间（UTC）：已满足的需求在保留期后由后台任务写入，公共需求池不再展示；
     /// 记录本身保留，提交人仍可在「我的」中查看历史。</summary>
+    [SugarColumn(IsNullable = true, ColumnDataType = "timestamptz")]
     public DateTime? ArchivedAtUtc { get; set; }
     /// <summary>提交该点歌的用户 Id。</summary>
     public Guid CreatedByUserId { get; set; }
     /// <summary>创建时间（UTC）。</summary>
+    [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
     /// <summary>状态/备注最近更新时间（UTC）。</summary>
+    [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
     /// <summary>该点歌收到的投票集合（一对多导航）。</summary>
     [SugarColumn(IsIgnore = true)]
@@ -302,6 +335,7 @@ public sealed class SongRequestVote
     [SugarColumn(IsPrimaryKey = true)]
     public Guid UserId { get; set; }
     /// <summary>投票时间（UTC）。</summary>
+    [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 }
 
@@ -317,16 +351,21 @@ public sealed class SongRequestEventRecord
     /// <summary>事件类型，取值见 <see cref="SongRequestEventKinds"/>（最长 32 字符）。</summary>
     public string Kind { get; set; } = SongRequestEventKinds.Submitted;
     /// <summary>变更前状态；提交事件为 null。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? FromStatus { get; set; }
     /// <summary>变更后状态。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? ToStatus { get; set; }
     /// <summary>操作人用户 Id；系统自动事件（如归档）为 null。</summary>
+    [SugarColumn(IsNullable = true)]
     public Guid? ActorUserId { get; set; }
     /// <summary>操作人身份：user（提交人）/ admin（管理员）/ system（系统任务）。</summary>
     public string ActorKind { get; set; } = SongRequestActorKinds.System;
     /// <summary>事件备注：拒绝原因、重新开启原因等；仅提交人本人与管理员可见。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? Note { get; set; }
     /// <summary>事件发生时间（UTC）。</summary>
+    [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 }
 
@@ -378,16 +417,22 @@ public sealed class UserNotification
     /// <summary>标题（最长 200 字符）。</summary>
     public required string Title { get; set; }
     /// <summary>正文说明（最长 1000 字符）。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? Body { get; set; }
     /// <summary>点击后跳转的前端页面路径（如 /pages/requests/index）；无跳转时为 null。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? LinkUrl { get; set; }
     /// <summary>关联资源类型（song_request 等），便于按业务回溯。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? ResourceType { get; set; }
     /// <summary>关联资源 Id（字符串形式）。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? ResourceId { get; set; }
     /// <summary>已读时间（UTC）；为空表示未读，(UserId, ReadAtUtc) 索引支撑未读数统计。</summary>
+    [SugarColumn(IsNullable = true, ColumnDataType = "timestamptz")]
     public DateTime? ReadAtUtc { get; set; }
     /// <summary>创建时间（UTC）。</summary>
+    [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 }
 
@@ -419,18 +464,23 @@ public sealed class UserThemeProfile
     [SugarColumn(IsPrimaryKey = true)]
     public Guid UserId { get; set; }
     /// <summary>壁纸文件扩展名（.jpg/.png/.webp）；null 表示尚未上传壁纸。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? WallpaperExtension { get; set; }
     /// <summary>主强调色（#RRGGBB）；尚未取色时为 null。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? Accent { get; set; }
     /// <summary>次强调色（#RRGGBB），可空。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? Accent2 { get; set; }
     /// <summary>第三强调色（#RRGGBB），可空。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? Accent3 { get; set; }
     /// <summary>壁纸上的暗色遮罩不透明度（0-0.85），控制壁纸上的文字可读性。</summary>
     public float MaskOpacity { get; set; } = 0.45f;
     /// <summary>是否启用自定义主题；关闭后回退预设主题但保留配置（多端同步的开关事实源）。</summary>
     public bool Enabled { get; set; }
     /// <summary>最近更新时间（UTC）。</summary>
+    [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
 }
 
@@ -454,6 +504,7 @@ public sealed class AdminAuditEntry
     /// <summary>被操作资源 Id（字符串形式），最长 100 字符。</summary>
     public required string ResourceId { get; set; }
     /// <summary>操作详情（可选，JSON 序列化后的快照，如变更前后内容）。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? DetailsJson { get; set; }
     /// <summary>请求追踪 Id（HttpContext.TraceIdentifier），用于串联日志与审计，最长 100 字符。</summary>
     public required string TraceId { get; set; }
@@ -467,6 +518,7 @@ public sealed class AdminAuditEntry
     [SugarColumn(IsNullable = true)]
     public string? DeviceInfo { get; set; }
     /// <summary>审计写入时间（UTC）；(CreatedAtUtc, ActorUserId) 复合索引支撑按时间/操作人检索。</summary>
+    [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 }
 
@@ -502,6 +554,7 @@ public sealed class LoginAuditEntry
     [SugarColumn(IsNullable = true)]
     public string? UserAgent { get; set; }
     /// <summary>发生时间（UTC）。</summary>
+    [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 }
 

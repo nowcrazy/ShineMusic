@@ -24,7 +24,7 @@ const loading = ref(false)
 const tracks = ref<ApiTrack[]>([])
 const total = ref(0)
 const page = ref(1)
-const pageSize = ref(20)
+const pageSize = ref(100)
 const query = ref('')
 const missingMetadata = ref(false)
 const duplicates = ref(false)
@@ -361,7 +361,7 @@ onMounted(loadTracks)
           v-model:current-page="page"
           v-model:page-size="pageSize"
           :total="total"
-          :page-sizes="[20, 50, 100]"
+          :page-sizes="[100, 150, 200, 500, 1000]"
           layout="total, sizes, prev, pager, next"
           @current-change="loadTracks"
           @size-change="search"

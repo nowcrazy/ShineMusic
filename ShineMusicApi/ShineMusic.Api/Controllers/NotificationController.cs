@@ -9,9 +9,9 @@
 // =============================================================================
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ShineMusic.Api.Extensions;
 using ShineMusic.Model.Contracts;
 using ShineMusic.Model.Entities;
-using ShineMusic.Api.Extensions;
 using SqlSugar;
 
 namespace ShineMusic.Api.Controllers;
@@ -41,7 +41,7 @@ public sealed class NotificationController : ControllerBase
         if (!HttpContext.User.TryGetUserId(out var userId))
             return Results.Unauthorized();
         page = Math.Clamp(page, 1, 1000);
-        pageSize = Math.Clamp(pageSize, 1, 100);
+        pageSize = Math.Clamp(pageSize, 1, 1000);
 
         var query = db.Queryable<UserNotification>().Where(notification => notification.UserId == userId);
         if (unreadOnly)

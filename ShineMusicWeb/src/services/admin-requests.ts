@@ -11,6 +11,8 @@ import { API_PREFIX, http } from './http'
 export interface AdminRequestQuery {
   /** 按状态过滤；空字符串/undefined 表示全部 */
   status?: SongRequestStatus | ''
+  /** 关键词：匹配曲名 / 艺人 / 专辑 */
+  q?: string
   /** 排序：votes（投票优先）或 createdAt（最新提交） */
   sort?: 'votes' | 'createdAt'
   page?: number
@@ -21,6 +23,7 @@ export interface AdminRequestQuery {
 export async function getAdminSongRequests(query: AdminRequestQuery = {}) {
   const params = new URLSearchParams()
   if (query.status) params.set('status', query.status)
+  if (query.q) params.set('q', query.q)
   params.set('sort', query.sort ?? 'votes')
   params.set('page', String(query.page ?? 1))
   params.set('pageSize', String(query.pageSize ?? 50))

@@ -19,6 +19,7 @@ import { t } from '@/locale'
 import { http, setRefreshHandler } from './http'
 import { syncRemoteTheme } from './user-theme'
 import { clearTokens, getRefreshToken, hasSession, restoreTokens, saveTokens } from './tokens'
+import { clearActivity, hasIdleExpired, markActivity } from './idle-session'
 
 interface SessionState {
   /** 当前用户资料；null 表示未登录或尚未加载 */
@@ -121,6 +122,7 @@ export async function login(email: string, password: string) {
     false,
   )
   saveTokens(tokens.accessToken, tokens.refreshToken)
+  markActivity()
   await loadCurrentUser()
   // 登录成功后同步自定义图片主题（远端启用则应用；失败静默）。
   void syncRemoteTheme()
@@ -150,9 +152,31 @@ export async function logout() {
     if (refreshToken) await http.post('/api/v1/auth/logout', { refreshToken }, false)
   } finally {
     clearTokens()
+    clearActivity()
     state.user = null
     state.status = 'anonymous'
   }
+}
+
+/**
+ * 空闲超时登出：仅本地清理，不再请求服务端注销（refresh token 到期后由后端自然回收）。
+ * 供 Web 端空闲检查器与路由守卫调用。
+ */
+export function expireInactiveSession() {
+  clearTokens()
+  clearActivity()
+  state.user = null
+  state.status = 'anonymous'
+}
+
+/**
+ * 空闲超时检查：已超时则清理本地会话并返回 true，调用方负责跳转登录页。
+ * 非 Web 端无活动记录，hasIdleExpired 恒为 false，行为不受影响。
+ */
+export function enforceIdleTimeout(): boolean {
+  if (!hasIdleExpired()) return false
+  expireInactiveSession()
+  return true
 }
 
 /**
@@ -163,6 +187,14 @@ export async function logout() {
  */
 export async function restoreSession() {
   restoreTokens()
+  // 上次会话若已空闲超时，直接清理本地令牌，不再尝试刷新（否则等同于永久保持登录）。
+  if (hasIdleExpired()) {
+    clearTokens()
+    clearActivity()
+    state.user = null
+    state.status = 'anonymous'
+    return
+  }
   if (!hasSession()) {
     state.status = 'anonymous'
     return

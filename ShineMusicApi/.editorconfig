@@ -43,6 +43,21 @@ dotnet_naming_symbols.private_field_symbols.applicable_accessibilities = private
 dotnet_naming_style.camel_case_underscore_style.required_prefix = _
 dotnet_naming_style.camel_case_underscore_style.capitalization = camel_case
 
+# 常量与 static readonly 字段沿用 .NET 常规的 PascalCase（如 DefaultPageSize、AllowedContentTypes）。
+# 上面的私有字段规则按「private field」一刀切，会把 const / static readonly 也判成缺少 _ 前缀；
+# 以下两条规则修饰符更具体，Roslyn 优先采用，只让「可变私有实例字段」保持 _camelCase。
+dotnet_naming_symbols.constant_fields.applicable_kinds = field
+dotnet_naming_symbols.constant_fields.required_modifiers = const
+dotnet_naming_rule.constant_fields_should_be_pascal_case.severity = warning
+dotnet_naming_rule.constant_fields_should_be_pascal_case.symbols = constant_fields
+dotnet_naming_rule.constant_fields_should_be_pascal_case.style = pascal_case_style
+
+dotnet_naming_symbols.static_readonly_fields.applicable_kinds = field
+dotnet_naming_symbols.static_readonly_fields.required_modifiers = static, readonly
+dotnet_naming_rule.static_readonly_fields_should_be_pascal_case.severity = warning
+dotnet_naming_rule.static_readonly_fields_should_be_pascal_case.symbols = static_readonly_fields
+dotnet_naming_rule.static_readonly_fields_should_be_pascal_case.style = pascal_case_style
+
 # ---------------------------------------------------------------------------
 # using / 代码风格（仅编辑器提示，不升级为构建错误）
 # ---------------------------------------------------------------------------

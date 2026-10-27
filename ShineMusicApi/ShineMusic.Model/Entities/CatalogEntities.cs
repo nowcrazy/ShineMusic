@@ -22,7 +22,8 @@ public sealed class Artist
     public Guid Id { get; set; } = Guid.NewGuid();
     /// <summary>艺术家名称（展示名，非唯一）。</summary>
     public required string Name { get; set; }
-    /// <summary>艺术家简介（富文本/纯文本，可为空）。</summary>
+    /// <summary>艺术家简介（富文本/纯文本，可为空）。SqlSugar 默认把 string? 推断为 NOT NULL，显式指定 IsNullable。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? Biography { get; set; }
     /// <summary>该艺术家参与的“曲目-艺术家”关联行集合。</summary>
     [SugarColumn(IsIgnore = true)]
@@ -46,8 +47,10 @@ public sealed class Album
     /// <summary>专辑标题。</summary>
     public required string Title { get; set; }
     /// <summary>发行年份（元数据缺失时可为空）。</summary>
+    [SugarColumn(IsNullable = true)]
     public int? ReleaseYear { get; set; }
     /// <summary>封面 Id 外键，指向 Artwork；封面删除时置空（SetNull）。</summary>
+    [SugarColumn(IsNullable = true)]
     public Guid? ArtworkId { get; set; }
     /// <summary>封面导航属性。</summary>
     [SugarColumn(IsIgnore = true)]
@@ -74,19 +77,25 @@ public sealed class Track
     /// <summary>曲目标题。</summary>
     public required string Title { get; set; }
     /// <summary>所属专辑 Id 外键；单曲（无专辑）时为空。</summary>
+    [SugarColumn(IsNullable = true)]
     public Guid? AlbumId { get; set; }
     /// <summary>所属专辑导航属性。</summary>
     [SugarColumn(IsIgnore = true)]
     public Album? Album { get; set; }
-    /// <summary>碟内曲目序号（来自音频标签 TrackNumber），用于专辑内排序。</summary>
+    /// <summary>碟内曲目序号（来自音频标签 TrackNumber），用于专辑内排序。可为空。</summary>
+    [SugarColumn(IsNullable = true)]
     public int? TrackNumber { get; set; }
-    /// <summary>碟片号（多碟专辑使用），用于先按碟再按曲号排序。</summary>
+    /// <summary>碟片号（多碟专辑使用），用于先按碟再按曲号排序。可为空。</summary>
+    [SugarColumn(IsNullable = true)]
     public int? DiscNumber { get; set; }
     /// <summary>发行年份（可独立于专辑年份，元数据缺失时为空）。</summary>
+    [SugarColumn(IsNullable = true)]
     public int? ReleaseYear { get; set; }
     /// <summary>曲目时长（毫秒）；ffprobe 探测与 TagLib 解析结果会相互兜底。</summary>
+    [SugarColumn(IsNullable = true)]
     public long? DurationMs { get; set; }
-    /// <summary>曲目自身封面 Id 外键（优先于专辑封面展示）；删除封面时置空。</summary>
+    /// <summary>曲目自身封面 Id 外键（优先于专辑封面展示）；删除封面时置空。可为空。</summary>
+    [SugarColumn(IsNullable = true)]
     public Guid? ArtworkId { get; set; }
     /// <summary>曲目封面导航属性。</summary>
     [SugarColumn(IsIgnore = true)]
@@ -95,9 +104,11 @@ public sealed class Track
     public DateTimeOffset AddedAt { get; set; } = DateTimeOffset.UtcNow;
     /// <summary>发布时间（UTC）；为空表示尚未发布/上架，前台不可见。该列建有索引供“已发布”列表查询。
     /// 用户上传的曲目在转公开前处于此状态（私有，仅上传者本人可见）。</summary>
+    [SugarColumn(IsNullable = true)]
     public DateTimeOffset? PublishedAt { get; set; }
     /// <summary>上传者用户 Id：用户上传的曲目私有期间归上传者所有（PublishedAt 为空）；
     /// 官方/管理员导入的曲目为空。转公开后保留，用于追溯来源。</summary>
+    [SugarColumn(IsNullable = true)]
     public Guid? OwnerUserId { get; set; }
     /// <summary>“曲目-艺术家”关联行集合。</summary>
     [SugarColumn(IsIgnore = true)]
@@ -132,10 +143,12 @@ public sealed class Lyric
     [SugarColumn(IsIgnore = true)]
     public Track Track { get; set; } = null!;
     /// <summary>语言代码（如 zh-CN、en、ja）；纯音乐或语言未知时可为空。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? Language { get; set; }
     /// <summary>歌词格式：plain（纯文本）或 lrc（带时间轴的逐行歌词）。</summary>
     public string Format { get; set; } = LyricFormats.Plain;
     /// <summary>歌词正文（纯文本或 LRC 内容）。</summary>
+    [SugarColumn(ColumnDataType = "text")]
     public string Content { get; set; } = string.Empty;
     /// <summary>
     /// 歌词来源，取值见 <see cref="LyricsSources"/>：embedded（内嵌标签）/ sidecar（同名 .lrc）/
@@ -143,8 +156,10 @@ public sealed class Lyric
     /// </summary>
     public string Source { get; set; } = LyricsSources.Manual;
     /// <summary>匹配置信度（0~1）：内嵌/旁挂/人工为 1，外部源按标题+艺人+时长相似度打分。</summary>
+    [SugarColumn(IsNullable = true)]
     public double? Confidence { get; set; }
     /// <summary>外部歌词源记录 ID（如 LRCLIB 的 id），便于回溯；非外部来源为 null。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? ProviderId { get; set; }
     /// <summary>是否为该曲目默认展示的歌词；同一曲目最多一份默认。</summary>
     public bool IsDefault { get; set; }
@@ -243,6 +258,7 @@ public sealed class MediaAsset
     /// <summary>文件内容哈希（去重/校验用），配置为唯一索引，防止同一文件重复入库。</summary>
     public required string ContentHash { get; set; }
     /// <summary>码率（kbps），探测失败时可为空。</summary>
+    [SugarColumn(IsNullable = true)]
     public int? BitrateKbps { get; set; }
     /// <summary>是否已发布（上架）；与 (TrackId, IsPublished) 复合索引共同支撑“取已发布资产”查询。</summary>
     public bool IsPublished { get; set; }
@@ -286,8 +302,10 @@ public sealed class EditorialCollection
     /// <summary>集合标题。</summary>
     public required string Title { get; set; }
     /// <summary>集合描述/推荐语。</summary>
+    [SugarColumn(IsNullable = true)]
     public string? Description { get; set; }
     /// <summary>封面 Id 外键；删除封面时置空。</summary>
+    [SugarColumn(IsNullable = true)]
     public Guid? ArtworkId { get; set; }
     /// <summary>封面导航属性。</summary>
     [SugarColumn(IsIgnore = true)]

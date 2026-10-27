@@ -18,8 +18,8 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Options;
 using ShineMusic.Model.Entities;
-using ShineMusic.Repository.Data;
 using ShineMusic.Model.Options;
+using ShineMusic.Repository.Data;
 
 namespace ShineMusic.Service.Lyrics;
 

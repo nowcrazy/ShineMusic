@@ -16,6 +16,41 @@ import {
 import { describeError } from '@/services/errors'
 import { formatDateTime } from '@/utils/format'
 
+/** IP 地址描述：把后端返回的带前缀 IP 字符串解析成结构化显示数据。
+ *  后端可能返回：
+ *    - "内网 192.168.100.109"   → kind=private
+ *    - "VPN 100.110.31.122"     → kind=vpn
+ *    - "本机"                    → kind=loopback
+ *    - "2408:844f:1516:a41e:..." → kind=public (IPv6)
+ *    - "117.128.126.30"          → kind=public (IPv4)
+ *  返回对象给模板按 kind 渲染不同视觉层次。 */
+function describeIp(raw: string | null | undefined) {
+  if (!raw) return { kind: 'unknown' as const, label: '—', value: '', display: '—', full: '' }
+
+  // 识别后端前缀
+  let kind: 'public' | 'private' | 'vpn' | 'loopback' = 'public'
+  let value = raw
+  if (raw === '本机') { kind = 'loopback'; value = '' }
+  else if (raw.startsWith('内网 ')) { kind = 'private'; value = raw.slice(3) }
+  else if (raw.startsWith('VPN ')) { kind = 'vpn'; value = raw.slice(4) }
+
+  // IPv6 简化：只显示前 4 段 + …（hover 看完整）
+  let display = value
+  if (kind === 'public' && value.includes(':') && !value.includes('.')) {
+    const segments = value.split(':')
+    if (segments.length > 4) display = segments.slice(0, 4).join(':') + ':…'
+  }
+
+  const labelMap: Record<typeof kind, string> = {
+    public: '公网',
+    private: '内网',
+    vpn: 'VPN',
+    loopback: '本机',
+  }
+
+  return { kind, label: labelMap[kind], value, display: display || '—', full: raw }
+}
+
 const activeTab = ref<'login' | 'operation'>('login')
 
 // 登录日志状态
@@ -33,12 +68,12 @@ const opTotal = ref(0)
 const opPage = ref(1)
 const opKeyword = ref('')
 
-const pageSize = 20
+const pageSize = ref(100)
 
 async function loadLogin() {
   loginLoading.value = true
   try {
-    const data = await getLoginAuditLogs(loginResult.value || undefined, loginKeyword.value, loginPage.value, pageSize)
+    const data = await getLoginAuditLogs(loginResult.value || undefined, loginKeyword.value, loginPage.value, pageSize.value)
     loginRows.value = data.items
     loginTotal.value = data.total
   } catch (error) {
@@ -51,7 +86,7 @@ async function loadLogin() {
 async function loadOperations() {
   opLoading.value = true
   try {
-    const data = await getOperationAuditLogs(opKeyword.value, opPage.value, pageSize)
+    const data = await getOperationAuditLogs(opKeyword.value, opPage.value, pageSize.value)
     opRows.value = data.items
     opTotal.value = data.total
   } catch (error) {
@@ -64,6 +99,18 @@ async function loadOperations() {
 function searchLogin() {
   loginPage.value = 1
   void loadLogin()
+}
+
+/** 登录日志每页条数变化：回到第一页重新查询。 */
+function changeLoginPageSize() {
+  loginPage.value = 1
+  void loadLogin()
+}
+
+/** 操作日志每页条数变化：回到第一页重新查询。 */
+function changeOpPageSize() {
+  opPage.value = 1
+  void loadOperations()
 }
 
 function searchOperations() {
@@ -154,9 +201,18 @@ onMounted(loadLogin)
             <el-table-column label="设备" min-width="180" show-overflow-tooltip>
               <template #default="{ row }">{{ row.deviceInfo || '—' }}</template>
             </el-table-column>
-            <el-table-column label="IP" width="140">
+            <el-table-column label="IP" width="170">
               <template #default="{ row }">
-                <span class="mono">{{ row.ip }}</span>
+                <template v-if="describeIp(row.ip).kind === 'public'">
+                  <span class="mono ip-public" :title="describeIp(row.ip).full">{{ describeIp(row.ip).display }}</span>
+                </template>
+                <template v-else-if="describeIp(row.ip).kind !== 'unknown'">
+                  <span class="ip-private" :title="describeIp(row.ip).full">
+                    <el-tag size="small" effect="plain" type="info" class="ip-kind-tag">{{ describeIp(row.ip).label }}</el-tag>
+                    <span v-if="describeIp(row.ip).value" class="mono ip-value">{{ describeIp(row.ip).value }}</span>
+                  </span>
+                </template>
+                <span v-else class="text-faint">—</span>
               </template>
             </el-table-column>
           </el-table>
@@ -164,10 +220,12 @@ onMounted(loadLogin)
           <div class="pagination">
             <el-pagination
               v-model:current-page="loginPage"
-              :page-size="pageSize"
+              v-model:page-size="pageSize"
               :total="loginTotal"
-              layout="total, prev, pager, next"
+              :page-sizes="[100, 150, 200, 500, 1000]"
+              layout="total, sizes, prev, pager, next"
               @current-change="loadLogin"
+              @size-change="changeLoginPageSize"
             />
           </div>
         </el-tab-pane>
@@ -212,9 +270,18 @@ onMounted(loadLogin)
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="IP" width="140">
+            <el-table-column label="IP" width="170">
               <template #default="{ row }">
-                <span class="mono">{{ row.ip || '—' }}</span>
+                <template v-if="describeIp(row.ip).kind === 'public'">
+                  <span class="mono ip-public" :title="describeIp(row.ip).full">{{ describeIp(row.ip).display }}</span>
+                </template>
+                <template v-else-if="describeIp(row.ip).kind !== 'unknown'">
+                  <span class="ip-private" :title="describeIp(row.ip).full">
+                    <el-tag size="small" effect="plain" type="info" class="ip-kind-tag">{{ describeIp(row.ip).label }}</el-tag>
+                    <span v-if="describeIp(row.ip).value" class="mono ip-value">{{ describeIp(row.ip).value }}</span>
+                  </span>
+                </template>
+                <span v-else class="text-faint">—</span>
               </template>
             </el-table-column>
           </el-table>
@@ -222,10 +289,12 @@ onMounted(loadLogin)
           <div class="pagination">
             <el-pagination
               v-model:current-page="opPage"
-              :page-size="pageSize"
+              v-model:page-size="pageSize"
               :total="opTotal"
-              layout="total, prev, pager, next"
+              :page-sizes="[100, 150, 200, 500, 1000]"
+              layout="total, sizes, prev, pager, next"
               @current-change="loadOperations"
+              @size-change="changeOpPageSize"
             />
           </div>
         </el-tab-pane>
@@ -245,5 +314,35 @@ onMounted(loadLogin)
   margin-left: 6px;
   color: var(--adm-text-2);
   font-size: 12px;
+}
+
+/* === IP 显示分层 === */
+.ip-public {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-weight: 500;
+  color: var(--adm-text-1);
+  letter-spacing: 0.01em;
+}
+
+.ip-private {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--adm-text-3);
+}
+
+.ip-kind-tag {
+  opacity: 0.7;
+  font-size: 11px;
+  padding: 0 4px;
+  height: 18px;
+  line-height: 16px;
+}
+
+.ip-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  color: var(--adm-text-3);
+  opacity: 0.85;
 }
 </style>

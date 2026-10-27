@@ -378,6 +378,7 @@ public sealed class SongRequestController : ControllerBase
     public async Task<IResult> GetAdminRequests(
         ISqlSugarClient db,
         string? status,
+        string? q,
         string? sort,
         int? page,
         int? pageSize,
@@ -394,6 +395,14 @@ public sealed class SongRequestController : ControllerBase
             if (!SongRequestStatuses.All.Contains(normalizedStatus))
                 return ApiResults.ValidationError(HttpContext, "status", "The song request status is not supported.");
             query = query.Where(request => request.Status == normalizedStatus);
+        }
+        if (!string.IsNullOrWhiteSpace(q))
+        {
+            var term = q.Trim();
+            query = query.Where(request =>
+                request.Title.Contains(term) ||
+                request.ArtistName.Contains(term) ||
+                (request.AlbumTitle != null && request.AlbumTitle.Contains(term)));
         }
         var total = await query.CountAsync(cancellationToken);
         var ordered = sortBy == "createdAt"
@@ -579,8 +588,8 @@ public sealed class SongRequestController : ControllerBase
         error = null;
         if (pageNumber < 1)
             error = ApiResults.ValidationError(ctx, "page", "page must be at least 1.");
-        else if (size < 1 || size > 100)
-            error = ApiResults.ValidationError(ctx, "pageSize", "pageSize must be between 1 and 100.");
+        else if (size < 1 || size > 1000)
+            error = ApiResults.ValidationError(ctx, "pageSize", "pageSize must be between 1 and 1000.");
         return error is null;
     }
     private static bool TryGetSort(string? sort, out string sortBy)

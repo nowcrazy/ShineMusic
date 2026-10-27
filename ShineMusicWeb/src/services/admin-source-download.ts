@@ -94,14 +94,16 @@ export async function createDownloadTasks(
   })
 }
 
-/** 任务分页列表（可按状态过滤）。 */
+/** 任务分页列表（可按状态过滤、按曲名/艺人/专辑搜关键词）。 */
 export async function getDownloadTasks(
   status?: string,
   page = 1,
   pageSize = 20,
+  q?: string,
 ): Promise<ApiExternalDownloadTaskList> {
   const params = new URLSearchParams()
   if (status) params.set('status', status)
+  if (q) params.set('q', q)
   params.set('page', String(page))
   params.set('pageSize', String(pageSize))
   return http.get<ApiExternalDownloadTaskList>(`${API_PREFIX}/admin/source-downloads/tasks?${params.toString()}`)

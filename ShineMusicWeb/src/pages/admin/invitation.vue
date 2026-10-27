@@ -51,7 +51,7 @@ const loading = ref(false)
 const items = ref<Invitation[]>([])
 const total = ref(0)
 const page = ref(1)
-const pageSize = ref(20)
+const pageSize = ref(100)
 const statusFilter = ref('')
 
 const inviteEmail = ref('')
@@ -230,7 +230,7 @@ onMounted(load)
           v-model:current-page="page"
           v-model:page-size="pageSize"
           :total="total"
-          :page-sizes="[20, 50, 100]"
+          :page-sizes="[100, 150, 200, 500, 1000]"
           layout="total, sizes, prev, pager, next"
           @current-change="load"
           @size-change="search"

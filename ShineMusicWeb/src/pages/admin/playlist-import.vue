@@ -3,15 +3,18 @@
  * 歌单解析导入：粘贴外部平台（网易云/QQ 音乐/酷我/YouTube Music）歌单链接，
  * 解析预览（标记已匹配曲库的曲目）→ 一键导入生成新歌单，未匹配曲目后台静默下载补齐。
  */
-import { computed, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Link, Download, Refresh } from '@element-plus/icons-vue'
+import { Link, Download, MagicStick, Refresh, Search } from '@element-plus/icons-vue'
 import {
   importPlaylist,
   parsePlaylistImport,
   PlaylistImportPlatformLabel,
+  rematchPlaylist,
   type PlaylistImportParseResult,
+  type PlaylistRematchResult,
 } from '@/services/playlist-import'
+import { getPlaylists } from '@/services/library'
 import { describeError } from '@/services/errors'
 
 const form = reactive({ url: '', name: '' })
@@ -19,8 +22,27 @@ const parsing = ref(false)
 const importing = ref(false)
 const preview = ref<PlaylistImportParseResult | null>(null)
 
+const playlists = ref<{ id: string; name: string; trackCount: number }[]>([])
+const rematchPlaylistId = ref('')
+const rematching = ref(false)
+const rematchResult = ref<PlaylistRematchResult | null>(null)
+
 const matchedCount = computed(() => preview.value?.tracks.filter((track) => track.matched).length ?? 0)
 const unmatchedCount = computed(() => (preview.value ? preview.value.total - matchedCount.value : 0))
+
+/** 预览曲目关键词：本地匹配曲名 / 艺人 / 专辑（不必回源请求）。 */
+const previewKeyword = ref('')
+const previewTracks = computed(() => {
+  const tracks = preview.value?.tracks ?? []
+  const term = previewKeyword.value.trim().toLowerCase()
+  if (!term) return tracks
+  return tracks.filter(
+    (track) =>
+      track.title.toLowerCase().includes(term) ||
+      (track.albumTitle ?? '').toLowerCase().includes(term) ||
+      track.artists.some((artist) => artist.toLowerCase().includes(term)),
+  )
+})
 
 function formatDuration(durationMs: number | null): string {
   if (!durationMs || durationMs <= 0) return '-'
@@ -62,12 +84,45 @@ async function handleImport() {
     preview.value = null
     form.url = ''
     form.name = ''
+    rematchPlaylistId.value = result.playlistId
+    await loadPlaylists()
   } catch (error) {
     ElMessage.error(describeError(error))
   } finally {
     importing.value = false
   }
 }
+
+/** 拉取当前用户歌单列表（补齐选择器数据源）。 */
+async function loadPlaylists() {
+  try {
+    const page = await getPlaylists()
+    playlists.value = page.items.map((item) => ({ id: item.id, name: item.name, trackCount: item.trackCount }))
+  } catch (error) {
+    ElMessage.error(describeError(error, '歌单列表加载失败'))
+  }
+}
+
+/** 重新补齐选中歌单的缺失曲目：逐条重跑匹配（查曲库 → 搜索音源 → 重建下载任务）。 */
+async function handleRematch() {
+  if (!rematchPlaylistId.value) {
+    ElMessage.warning('请先选择要补齐的歌单')
+    return
+  }
+  rematching.value = true
+  rematchResult.value = null
+  try {
+    rematchResult.value = await rematchPlaylist(rematchPlaylistId.value)
+    ElMessage.success('补齐完成')
+    await loadPlaylists()
+  } catch (error) {
+    ElMessage.error(describeError(error, '补齐失败'))
+  } finally {
+    rematching.value = false
+  }
+}
+
+onMounted(loadPlaylists)
 </script>
 
 <template>
@@ -121,6 +176,14 @@ async function handleImport() {
             </div>
           </div>
           <div class="import-bar">
+            <el-input
+              v-model="previewKeyword"
+              placeholder="搜索曲名 / 艺人 / 专辑"
+              clearable
+              class="preview-search"
+            >
+              <template #prefix><el-icon><Search /></el-icon></template>
+            </el-input>
             <el-input v-model="form.name" placeholder="新歌单名称" class="name-input" maxlength="100" />
             <el-button type="primary" :loading="importing" @click="handleImport">
               <el-icon v-if="!importing"><Download /></el-icon>
@@ -130,7 +193,7 @@ async function handleImport() {
         </div>
       </template>
 
-      <el-table :data="preview.tracks" stripe max-height="560">
+      <el-table :data="previewTracks" stripe max-height="560">
         <el-table-column type="index" label="#" width="60" />
         <el-table-column prop="title" label="标题" min-width="220" show-overflow-tooltip />
         <el-table-column label="艺人" min-width="160" show-overflow-tooltip>
@@ -149,6 +212,43 @@ async function handleImport() {
           </template>
         </el-table-column>
       </el-table>
+    </el-card>
+
+    <el-card shadow="never" class="result-card">
+      <template #header>
+        <div class="card-header">
+          <span>重新补齐缺失曲目</span>
+        </div>
+      </template>
+
+      <el-alert
+        type="info"
+        :closable="false"
+        class="tip"
+        title="歌单里出现「待补齐 / 无音源」曲目，或下载任务丢失时使用：会逐条重跑匹配（先查曲库，再搜索音源），命中曲库的直接转正，其余重建下载任务。200+ 首约需 1~3 分钟，请勿关闭页面。"
+      />
+
+      <div class="rematch-row">
+        <el-select v-model="rematchPlaylistId" placeholder="选择要补齐的歌单" filterable class="rematch-select">
+          <el-option v-for="item in playlists" :key="item.id" :label="item.name" :value="item.id">
+            <span>{{ item.name }}</span>
+            <span class="option-count">{{ item.trackCount }} 首</span>
+          </el-option>
+        </el-select>
+        <el-button type="primary" :loading="rematching" @click="handleRematch">
+          <el-icon v-if="!rematching"><MagicStick /></el-icon>
+          重新补齐
+        </el-button>
+      </div>
+
+      <el-alert
+        v-if="rematchResult"
+        type="success"
+        :closable="false"
+        show-icon
+        class="rematch-result"
+        :title="`检查 ${rematchResult.total} 首：转正 ${rematchResult.promoted} 首 · 重建任务 ${rematchResult.retried} 首 · 仍无音源 ${rematchResult.noSource} 首 · 下载中保持 ${rematchResult.unchanged} 首`"
+      />
     </el-card>
   </div>
 </template>
@@ -175,6 +275,27 @@ async function handleImport() {
 .url-row {
   display: flex;
   gap: 12px;
+}
+
+.rematch-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.rematch-select {
+  width: 320px;
+}
+
+.option-count {
+  float: right;
+  margin-left: 16px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.rematch-result {
+  margin-top: 12px;
 }
 
 .playlist-info {
@@ -210,5 +331,9 @@ async function handleImport() {
 
 .name-input {
   width: 260px;
+}
+
+.preview-search {
+  width: 240px;
 }
 </style>

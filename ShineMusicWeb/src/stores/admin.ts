@@ -73,6 +73,24 @@ export const useAdminStore = defineStore('admin', () => {
     }
   }
 
+  /**
+   * 关闭一条面包屑：从历史里移除指定 path。
+   * @returns 应该跳转的下一条路径 —— 如果关闭的是当前页，返回被移除条目前紧邻的面包屑 path（供 View 跳回）；
+   *          如果关闭的是历史页，返回 null（只删不跳，View 无需额外动作）；
+   *          如果被关位置前面没有其他面包屑了，返回 null。
+   */
+  function closeBreadcrumb(path: string, currentPath: string): string | null {
+    const idx = breadcrumbs.value.findIndex((b) => b.path === path)
+    if (idx === -1) return null
+    const closingCurrent = path === currentPath
+    // 关当前页 → 跳到被关位置的前一条
+    // 关历史页 → 只删，返回 null
+    const jumpTarget = closingCurrent ? breadcrumbs.value[idx - 1]?.path ?? null : null
+    breadcrumbs.value.splice(idx, 1)
+    persistBreadcrumbs()
+    return jumpTarget
+  }
+
   return {
     sidebarCollapsed,
     mobileMenuOpen,
@@ -81,5 +99,6 @@ export const useAdminStore = defineStore('admin', () => {
     closeMobileMenu,
     pushBreadcrumb,
     resetBreadcrumbs,
+    closeBreadcrumb,
   }
 })

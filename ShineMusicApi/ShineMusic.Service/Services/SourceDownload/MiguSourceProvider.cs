@@ -1,6 +1,7 @@
 // 职责：咪咕音乐音源 provider（HTTP 直链型，含加密响应解密）。
 // 端点链（2026-10 实测）：
-//   1. 搜索：app.c.nf.migu.cn/MIGUM2.0/v1.0/content/search_all.do —— 零签名，仅需 Referer；返回 copyrightId/contentId/songId/歌手/专辑/时长/封面；
+//   1. 搜索：app.c.nf.migu.cn/MIGUM2.0/v1.0/content/search_all.do —— 零签名，仅需 Referer；返回 copyrightId/contentId/songId/歌手/专辑/封面；
+//      不返回时长，需按 rateFormats 文件大小与 CBR 码率反推（见 ParseDurationFromFormats）；
 //   2. 详情：app.c.nf.migu.cn/MIGUM2.0/v1.0/content/resourceinfo.do —— 按 copyrightId 取 contentId 等完整元数据；
 //   3. 下载：c.musicapp.migu.cn/strategy/listen-url/h5/v2.4 —— 响应为自定义加密二进制（头 0xAB 0xCD 0x01 <offset>，
 //      明文[i] = 密文[i+4] + offset - key[i % keyLen]），解密后 JSON 含 data.url（PQ 128k），
@@ -107,7 +108,7 @@ public sealed partial class MiguSourceProvider(
                 && albums.GetArrayLength() > 0
                 ? GetString(albums[0], "name")
                 : null;
-            long? durationMs = ParseDurationMs(entry, "duration");
+            long? durationMs = ParseDurationMs(entry, "duration") ?? ParseDurationFromFormats(entry);
             var coverUrl = ExtractCoverUrl(entry);
             var songId = GetString(entry, "id");
             results.Add(new SourceSearchResult(
@@ -336,18 +337,69 @@ public sealed partial class MiguSourceProvider(
         return null;
     }
 
-    /// <summary>宽松解析时长字段（秒数字符串或数字），返回毫秒；解析失败返回 null。</summary>
+    /// <summary>
+    /// 解析时长字段，返回毫秒；支持数字秒、"HH:mm:ss"（咪咕 resourceinfo 的 length 格式）与纯数字字符串。
+    /// </summary>
     private static long? ParseDurationMs(JsonElement entry, string property)
     {
         if (!entry.TryGetProperty(property, out var el))
             return null;
-        double seconds = el.ValueKind switch
+        switch (el.ValueKind)
         {
-            JsonValueKind.Number => el.GetDouble(),
-            JsonValueKind.String when double.TryParse(el.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var s) => s,
-            _ => 0
-        };
-        return seconds > 0 ? (long)(seconds * 1000) : null;
+            case JsonValueKind.Number:
+                var numericSeconds = el.GetDouble();
+                return numericSeconds > 0 ? (long)(numericSeconds * 1000) : null;
+            case JsonValueKind.String:
+                var text = el.GetString();
+                if (string.IsNullOrWhiteSpace(text))
+                    return null;
+                if (TimeSpan.TryParseExact(text, @"hh\:mm\:ss", CultureInfo.InvariantCulture, out var exact)
+                    || TimeSpan.TryParseExact(text, @"mm\:ss", CultureInfo.InvariantCulture, out exact)
+                    || TimeSpan.TryParse(text, CultureInfo.InvariantCulture, out exact))
+                    return exact > TimeSpan.Zero ? exact.Ticks / TimeSpan.TicksPerMillisecond : null;
+                return double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds) && seconds > 0
+                    ? (long)(seconds * 1000)
+                    : null;
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>
+    /// 咪咕搜索接口不返回时长字段，按 rateFormats 的文件大小与已知 CBR 码率反推：
+    /// HQ=320kbps、PQ=128kbps、LQ=64kbps；三者反推结果一致（实测误差 &lt; 1%）。
+    /// </summary>
+    private static long? ParseDurationFromFormats(JsonElement entry)
+    {
+        if (!entry.TryGetProperty("rateFormats", out var formats) || formats.ValueKind != JsonValueKind.Array)
+            return null;
+        long? bestMs = null;
+        var bestBitrate = 0;
+        foreach (var format in formats.EnumerateArray())
+        {
+            var bitrate = GetString(format, "formatType") switch
+            {
+                "HQ" => 320_000,
+                "PQ" => 128_000,
+                "LQ" => 64_000,
+                _ => 0
+            };
+            if (bitrate <= bestBitrate)
+                continue;
+            var size = format.TryGetProperty("size", out var sizeEl)
+                ? sizeEl.ValueKind switch
+                {
+                    JsonValueKind.Number => sizeEl.GetInt64(),
+                    JsonValueKind.String when long.TryParse(sizeEl.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) => parsed,
+                    _ => 0L
+                }
+                : 0L;
+            if (size <= 0)
+                continue;
+            bestMs = (long)(size * 8.0 / bitrate * 1000);
+            bestBitrate = bitrate;
+        }
+        return bestMs;
     }
 
     /// <summary>从 JsonElement 安全取字符串字段。</summary>

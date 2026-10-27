@@ -7,6 +7,7 @@ namespace ShineMusic.Model.Contracts;
 /// 存储审计结果：曲库根目录下磁盘文件与数据库引用的对账明细。
 /// </summary>
 /// <param name="ReferencedFileCount">数据库引用的存储键数量（MediaAsset + Artwork）。</param>
+/// <param name="TrackCount">有文件引用的曲目数（每首对应原件/播放件/封面等多个文件，与文件数对照可消除歧义）。</param>
 /// <param name="DiskFileCount">磁盘上实际存在的文件数量（曲库根目录内）。</param>
 /// <param name="MissingFileCount">缺失文件数：数据库有引用但磁盘不存在（通常是误删或磁盘故障，只报告不自动修复）。</param>
 /// <param name="OrphanFileCount">孤儿文件数：磁盘存在但数据库无任何引用（可安全清理）。</param>
@@ -18,6 +19,7 @@ namespace ShineMusic.Model.Contracts;
 /// <param name="Groups">按曲目聚合的库内文件明细（音频 + 封面），末尾可能附带「其他引用」杂项组。</param>
 public sealed record StorageAuditDto(
     int ReferencedFileCount,
+    int TrackCount,
     int DiskFileCount,
     int MissingFileCount,
     int OrphanFileCount,

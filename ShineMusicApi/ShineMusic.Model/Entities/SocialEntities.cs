@@ -28,15 +28,18 @@ public sealed class TrackComment
     public Guid UserId { get; set; }
 
     /// <summary>父评论 Id：回复场景指向顶层评论；顶层评论为 null。</summary>
+    [SugarColumn(IsNullable = true)]
     public Guid? ParentId { get; set; }
 
     /// <summary>评论文本内容（最长 500 字符）。</summary>
     public required string Content { get; set; }
 
     /// <summary>发表时间（UTC）。</summary>
+    [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 
     /// <summary>编辑时间（UTC）；与发表于同一时刻默认，未实装编辑时保持等于创建时间。</summary>
+    [SugarColumn(IsNullable = true, ColumnDataType = "timestamptz")]
     public DateTime? UpdatedAtUtc { get; set; }
 }
 
@@ -56,6 +59,7 @@ public sealed class UserFollow
     public Guid FolloweeId { get; set; }
 
     /// <summary>关注时间（UTC）。</summary>
+    [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 }
 
@@ -75,5 +79,6 @@ public sealed class TrackCommentLike
     public Guid UserId { get; set; }
 
     /// <summary>点赞时间（UTC）。</summary>
+    [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 }

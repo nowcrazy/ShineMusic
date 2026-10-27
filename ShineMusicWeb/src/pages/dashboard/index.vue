@@ -37,7 +37,7 @@ const cards = computed(() => [
   { key: 'pendingPublication', label: '待转公开', value: stats.value.pendingPublication, hint: '用户上传等待发布', icon: UploadFilled, tone: 'orange', to: '/import' },
   { key: 'openRequests', label: '待处理点歌', value: stats.value.openRequests, hint: '状态为待安排的需求', icon: ChatDotRound, tone: 'purple', to: '/requests' },
   { key: 'invitations', label: '邀请记录', value: stats.value.invitations, hint: '累计发出的邀请', icon: Postcard, tone: 'cyan', to: '/invitations' },
-  { key: 'runningTasks', label: '音源任务', value: stats.value.runningTasks, hint: '外部音源下载任务', icon: Download, tone: 'slate', to: '/source-download' },
+  { key: 'runningTasks', label: '音源任务', value: stats.value.runningTasks, hint: '排队 / 下载 / 待导入（不含已完成）', icon: Download, tone: 'slate', to: '/source-download' },
 ])
 
 const shortcuts = [
@@ -55,7 +55,10 @@ async function loadStats() {
     listImportItems('pending_publication', 1, 1),
     getAdminSongRequests({ status: 'open', pageSize: 1 }),
     getInvitations(undefined, 1, 1),
-    getDownloadTasks(undefined, 1, 1),
+    // 音源任务只统计「处理中」（排队/下载/待导入）；已完成与失败属历史，不计入待办。
+    getDownloadTasks('queued', 1, 1),
+    getDownloadTasks('downloading', 1, 1),
+    getDownloadTasks('import_queued', 1, 1),
   ]
   const results = await Promise.allSettled(tasks)
   const total = (index: number) => {
@@ -68,7 +71,7 @@ async function loadStats() {
     pendingPublication: total(2),
     openRequests: total(3),
     invitations: total(4),
-    runningTasks: total(5),
+    runningTasks: total(5) + total(6) + total(7),
   }
   if (results.some((item) => item.status === 'rejected')) {
     const first = results.find((item) => item.status === 'rejected') as PromiseRejectedResult | undefined

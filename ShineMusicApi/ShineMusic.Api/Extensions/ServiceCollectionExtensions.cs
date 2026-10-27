@@ -3,6 +3,7 @@
 // 每个扩展方法对应一块职责，新增配置时就近追加到对应方法即可，避免 Program.cs 持续膨胀。
 
 using System.IdentityModel.Tokens.Jwt;
+using System.Net.Http.Headers;
 using System.Security.Claims;
 using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -379,6 +380,17 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IExternalLyricsProvider, MiguLyricsProvider>();
         services.AddSingleton<ILyricsResolver, LyricsResolver>();
         services.AddScoped<StorageGovernanceService>();
+        services.AddScoped<MessageQueueStatusService>();
+        // RabbitMQ Management HTTP API 客户端（管理后台队列监控）：BaseAddress + Basic 认证随 RabbitMQ 配置走。
+        services.AddHttpClient(MessageQueueStatusService.HttpClientName, (serviceProvider, client) =>
+        {
+            var rabbit = serviceProvider.GetRequiredService<IOptions<RabbitOptions>>().Value;
+            client.BaseAddress = new Uri($"http://{rabbit.HostName}:{rabbit.ManagementPort}/");
+            client.Timeout = TimeSpan.FromSeconds(5);
+            var credential = Convert.ToBase64String(
+                Encoding.UTF8.GetBytes($"{rabbit.UserName}:{rabbit.Password}"));
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", credential);
+        });
         services.AddScoped<RecommendationService>();
 
         // ===== 外部音源抓歌：命名 HttpClient + provider 集合 =====

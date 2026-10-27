@@ -8,8 +8,8 @@
 //   GET /recommendations/daily?limit=30   每日推荐（默认 30 首、互不重复、当日稳定）
 // =============================================================================
 using Microsoft.AspNetCore.Mvc;
-using ShineMusic.Model.Contracts;
 using ShineMusic.Api.Extensions;
+using ShineMusic.Model.Contracts;
 using ShineMusic.Model.Options;
 using ShineMusic.Service;
 

@@ -11,11 +11,11 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
+using ShineMusic.Api.Extensions;
 using ShineMusic.Model.Contracts;
 using ShineMusic.Model.Entities;
-using ShineMusic.Repository.Data;
-using ShineMusic.Api.Extensions;
 using ShineMusic.Model.Options;
+using ShineMusic.Repository.Data;
 using ShineMusic.Service;
 
 namespace ShineMusic.Api.Controllers;
