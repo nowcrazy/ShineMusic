@@ -127,8 +127,15 @@ interface ErrorBody {
   error?: { code?: string; message?: string; traceId?: string }
 }
 
-// 设备信息头（审计日志用）：模块级缓存一次，形如 "Xiaomi 14 · Android 14" / "iPhone · iOS 17"。
+// 设备信息头（审计日志用）：模块级缓存一次，形如 "Xiaomi 14 - Android 14" / "iPhone - iOS 17"。
+// 注意：OkHttp 的 Headers.checkValue 只允许 ASCII 可打印字符（0x20-0x7E），
+// 非 ASCII 字符（如中文品牌名、U+00B7 中点等）会抛 IllegalArgumentException 导致请求发送失败。
+// 因此所有字段都需经过 sanitizeHeaderValue 清洗为纯 ASCII。
 let cachedDeviceInfo: string | null = null
+/** 把任意字符串清洗为 OkHttp 可接受的 HTTP header 值：只保留 ASCII 可打印字符，其余替换为空格 */
+function sanitizeHeaderValue(raw: string): string {
+  return raw.replace(/[^\x20-\x7E]/g, ' ').replace(/\s+/g, ' ').trim()
+}
 function deviceInfoHeader(): string {
   if (cachedDeviceInfo !== null) return cachedDeviceInfo
   try {
@@ -139,9 +146,9 @@ function deviceInfoHeader(): string {
       osVersion?: string
       platform?: string
     }
-    const device = [info.brand, info.model].filter(Boolean).join(' ')
-    const os = [info.osName ?? info.platform, info.osVersion].filter(Boolean).join(' ')
-    cachedDeviceInfo = [device, os].filter(Boolean).join(' · ').slice(0, 250)
+    const device = sanitizeHeaderValue([info.brand, info.model].filter(Boolean).join(' '))
+    const os = sanitizeHeaderValue([info.osName ?? info.platform, info.osVersion].filter(Boolean).join(' '))
+    cachedDeviceInfo = [device, os].filter(Boolean).join(' - ').slice(0, 250)
   } catch {
     cachedDeviceInfo = ''
   }

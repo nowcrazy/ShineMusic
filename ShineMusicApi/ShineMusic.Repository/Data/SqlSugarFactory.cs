@@ -1,7 +1,10 @@
 // SqlSugarClient 工厂：全部数据访问的统一入口（按 DI 作用域创建，每个请求/每条消息/每轮定时任务各持一个）。
 // - 连接串由调用方（Program.cs）传入，指向 PostgreSQL 业务库；
-// - PgSqlIsAutoToLower=false：存量表名为带引号 PascalCase（"AspNetRoles"），
-//   SqlSugar 默认把标识符转小写会导致 "relation does not exist"，必须保持原名带引号；
+// - PgSqlIsAutoToLower=false：查询时表名/列名保持带引号 PascalCase（"AspNetRoles"），
+//   与存量库表结构一致；
+// - PgSqlIsAutoToLowerCodeFirst=false：CodeFirst 建表 DDL 同样保持带引号 PascalCase，
+//   与查询侧对齐（否则 CodeFirst 建出小写表，查询报 relation does not exist）；
+// - PgSqlIsAutoToLowerSchema=false：schema 名保持原样（public 不转小写无影响，但显式声明）；
 // - IsNoReadXmlDescription=true：禁止 CodeFirst 读取程序集 XML 注释生成列备注——
 //   该特性的 PG 备注 SQL 会把列名转小写（"Id"→"id"），与带引号 PascalCase 列名冲突直接崩溃；
 // - PostgreSQL 下 Guid→uuid、DateTimeOffset→timestamptz 均为驱动原生映射，
@@ -25,7 +28,13 @@ public static class SqlSugarFactory
             ConnectionString = connectionString,
             DbType = DbType.PostgreSQL,
             IsAutoCloseConnection = true,
-            MoreSettings = new ConnMoreSettings { PgSqlIsAutoToLower = false, IsNoReadXmlDescription = true }
+            MoreSettings = new ConnMoreSettings
+            {
+                PgSqlIsAutoToLower = false,
+                PgSqlIsAutoToLowerCodeFirst = false,
+                PgSqlIsAutoToLowerSchema = false,
+                IsNoReadXmlDescription = true
+            }
         },
         db =>
         {

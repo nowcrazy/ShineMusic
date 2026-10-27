@@ -275,7 +275,15 @@ public sealed partial class PlaylistImportService(
                 return;
             }
 
-            var created = await sourceDownloadService.CreateTasksAsync("kuwo", [best.ProviderTrackId], userId, cancellationToken);
+            // 把搜索命中的元数据直接带入建任务，避免酷我详情接口失效导致快照为空。
+            var metadata = new Dictionary<string, SourceSearchItemDto>
+            {
+                [best.ProviderTrackId] = new SourceSearchItemDto(
+                    best.Provider, best.ProviderTrackId, best.Title, best.Artists, best.AlbumTitle,
+                    best.DurationMs, best.Genres, best.CoverUrl, best.SourcePageUrl, best.License,
+                    best.Quality, best.IsLosslessAvailable)
+            };
+            var created = await sourceDownloadService.CreateTasksAsync("kuwo", [best.ProviderTrackId], metadata, userId, cancellationToken);
             var taskRow = created.Created.Count > 0 ? created.Created[0] : null;
             taskRow ??= await db.Queryable<ExternalDownloadTask>().FirstAsync(
                     candidate => candidate.Provider == "kuwo" && candidate.ProviderTrackId == best.ProviderTrackId,

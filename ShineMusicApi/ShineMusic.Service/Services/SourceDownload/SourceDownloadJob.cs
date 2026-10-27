@@ -38,11 +38,13 @@ public sealed class SourceDownloadService(
     /// 为指定音源的一批平台曲目 Id 创建下载任务。
     /// 已存在且非 failed 的同 (Provider, ProviderTrackId) 任务直接跳过；
     /// 已 failed 的任务重置为 queued 复用（避免唯一索引冲突）；
-    /// 新任务先调 GetTrackAsync 取元数据快照（取不到快照也建任务，留给下载阶段报错）。
+    /// 新任务优先使用请求带入的搜索结果元数据（避免依赖已失效的详情接口），
+    /// 缺失时回退 GetTrackAsync 取快照（取不到快照也建任务，留给下载阶段报错）。
     /// </summary>
     public async Task<CreateSourceDownloadTasksResult> CreateTasksAsync(
         string providerName,
         IReadOnlyCollection<string> providerTrackIds,
+        IReadOnlyDictionary<string, SourceSearchItemDto>? metadata,
         Guid adminUserId,
         CancellationToken cancellationToken)
     {
@@ -81,15 +83,35 @@ public sealed class SourceDownloadService(
                 continue;
             }
 
-            // 元数据快照：取不到不阻塞建任务（下载阶段会再解析并暴露错误）。
+            // 元数据快照：优先使用前端从搜索结果带入的元数据（部分平台详情接口已失效，如酷我 getNewMuiseByRid 返回 HTML）；
+            // 未提供时回退 GetTrackAsync。两种方式都取不到也不阻塞建任务（下载阶段会再解析并暴露错误）。
             SourceSearchResult? snapshot = null;
-            try
+            if (metadata is not null && metadata.TryGetValue(providerTrackId, out var prefilled))
             {
-                snapshot = await provider.GetTrackAsync(providerTrackId, cancellationToken);
+                snapshot = new SourceSearchResult(
+                    prefilled.Provider,
+                    prefilled.ProviderTrackId,
+                    prefilled.Title,
+                    prefilled.Artists,
+                    prefilled.AlbumTitle,
+                    prefilled.DurationMs,
+                    prefilled.Genres,
+                    prefilled.CoverUrl,
+                    prefilled.SourcePageUrl,
+                    prefilled.License,
+                    prefilled.Quality,
+                    prefilled.IsLosslessAvailable);
             }
-            catch (Exception exception) when (exception is not OperationCanceledException)
+            else
             {
-                // 快照失败仅降级（任务行保留平台 Id，可后续重试）。
+                try
+                {
+                    snapshot = await provider.GetTrackAsync(providerTrackId, cancellationToken);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    // 快照失败仅降级（任务行保留平台 Id，可后续重试）。
+                }
             }
 
             var task = new ExternalDownloadTask

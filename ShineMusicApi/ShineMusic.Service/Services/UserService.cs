@@ -140,7 +140,7 @@ public sealed class UserService(ISqlSugarClient db)
         }).ExecuteCommandAsync();
     }
 
-    /// <summary>创建用户并写入密码哈希；邮箱唯一冲突或密码不合规时返回失败（不落库）。</summary>
+    /// <summary>创建用户并写入密码哈希；邮箱/用户名唯一冲突或密码不合规时返回失败（不落库）。</summary>
     public async Task<IdentityResult> CreateAsync(ApplicationUser user, string password)
     {
         if (string.IsNullOrEmpty(password) || password.Length < RequiredPasswordLength)
@@ -149,9 +149,18 @@ public sealed class UserService(ISqlSugarClient db)
         // 归一化字段随创建写入，供登录/查找做大小写不敏感比对（原由 UserManager 自动维护）。
         user.NormalizedEmail = user.Email?.ToUpperInvariant();
         user.NormalizedUserName = user.UserName?.ToUpperInvariant();
+
+        // 邮箱唯一：登录可凭邮箱，需保证不重复。
         if (user.NormalizedEmail is not null &&
             await db.Queryable<ApplicationUser>().AnyAsync(item => item.NormalizedEmail == user.NormalizedEmail))
             return IdentityResult.Failed(Error("DuplicateEmail", $"Email '{user.Email}' is already taken."));
+
+        // 用户名唯一：登录可凭用户名，需保证不重复。
+        // username 与 email 相同时跳过（已被 DuplicateEmail 覆盖，避免重复报错）。
+        if (user.NormalizedUserName is not null
+            && !string.Equals(user.NormalizedUserName, user.NormalizedEmail, StringComparison.Ordinal)
+            && await db.Queryable<ApplicationUser>().AnyAsync(item => item.NormalizedUserName == user.NormalizedUserName))
+            return IdentityResult.Failed(Error("DuplicateUserName", $"Username '{user.UserName}' is already taken."));
 
         user.PasswordHash = _passwordHasher.HashPassword(user, password);
         user.SecurityStamp = Guid.NewGuid().ToString();

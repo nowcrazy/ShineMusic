@@ -19,8 +19,14 @@ public sealed class SourceDownloadOptions
     /// <summary>yt-dlp 子进程桥接配置（YouTube Music / SoundCloud 音源共用）。</summary>
     public YtDlpSourceOptions YtDlp { get; set; } = new();
 
-    /// <summary>酷我音乐音源配置（免密钥直链，音质封顶 128k）。</summary>
+    /// <summary>酷我音乐音源配置（免密钥直链，音质 320k）。</summary>
     public KuwoSourceOptions Kuwo { get; set; } = new();
+
+    /// <summary>网易云音乐音源配置（免密钥，覆盖主流中文曲，320k MP3）。</summary>
+    public NeteaseSourceOptions Netease { get; set; } = new();
+
+    /// <summary>咪咕音乐音源配置（运营商版权曲库，含腾讯独家曲如周杰伦，支持无损）。</summary>
+    public MiguSourceOptions Migu { get; set; } = new();
 
     /// <summary>下载行为限制（超时/体积/并发）。</summary>
     public SourceDownloadLimits Download { get; set; } = new();
@@ -69,6 +75,98 @@ public sealed class KuwoSourceOptions
 {
     /// <summary>是否启用该音源（免密钥，默认开启）。</summary>
     public bool Enabled { get; set; } = true;
+}
+
+/// <summary>网易云音乐音源配置。</summary>
+public sealed class NeteaseSourceOptions
+{
+    /// <summary>是否启用该音源（免密钥，默认开启）。</summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>搜索 API 基础地址（公开接口免登录）。</summary>
+    public string SearchBaseUrl { get; set; } = "https://music.163.com/api/search/get";
+
+    /// <summary>曲目详情 API 基础地址。</summary>
+    public string DetailBaseUrl { get; set; } = "https://music.163.com/api/v3/song/detail";
+
+    /// <summary>播放地址 API 基础地址（返回音频直链）。</summary>
+    public string PlayerUrlBaseUrl { get; set; } = "https://music.163.com/api/song/enhance/player/url";
+
+    /// <summary>下载码率（kbps）：320000=320k，999000=无损（需 VIP）。默认 320k。</summary>
+    public int Bitrate { get; set; } = 320000;
+
+    /// <summary>VIP 曲目回退解析配置（官方 API 对 fee≠0 曲目返回空 url 时启用）。</summary>
+    public NeteaseVipFallbackOptions VipFallback { get; set; } = new();
+}
+
+/// <summary>
+/// 网易云 VIP 曲目回退解析配置。
+/// 思路借鉴 musicdl / UnblockNeteaseMusic：官方接口对 VIP 曲返回空 url 时，
+/// 回退到第三方「解锁」端点获取下载直链。第三方端点可能使用共享 VIP 账号或音源替换，
+/// 可用性随服务方运营变动，故做成可配置、可关闭、多端点链式兜底。
+/// </summary>
+public sealed class NeteaseVipFallbackOptions
+{
+    /// <summary>是否启用 VIP 回退解析（默认开启）。</summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>
+    /// 回退端点链（按顺序尝试，首个返回有效完整直链的为准）。
+    /// 默认优先 nextmusic（共享 VIP 账号，返回完整 320k/无损），haitangw 兜底（仅 60s 预览）。
+    /// </summary>
+    public List<NeteaseVipFallbackEndpoint> Endpoints { get; set; } = new()
+    {
+        new() { Type = VipFallbackEndpointTypes.NextMusic, BaseUrl = "https://nextmusic.toubiec.cn", Levels = ["exhigh", "standard"] },
+        new() { Type = VipFallbackEndpointTypes.HaiTangW, Url = "https://musicapi.haitangw.net/music/wy.php?id={id}&level={level}&type=json", Levels = ["320", "128"] },
+    };
+
+    /// <summary>单次回退请求超时（秒），默认 15s（第三方服务响应通常较快）。</summary>
+    public int TimeoutSeconds { get; set; } = 15;
+}
+
+/// <summary>VIP 回退端点类型常量。</summary>
+public static class VipFallbackEndpointTypes
+{
+    /// <summary>nextmusic.toubiec.cn：共享 VIP 账号，POST 两步（先取 IP 再取 url），返回完整歌曲（支持 320k/无损）。</summary>
+    public const string NextMusic = "nextmusic";
+
+    /// <summary>musicapi.haitangw.net：GET 单步，返回 data.url（2026-10 实测仅 60s 预览片段，作兜底）。</summary>
+    public const string HaiTangW = "haitangw";
+
+    /// <summary>ZMusic 兼容官方格式：GET /song/url，参数 id 与 level，返回 data[0].url（部分实例仅预览）。</summary>
+    public const string ZMusic = "zmusic";
+}
+
+/// <summary>单个 VIP 回退端点配置。</summary>
+public sealed class NeteaseVipFallbackEndpoint
+{
+    /// <summary>端点类型（见 <see cref="VipFallbackEndpointTypes"/>），决定请求/响应解析方式。</summary>
+    public string Type { get; set; } = VipFallbackEndpointTypes.HaiTangW;
+
+    /// <summary>
+    /// GET 型端点的完整 URL 模板（含 {id}/{level} 占位符）。
+    /// haitangw / zmusic 使用此字段。
+    /// </summary>
+    public string? Url { get; set; }
+
+    /// <summary>
+    /// POST 型端点的基础地址（不含路径）。
+    /// nextmusic 使用此字段，内部拼接 /api/ip、/api/getSongUrl。
+    /// </summary>
+    public string? BaseUrl { get; set; }
+
+    /// <summary>尝试的音质等级（按顺序，首个返回有效 url 的为准）。</summary>
+    public string[] Levels { get; set; } = ["320", "128"];
+}
+
+/// <summary>咪咕音乐音源配置。</summary>
+public sealed class MiguSourceOptions
+{
+    /// <summary>是否启用该音源（默认开启）。</summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>下载音质：PQ=128k / HQ=320k / SQ=无损flac。默认 HQ（320k MP3）。</summary>
+    public string ToneFlag { get; set; } = "HQ";
 }
 
 /// <summary>yt-dlp 子进程桥接配置（YouTube Music / SoundCloud 音源共用）。</summary>

@@ -13,7 +13,6 @@ import {
   SourceProviderLabel,
   type ExternalDownloadTask,
   type SourceProviderFilter,
-  type SourceProviderName,
   type SourceSearchItem,
 } from '@/services/admin-source-download'
 import { describeError } from '@/services/errors'
@@ -22,11 +21,12 @@ import type { ApiSourceProviderError } from '@/types/api.generated'
 
 const providerOptions: { value: SourceProviderFilter; label: string }[] = [
   { value: 'all', label: '全部平台' },
+  { value: 'netease', label: '网易云' },
+  { value: 'kuwo', label: '酷我' },
   { value: 'audius', label: 'Audius' },
   { value: 'jamendo', label: 'Jamendo' },
   { value: 'ytmusic', label: 'YT Music' },
   { value: 'soundcloud', label: 'SoundCloud' },
-  { value: 'kuwo', label: '酷我' },
 ]
 
 const taskStatusOptions = [
@@ -107,17 +107,13 @@ async function runSearch() {
 }
 
 async function downloadSelected() {
-  const provider = selectedProvider() as SourceProviderName | null
-  if (!provider || selected.value.length === 0) {
+  if (selected.value.length === 0) {
     ElMessage.warning('请先选择要下载的曲目')
     return
   }
   creating.value = true
   try {
-    const result = await createDownloadTasks(
-      provider,
-      selected.value.map((item) => item.providerTrackId),
-    )
+    const result = await createDownloadTasks(selected.value)
     ElMessage.success(
       `已创建 ${result.created.length} 个下载任务` +
         (result.skippedDuplicates.length ? `，跳过 ${result.skippedDuplicates.length} 首重复曲目` : ''),

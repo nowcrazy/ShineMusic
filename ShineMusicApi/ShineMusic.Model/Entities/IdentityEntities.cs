@@ -23,6 +23,16 @@ public sealed class ApplicationUser : IdentityUser<Guid>
         // 应用层生成 Guid 主键，替代 Identity 默认的字符串/自增键。
         Id = Guid.NewGuid();
         DisplayName = null!;
+        // Identity 基类的下列属性在 C# 签名上为可空，但 AspNetUsers 表对应列均为 NOT NULL。
+        // 统一在构造函数中赋默认值，避免 create-admin / 注册插入时违反非空约束。
+        // （UserName / Email / Normalized* / SecurityStamp / ConcurrencyStamp 由 UserService 在创建时补写，
+        //   这里兜底给空串，防止 UserService 漏赋时插入失败。）
+        PhoneNumber = string.Empty;
+        NormalizedUserName = string.Empty;
+        NormalizedEmail = string.Empty;
+        SecurityStamp = string.Empty;
+        ConcurrencyStamp = string.Empty;
+        LockoutEnd = default(DateTimeOffset);
     }
 
     /// <summary>主键（覆盖基类属性以挂 SqlSugar 主键标注）。</summary>

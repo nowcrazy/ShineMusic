@@ -22,6 +22,8 @@ import {
   showModal,
   showToast,
 } from './ui'
+import { refreshAccessToken } from '@/services/http'
+import { getAccessToken } from '@/services/tokens'
 
 const FILE_REGISTRY = new Map<string, File>()
 
@@ -95,10 +97,8 @@ async function resolveFile(filePath: string, explicit?: unknown): Promise<File> 
 /** 401 时用 refresh token 续期并重放一次（上传/下载绕过 http 层时同样有效）。 */
 async function withAuthRetry<T>(run: (headers: Record<string, string>) => Promise<T>, headers: Record<string, string>, status: number): Promise<T> {
   if (status !== 401) throw new Error('no-retry')
-  const { refreshAccessToken } = await import('@/services/http')
   const refreshed = await refreshAccessToken()
   if (!refreshed) throw new Error('refresh-failed')
-  const { getAccessToken } = await import('@/services/tokens')
   return run({ ...headers, Authorization: `Bearer ${getAccessToken()}` })
 }
 

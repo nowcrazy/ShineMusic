@@ -27,9 +27,15 @@ public sealed record SourceSearchResponse(
     IReadOnlyList<SourceProviderErrorDto> ProviderErrors);
 
 /// <summary>创建下载任务请求。</summary>
-/// <param name="Provider">音源平台（audius/jamendo）。</param>
+/// <param name="Provider">音源平台（audius/jamendo/kuwo/netease 等）。</param>
 /// <param name="ProviderTrackIds">平台曲目 Id 列表（一次可批量）。</param>
-public sealed record CreateSourceDownloadTasksRequest(string Provider, IReadOnlyList<string> ProviderTrackIds);
+/// <param name="Metadata">可选：按平台曲目 Id 预填的搜索结果元数据。
+/// 前端从搜索结果直接带入，避免后端再次调用可能已失效的详情接口（如酷我 getNewMuiseByRid 已返回 HTML）。
+/// 缺失的 Id 仍回退到 provider.GetTrackAsync 抓取快照。</param>
+public sealed record CreateSourceDownloadTasksRequest(
+    string Provider,
+    IReadOnlyList<string> ProviderTrackIds,
+    IReadOnlyDictionary<string, SourceSearchItemDto>? Metadata = null);
 
 /// <summary>创建下载任务响应：新建/重置入队的任务与因重复被跳过的平台曲目 Id。</summary>
 public sealed record CreateSourceDownloadTasksResultDto(

@@ -196,6 +196,7 @@ export interface ApiCreateSongRequest {
 export interface ApiCreateSourceDownloadTasks {
   provider: string
   providerTrackIds: readonly string[]
+  metadata?: Record<string, ApiSourceSearchItem> | null
 }
 
 /** 来源：`ShineMusicApi/ShineMusic.Model/Contracts/SourceDownloadDtos.cs` */

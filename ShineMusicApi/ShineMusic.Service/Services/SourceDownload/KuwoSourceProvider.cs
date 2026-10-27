@@ -71,7 +71,7 @@ public sealed partial class KuwoSourceProvider(
                 CoverUrl: null,
                 SourcePageUrl: $"https://www.kuwo.cn/play_detail/{numericId}",
                 License: null,
-                SourceQualities.Standard,
+                SourceQualities.High,
                 IsLosslessAvailable: false));
         }
         return results.ToArray();
@@ -123,12 +123,14 @@ public sealed partial class KuwoSourceProvider(
             ? providerTrackId
             : $"MUSIC_{providerTrackId}";
         var client = httpClientFactory.CreateClient(HttpClientName);
-        var url = $"{AntiBase}?type=convert_url&rid={Uri.EscapeDataString(rid)}&format=mp3&response=url";
+        // 酷我 anti.s 支持 br 参数指定码率：320kmp3 返回 320k MP3（搜索 MINFO 字段确认大部分曲目提供该档位）；
+        // 平台无 320k 资源时自动回退最高可用码率，响应仍为 http 直链。
+        var url = $"{AntiBase}?type=convert_url&rid={Uri.EscapeDataString(rid)}&format=mp3&response=url&br=320kmp3";
         var downloadUrl = (await client.GetStringAsync(url, cancellationToken)).Trim();
         // 无版权/无资源时 anti.s 返回空串或非 http 内容，判定为不可下载（任务走自动重试后转 failed）。
         if (!downloadUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
             throw new SourceUnavailableException("酷我未返回下载地址（该曲目可能无版权或已下架）。");
-        return new SourceDownloadInfo(downloadUrl, "mp3", IsLossless: false, BitrateKbps: 128, SourceQualities.Standard);
+        return new SourceDownloadInfo(downloadUrl, "mp3", IsLossless: false, BitrateKbps: 320, SourceQualities.High);
     }
 
     /// <summary>酷我 r.s 返回单引号伪 JSON：仅把结构性单引号换成双引号（值内部的撇号不受影响）。</summary>

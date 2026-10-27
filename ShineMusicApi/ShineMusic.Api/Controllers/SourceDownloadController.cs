@@ -117,7 +117,7 @@ public sealed class SourceDownloadController : ControllerBase
 
         try
         {
-            var result = await service.CreateTasksAsync(request.Provider.Trim().ToLowerInvariant(), request.ProviderTrackIds, userId, cancellationToken);
+            var result = await service.CreateTasksAsync(request.Provider.Trim().ToLowerInvariant(), request.ProviderTrackIds, request.Metadata, userId, cancellationToken);
             // SqlSugar 版审计写入立即执行 INSERT（任务的创建写入已在 SourceDownloadService 内各自提交）。
             AdminAudit.Add(HttpContext, db, "source_download.task_created", "source_download_task", result.Created.Count > 0 ? result.Created[0].Id : Guid.Empty,
                 new { provider = request.Provider, created = result.Created.Count, skipped = result.SkippedDuplicates.Count });

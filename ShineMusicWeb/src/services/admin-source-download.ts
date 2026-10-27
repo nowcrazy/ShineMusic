@@ -17,7 +17,7 @@ import type {
 } from '@/types/api.generated'
 import { API_PREFIX, http, request } from './http'
 
-export type SourceProviderName = 'audius' | 'jamendo' | 'ytmusic' | 'soundcloud' | 'kuwo';
+export type SourceProviderName = 'audius' | 'jamendo' | 'ytmusic' | 'soundcloud' | 'kuwo' | 'netease';
 export type SourceProviderFilter = 'all' | SourceProviderName
 
 /** 音源展示名（界面徽章用；未知名称回退原始 id） */
@@ -27,6 +27,7 @@ export const SourceProviderLabel: Record<string, string> = {
   ytmusic: 'YT Music',
   soundcloud: 'SoundCloud',
   kuwo: '酷我',
+  netease: '网易云',
 }
 
 export type SourceSearchItem = ApiSourceSearchItem
@@ -73,14 +74,23 @@ export async function searchSources(
   })
 }
 
-/** 批量创建下载任务，返回新建任务与被跳过的重复曲目。 */
+/**
+ * 批量创建下载任务，返回新建任务与被跳过的重复曲目。
+ * @param items 搜索结果条目（从中提取 providerTrackId 与元数据）。
+ * 元数据随请求传入，避免后端再次调用已失效的平台详情接口（如酷我 getNewMuiseByRid）。
+ */
 export async function createDownloadTasks(
-  provider: SourceProviderName,
-  providerTrackIds: string[],
+  items: SourceSearchItem[],
 ): Promise<ApiCreateSourceDownloadTasksResult> {
+  if (items.length === 0) throw new Error('请先选择要下载的曲目')
+  const provider = items[0].provider
+  const providerTrackIds = items.map((item) => item.providerTrackId)
+  const metadata: Record<string, ApiSourceSearchItem> = {}
+  for (const item of items) metadata[item.providerTrackId] = item
   return http.post<ApiCreateSourceDownloadTasksResult>(`${API_PREFIX}/admin/source-downloads/tasks`, {
     provider,
     providerTrackIds,
+    metadata,
   })
 }
 

@@ -197,6 +197,14 @@ def to_ts_type(csharp: str, alias: dict, generic_param: str | None = None) -> st
         base = f"readonly {inner}[]"
         return f"{base} | null" if negate else base
 
+    # 字典：IReadOnlyDictionary<K, V> / IDictionary<K, V> / Dictionary<K, V> → Record<K, V>
+    dict_m = re.match(r"^(?:IReadOnlyDictionary|IDictionary|Dictionary)<(.+),(.+)>$", csharp)
+    if dict_m:
+        key = to_ts_type(dict_m.group(1).strip(), alias, generic_param)
+        val = to_ts_type(dict_m.group(2).strip(), alias, generic_param)
+        base = f"Record<{key}, {val}>"
+        return f"{base} | null" if negate else base
+
     # 自定义泛型：Name<Arg1, Arg2>
     gen_m = re.match(r"^(\w+)<(.+)>$", csharp)
     if gen_m:
@@ -287,7 +295,7 @@ def main() -> int:
             ts_t = to_ts_type(csharp_type, alias, gname)
             # 记录找不到的类型引用（可能是 IResult/DbContext 等误捕，忽略即可）
             for ref in re.findall(r"\b[A-Z]\w+\b", csharp_type):
-                if ref not in PRIMITIVES and ref not in alias and ref not in ("IReadOnlyList", "IList", "List", "ICollection", "IEnumerable"):
+                if ref not in PRIMITIVES and ref not in alias and ref not in ("IReadOnlyList", "IList", "List", "ICollection", "IEnumerable", "IReadOnlyDictionary", "IDictionary", "Dictionary"):
                     unknown_refs.add(f"{name}.{prop}: {csharp_type}")
             doc = info["docs"].get(prop)
             if doc:
