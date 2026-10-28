@@ -76,7 +76,11 @@ public abstract class RabbitQueueConsumerService(
                 await channel.BasicConsumeAsync(Queue, autoAck: false, consumer: consumer, cancellationToken: stoppingToken);
                 logger.LogInformation("RabbitMQ consumer started on {Queue} (prefetch={Prefetch}).", Queue, Prefetch);
                 // 阻塞到停止信号（RabbitMQ.Client 自动恢复会重建通道/消费者，无需显式循环）。
-                await Task.Delay(Timeout.Infinite, stoppingToken);
+                // 用 TaskCompletionSource 等待而不是 Task.Delay(Infinite, token)：后者在收到停止信号时
+                // 会抛 OperationCanceledException，调试器开启「抛出即中断」时每次停止都会弹异常框。
+                var stop = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                using var registration = stoppingToken.Register(() => stop.TrySetResult());
+                await stop.Task;
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {

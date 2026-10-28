@@ -6,10 +6,14 @@ import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Monitor, Refresh, Search } from '@element-plus/icons-vue'
 import {
+  ActionFilterOptions,
+  ActionLabel,
   ClientTypeLabel,
+  DetailKeyLabel,
   getLoginAuditLogs,
   getOperationAuditLogs,
   LoginReasonLabel,
+  ResourceTypeLabel,
   type LoginAuditItem,
   type OperationAuditItem,
 } from '@/services/admin-logs'
@@ -67,6 +71,8 @@ const opRows = ref<OperationAuditItem[]>([])
 const opTotal = ref(0)
 const opPage = ref(1)
 const opKeyword = ref('')
+const opAction = ref('')
+const opActor = ref('')
 
 const pageSize = ref(100)
 
@@ -86,7 +92,13 @@ async function loadLogin() {
 async function loadOperations() {
   opLoading.value = true
   try {
-    const data = await getOperationAuditLogs(opKeyword.value, opPage.value, pageSize.value)
+    const data = await getOperationAuditLogs(
+      opKeyword.value,
+      opPage.value,
+      pageSize.value,
+      opAction.value || undefined,
+      opActor.value || undefined,
+    )
     opRows.value = data.items
     opTotal.value = data.total
   } catch (error) {
@@ -124,15 +136,52 @@ function clientTag(clientType: string | null) {
   return { label, type }
 }
 
-function parseDetails(detailsJson: string | null): string {
-  if (!detailsJson) return '—'
+/** GUID 文本：详情里的裸 Id 不再重复展示，由「对象」列呈现可读名称。 */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** 系统任务（后台自动发布/匹配）的 ActorUserId 为空 Guid。 */
+const SYSTEM_ACTOR = '00000000-0000-0000-0000-000000000000'
+
+/** 是否是系统自动任务（而非真人管理员操作）。 */
+function isSystemActor(row: OperationAuditItem) {
+  return row.actorUserId === SYSTEM_ACTOR
+}
+
+/** 操作人显示：系统任务标记「系统」，管理员显示昵称，缺失时回退短 Id。 */
+function actorLabel(row: OperationAuditItem) {
+  if (isSystemActor(row)) return '系统'
+  return row.actorName || row.actorUserId.slice(0, 8)
+}
+
+/** 动作中文名；未登记的动作原样显示。 */
+function actionLabel(action: string) {
+  return ActionLabel[action] ?? action
+}
+
+/** 资源类型中文名。 */
+function resourceTypeLabel(type: string) {
+  return ResourceTypeLabel[type] ?? type
+}
+
+/** 详情值格式化：数组以、连接，布尔转是/否，对象序列化。 */
+function formatDetailValue(value: unknown): string {
+  if (value == null) return '—'
+  if (typeof value === 'boolean') return value ? '是' : '否'
+  if (Array.isArray(value)) return value.map((item) => String(item)).join('、')
+  if (typeof value === 'object') return JSON.stringify(value)
+  return String(value)
+}
+
+/** 详情 JSON → 可读键值对（中文键名、过滤裸 GUID）。 */
+function detailPairs(detailsJson: string | null): { key: string; label: string; value: string }[] {
+  if (!detailsJson) return []
   try {
     const obj = JSON.parse(detailsJson) as Record<string, unknown>
     return Object.entries(obj)
-      .map(([key, value]) => `${key}=${typeof value === 'object' ? JSON.stringify(value) : value}`)
-      .join(' · ')
+      .filter(([, value]) => !(typeof value === 'string' && UUID_RE.test(value)))
+      .map(([key, value]) => ({ key, label: DetailKeyLabel[key] ?? key, value: formatDetailValue(value) }))
   } catch {
-    return detailsJson
+    return [{ key: 'raw', label: '原始', value: detailsJson }]
   }
 }
 
@@ -235,9 +284,30 @@ onMounted(loadLogin)
             <span><el-icon style="vertical-align: -2px"><Monitor /></el-icon> 操作日志</span>
           </template>
           <div class="filters">
+            <el-select
+              v-model="opAction"
+              placeholder="全部动作"
+              size="small"
+              clearable
+              style="width: 140px"
+              @change="searchOperations"
+            >
+              <el-option v-for="opt in ActionFilterOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+            </el-select>
+            <el-select
+              v-model="opActor"
+              placeholder="全部操作人"
+              size="small"
+              clearable
+              style="width: 140px"
+              @change="searchOperations"
+            >
+              <el-option label="管理员" value="admin" />
+              <el-option label="系统自动" value="system" />
+            </el-select>
             <el-input
               v-model="opKeyword"
-              placeholder="动作 / 资源 / IP"
+              placeholder="动作 / 资源 / 操作人 / IP"
               size="small"
               clearable
               style="width: 240px"
@@ -252,16 +322,36 @@ onMounted(loadLogin)
             <el-table-column label="时间" width="170">
               <template #default="{ row }">{{ formatDateTime(row.createdAtUtc) }}</template>
             </el-table-column>
-            <el-table-column label="操作人" width="150" show-overflow-tooltip>
-              <template #default="{ row }">{{ row.actorName || row.actorUserId.slice(0, 8) }}</template>
-            </el-table-column>
-            <el-table-column label="动作" width="200">
+            <el-table-column label="操作人" width="140" show-overflow-tooltip>
               <template #default="{ row }">
-                <span class="mono">{{ row.action }}</span>
+                <el-tag v-if="isSystemActor(row)" size="small" type="info" effect="plain">系统</el-tag>
+                <span v-else>{{ actorLabel(row) }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="详情" min-width="220" show-overflow-tooltip>
-              <template #default="{ row }">{{ parseDetails(row.detailsJson) }}</template>
+            <el-table-column label="动作" width="170">
+              <template #default="{ row }">
+                <span class="action-label" :title="row.action">{{ actionLabel(row.action) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="对象" min-width="220" show-overflow-tooltip>
+              <template #default="{ row }">
+                <div class="object-cell">
+                  <el-tag size="small" type="info" effect="plain">{{ resourceTypeLabel(row.resourceType) }}</el-tag>
+                  <span class="object-name" :title="row.resourceId">
+                    {{ row.resourceName || row.resourceId.slice(0, 8) }}
+                  </span>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column label="详情" min-width="240" show-overflow-tooltip>
+              <template #default="{ row }">
+                <span v-if="!detailPairs(row.detailsJson).length" class="text-faint">—</span>
+                <span v-else class="detail-list">
+                  <span v-for="pair in detailPairs(row.detailsJson)" :key="pair.key" class="detail-chip">
+                    <em>{{ pair.label }}</em>{{ pair.value }}
+                  </span>
+                </span>
+              </template>
             </el-table-column>
             <el-table-column label="客户端" width="110">
               <template #default="{ row }">
@@ -314,6 +404,42 @@ onMounted(loadLogin)
   margin-left: 6px;
   color: var(--adm-text-2);
   font-size: 12px;
+}
+
+/* === 操作日志可读化 === */
+.action-label {
+  color: var(--adm-text-1);
+}
+
+.object-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.object-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--adm-text-1);
+}
+
+.detail-list {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.detail-chip {
+  color: var(--adm-text-1);
+  font-size: 12px;
+}
+
+.detail-chip em {
+  margin-right: 3px;
+  color: var(--adm-text-3);
+  font-style: normal;
 }
 
 /* === IP 显示分层 === */

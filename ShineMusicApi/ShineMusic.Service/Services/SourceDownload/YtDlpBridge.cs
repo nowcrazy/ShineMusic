@@ -79,7 +79,7 @@ public sealed class YtDlpBridge(
             }
             try
             {
-                var result = await RunProcessAsync([ "--version" ], TimeSpan.FromSeconds(15), cancellationToken, acquireGate: false);
+                var result = await RunProcessAsync(["--version"], TimeSpan.FromSeconds(15), cancellationToken, acquireGate: false);
                 if (result.ExitCode == 0 && !string.IsNullOrWhiteSpace(result.StdOut))
                 {
                     _selfCheckPassed = true;

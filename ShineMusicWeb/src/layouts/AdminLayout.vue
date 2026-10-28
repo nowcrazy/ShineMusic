@@ -204,7 +204,6 @@ async function handleLogout() {
     return
   }
   await logout()
-  store.resetBreadcrumbs()
   ElMessage.success('已退出登录')
   void router.replace({ name: 'login' })
 }

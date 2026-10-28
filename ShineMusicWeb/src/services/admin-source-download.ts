@@ -17,7 +17,7 @@ import type {
 } from '@/types/api.generated'
 import { API_PREFIX, http, request } from './http'
 
-export type SourceProviderName = 'audius' | 'jamendo' | 'ytmusic' | 'soundcloud' | 'kuwo' | 'netease';
+export type SourceProviderName = 'audius' | 'jamendo' | 'ytmusic' | 'soundcloud' | 'kuwo' | 'kugou' | 'netease';
 export type SourceProviderFilter = 'all' | SourceProviderName
 
 /** 音源展示名（界面徽章用；未知名称回退原始 id） */
@@ -27,6 +27,7 @@ export const SourceProviderLabel: Record<string, string> = {
   ytmusic: 'YT Music',
   soundcloud: 'SoundCloud',
   kuwo: '酷我',
+  kugou: '酷狗',
   netease: '网易云',
 }
 

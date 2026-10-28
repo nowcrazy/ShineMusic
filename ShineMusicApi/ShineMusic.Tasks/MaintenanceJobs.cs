@@ -159,29 +159,28 @@ public abstract class PeriodicJobService(
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        using var timer = new PeriodicTimer(Interval);
-        try
+        // 停止信号用 TCS 等待，避免 PeriodicTimer.WaitForNextTickAsync(token) / Task.Delay(Infinite, token)
+        // 在停止时抛 OperationCanceledException（调试器「抛出即中断」会在每次停止调试时弹异常框）。
+        var stop = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var registration = stoppingToken.Register(() => stop.TrySetResult());
+        while (!stoppingToken.IsCancellationRequested)
         {
-            while (await timer.WaitForNextTickAsync(stoppingToken))
+            // 不带 token 的延时不会被取消，因此不会抛出异常；到点或被 stop 抢先都会正常返回。
+            var tick = await Task.WhenAny(Task.Delay(Interval, CancellationToken.None), stop.Task);
+            if (tick == stop.Task) break;
+            try
             {
-                try
-                {
-                    using var scope = scopeFactory.CreateScope();
-                    await RunOnceAsync(scope.ServiceProvider, stoppingToken);
-                }
-                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-                {
-                    break;
-                }
-                catch (Exception exception)
-                {
-                    logger.LogError(exception, "Periodic job {Job} failed; next round will retry.", GetType().Name);
-                }
+                using var scope = scopeFactory.CreateScope();
+                await RunOnceAsync(scope.ServiceProvider, stoppingToken);
             }
-        }
-        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-        {
-            // 正常停止。
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception exception)
+            {
+                logger.LogError(exception, "Periodic job {Job} failed; next round will retry.", GetType().Name);
+            }
         }
     }
 }

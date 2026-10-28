@@ -23,6 +23,7 @@ const providerOptions: { value: SourceProviderFilter; label: string }[] = [
   { value: 'all', label: '全部平台' },
   { value: 'netease', label: '网易云' },
   { value: 'kuwo', label: '酷我' },
+  { value: 'kugou', label: '酷狗' },
   { value: 'audius', label: 'Audius' },
   { value: 'jamendo', label: 'Jamendo' },
   { value: 'ytmusic', label: 'YT Music' },

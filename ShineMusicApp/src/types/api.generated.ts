@@ -468,6 +468,7 @@ export interface ApiOperationAuditItem {
   action: string
   resourceType: string
   resourceId: string
+  resourceName?: string | null
   detailsJson?: string | null
   ip?: string | null
   clientType?: string | null

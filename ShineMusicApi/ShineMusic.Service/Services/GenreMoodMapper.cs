@@ -15,10 +15,10 @@ namespace ShineMusic.Service;
 public static class GenreMoodMapper
 {
     // ↓ 中文 mood 标签常量，与前端 index.vue 的 mood 期望值保持一致
-    public const string MoodLively   = "轻快";
-    public const string MoodRelaxed  = "松弛";
-    public const string MoodGentle   = "温柔";
-    public const string MoodQuiet    = "安静";
+    public const string MoodLively = "轻快";
+    public const string MoodRelaxed = "松弛";
+    public const string MoodGentle = "温柔";
+    public const string MoodQuiet = "安静";
     public const string MoodEnergetic = "活力";
 
     /// <summary>

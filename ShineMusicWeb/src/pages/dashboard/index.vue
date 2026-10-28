@@ -12,13 +12,19 @@ import {
   Postcard,
   Refresh,
   UploadFilled,
+  WarningFilled,
 } from '@element-plus/icons-vue'
 import { getAdminTracks } from '@/services/admin-catalog'
 import { listImportItems } from '@/services/admin-import'
 import { getAdminSongRequests } from '@/services/admin-requests'
 import { getInvitations } from '@/services/admin-invitation'
-import { getDownloadTasks } from '@/services/admin-source-download'
+import {
+  getDownloadTasks,
+  SourceProviderLabel,
+  type ExternalDownloadTask,
+} from '@/services/admin-source-download'
 import { describeError } from '@/services/errors'
+import { formatDateTime } from '@/utils/format'
 
 const router = useRouter()
 const loading = ref(false)
@@ -29,7 +35,16 @@ const stats = ref({
   openRequests: 0,
   invitations: 0,
   runningTasks: 0,
+  failedTasks: 0,
 })
+
+/** 失败任务明细弹窗状态 */
+const failedDialogVisible = ref(false)
+const failedLoading = ref(false)
+const failedTasks = ref<readonly ExternalDownloadTask[]>([])
+const failedTotal = ref(0)
+const failedPage = ref(1)
+const failedPageSize = ref(100)
 
 const cards = computed(() => [
   { key: 'tracks', label: '曲库曲目', value: stats.value.tracks, hint: '已发布及待整理曲目', icon: Headset, tone: 'green', to: '/catalog' },
@@ -38,6 +53,7 @@ const cards = computed(() => [
   { key: 'openRequests', label: '待处理点歌', value: stats.value.openRequests, hint: '状态为待安排的需求', icon: ChatDotRound, tone: 'purple', to: '/requests' },
   { key: 'invitations', label: '邀请记录', value: stats.value.invitations, hint: '累计发出的邀请', icon: Postcard, tone: 'cyan', to: '/invitations' },
   { key: 'runningTasks', label: '音源任务', value: stats.value.runningTasks, hint: '排队 / 下载 / 待导入（不含已完成）', icon: Download, tone: 'slate', to: '/source-download' },
+  { key: 'failedTasks', label: '失败任务', value: stats.value.failedTasks, hint: '音源下载失败，点击查看明细', icon: WarningFilled, tone: 'red', to: '/source-download' },
 ])
 
 const shortcuts = [
@@ -55,10 +71,11 @@ async function loadStats() {
     listImportItems('pending_publication', 1, 1),
     getAdminSongRequests({ status: 'open', pageSize: 1 }),
     getInvitations(undefined, 1, 1),
-    // 音源任务只统计「处理中」（排队/下载/待导入）；已完成与失败属历史，不计入待办。
+    // 音源任务统计「处理中」（排队/下载/待导入）；失败单独统计，不并入待办。
     getDownloadTasks('queued', 1, 1),
     getDownloadTasks('downloading', 1, 1),
     getDownloadTasks('import_queued', 1, 1),
+    getDownloadTasks('failed', 1, 1),
   ]
   const results = await Promise.allSettled(tasks)
   const total = (index: number) => {
@@ -72,6 +89,7 @@ async function loadStats() {
     openRequests: total(3),
     invitations: total(4),
     runningTasks: total(5) + total(6) + total(7),
+    failedTasks: total(8),
   }
   if (results.some((item) => item.status === 'rejected')) {
     const first = results.find((item) => item.status === 'rejected') as PromiseRejectedResult | undefined
@@ -81,6 +99,50 @@ async function loadStats() {
 }
 
 onMounted(loadStats)
+
+/** 打开失败明细弹窗：每次打开都回到第一页重新拉取，保证数据最新。 */
+async function openFailedDialog() {
+  failedDialogVisible.value = true
+  failedPage.value = 1
+  await loadFailedTasks()
+}
+
+async function loadFailedTasks() {
+  failedLoading.value = true
+  try {
+    const result = await getDownloadTasks('failed', failedPage.value, failedPageSize.value)
+    failedTasks.value = result.items
+    failedTotal.value = result.total
+  } catch (error) {
+    ElMessage.error(describeError(error, '失败任务加载失败'))
+  } finally {
+    failedLoading.value = false
+  }
+}
+
+function changeFailedPage(page: number) {
+  failedPage.value = page
+  void loadFailedTasks()
+}
+
+function changeFailedPageSize(size: number) {
+  failedPageSize.value = size
+  failedPage.value = 1
+  void loadFailedTasks()
+}
+
+/** 普通卡片跳转对应页面；失败卡片改为打开明细弹窗。 */
+function handleCardClick(card: { key: string; to: string }) {
+  if (card.key === 'failedTasks') {
+    void openFailedDialog()
+    return
+  }
+  void router.push(card.to)
+}
+
+function providerLabel(provider: string) {
+  return SourceProviderLabel[provider] ?? provider
+}
 </script>
 
 <template>
@@ -99,7 +161,7 @@ onMounted(loadStats)
         :key="card.key"
         class="stat-card"
         type="button"
-        @click="router.push(card.to)"
+        @click="handleCardClick(card)"
       >
         <div class="stat-icon" :class="card.tone">
           <el-icon :size="20"><component :is="card.icon" /></el-icon>
@@ -130,6 +192,49 @@ onMounted(loadStats)
         </button>
       </div>
     </div>
+
+    <el-dialog v-model="failedDialogVisible" title="失败歌曲明细" width="960px" top="6vh">
+      <div class="failed-toolbar">
+        <span class="text-faint">共 {{ failedTotal }} 条失败任务（仅统计 failed 状态）</span>
+        <el-button size="small" :loading="failedLoading" @click="loadFailedTasks">刷新</el-button>
+      </div>
+      <el-table v-loading="failedLoading" :data="failedTasks" max-height="460" empty-text="暂无失败任务">
+        <el-table-column label="曲名" min-width="200" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.title || '—' }}</template>
+        </el-table-column>
+        <el-table-column label="艺人" min-width="160" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.artists.join(' / ') || '—' }}</template>
+        </el-table-column>
+        <el-table-column label="专辑" min-width="150" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.albumTitle || '—' }}</template>
+        </el-table-column>
+        <el-table-column label="音源" width="100">
+          <template #default="{ row }">{{ providerLabel(row.provider) }}</template>
+        </el-table-column>
+        <el-table-column label="失败原因" min-width="240" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.errorMessage || row.errorCode || '未知原因' }}</template>
+        </el-table-column>
+        <el-table-column label="更新时间" width="170">
+          <template #default="{ row }">{{ formatDateTime(row.updatedAtUtc) }}</template>
+        </el-table-column>
+      </el-table>
+      <div class="failed-pager">
+        <el-pagination
+          :current-page="failedPage"
+          :page-size="failedPageSize"
+          :page-sizes="[100, 150, 200, 500, 1000]"
+          :total="failedTotal"
+          layout="total, sizes, prev, pager, next"
+          background
+          @current-change="changeFailedPage"
+          @size-change="changeFailedPageSize"
+        />
+      </div>
+      <template #footer>
+        <el-button @click="failedDialogVisible = false">关闭</el-button>
+        <el-button type="primary" @click="router.push('/source-download')">去音源下载页处理</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -174,6 +279,7 @@ onMounted(loadStats)
 .stat-icon.purple { background: #f1ecfd; color: #7b58c9; }
 .stat-icon.cyan { background: #e3f7f8; color: #1e8e94; }
 .stat-icon.slate { background: #eef1f6; color: #5b6b82; }
+.stat-icon.red { background: #fdecec; color: #d64545; }
 
 .stat-copy {
   display: flex;
@@ -197,6 +303,19 @@ onMounted(loadStats)
 .stat-hint {
   color: var(--adm-text-3);
   font-size: 12px;
+}
+
+.failed-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.failed-pager {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
 }
 
 .shortcut-grid {

@@ -46,17 +46,32 @@ public static class ItunesMetadataHelper
     private static readonly Dictionary<string, string> CountryToRegion = new(StringComparer.OrdinalIgnoreCase)
     {
         // 华语：中国大陆/港澳台及东南亚主要华语发行地
-        ["CHN"] = Regions.Chinese, ["TWN"] = Regions.Chinese, ["HKG"] = Regions.Chinese,
-        ["MAC"] = Regions.Chinese, ["SGP"] = Regions.Chinese, ["MYS"] = Regions.Chinese,
+        ["CHN"] = Regions.Chinese,
+        ["TWN"] = Regions.Chinese,
+        ["HKG"] = Regions.Chinese,
+        ["MAC"] = Regions.Chinese,
+        ["SGP"] = Regions.Chinese,
+        ["MYS"] = Regions.Chinese,
         // 日韩
-        ["JPN"] = Regions.Jk, ["KOR"] = Regions.Jk,
+        ["JPN"] = Regions.Jk,
+        ["KOR"] = Regions.Jk,
         // 欧美：欧洲主要市场（US 被排除，理由见上）
-        ["GBR"] = Regions.Western, ["IRL"] = Regions.Western,
-        ["FRA"] = Regions.Western, ["DEU"] = Regions.Western, ["ITA"] = Regions.Western,
-        ["ESP"] = Regions.Western, ["NLD"] = Regions.Western, ["SWE"] = Regions.Western,
-        ["DNK"] = Regions.Western, ["NOR"] = Regions.Western, ["CHE"] = Regions.Western,
-        ["AUT"] = Regions.Western, ["BEL"] = Regions.Western, ["PRT"] = Regions.Western,
-        ["FIN"] = Regions.Western, ["POL"] = Regions.Western,
+        ["GBR"] = Regions.Western,
+        ["IRL"] = Regions.Western,
+        ["FRA"] = Regions.Western,
+        ["DEU"] = Regions.Western,
+        ["ITA"] = Regions.Western,
+        ["ESP"] = Regions.Western,
+        ["NLD"] = Regions.Western,
+        ["SWE"] = Regions.Western,
+        ["DNK"] = Regions.Western,
+        ["NOR"] = Regions.Western,
+        ["CHE"] = Regions.Western,
+        ["AUT"] = Regions.Western,
+        ["BEL"] = Regions.Western,
+        ["PRT"] = Regions.Western,
+        ["FIN"] = Regions.Western,
+        ["POL"] = Regions.Western,
     };
 
     /// <summary>

@@ -64,9 +64,9 @@ dotnet_naming_rule.static_readonly_fields_should_be_pascal_case.style = pascal_c
 csharp_using_directive_placement = outside_namespace:warning
 csharp_prefer_braces = when_multiline:suggestion
 csharp_style_namespace_declarations = file_scoped:warning
-dotnet_sort_system_directives_first = true:suggestion
-csharp_new_line_before_open_brace = all:suggestion
-csharp_indent_case_contents = true:suggestion
+dotnet_sort_system_directives_first = true
+csharp_new_line_before_open_brace = all
+csharp_indent_case_contents = true
 
 # ===========================================================================
 # 一、豁免清单（每条附理由；需要解释的是「为什么这条规则现在不适用」）

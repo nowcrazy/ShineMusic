@@ -399,6 +399,21 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient(YouTubeMusicSourceProvider.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(120));
         services.AddHttpClient(SoundCloudSourceProvider.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(120));
         services.AddHttpClient(KuwoSourceProvider.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(120));
+        // 酷狗：plist/getSongInfo 系接口要求移动端 UA（缺省返回非 JSON），下载直链 sharefs 无特殊要求。
+        // 全局频控网关 KugouRateLimitHandler：令牌桶限流（默认 2 QPS），防止触发酷狗 errcode:1002「操作太频繁」封禁。
+        services.AddHttpClient(KugouSourceProvider.HttpClientName, client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(120);
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1");
+        })
+        // 酷狗对带 Accept-Encoding: gzip/deflate 的请求返回空 lists（total=0），
+        // 故禁用 SocketsHttpHandler 的自动解压，避免其自动注入 Accept-Encoding 头。
+        .ConfigurePrimaryHttpMessageHandler(() => new System.Net.Http.SocketsHttpHandler
+        {
+            AutomaticDecompression = System.Net.DecompressionMethods.None,
+        })
+        .AddHttpMessageHandler<KugouRateLimitHandler>();
+        services.AddTransient<KugouRateLimitHandler>();
         // 咪咕：显式用 SocketsHttpHandler 限定 TLS1.2/1.3 并关闭 Expect: 100-continue。
         services.AddHttpClient(MiguSourceProvider.HttpClientName, client =>
         {
@@ -420,6 +435,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IMusicSourceProvider, YouTubeMusicSourceProvider>();
         services.AddSingleton<IMusicSourceProvider, SoundCloudSourceProvider>();
         services.AddSingleton<IMusicSourceProvider, KuwoSourceProvider>();
+        services.AddSingleton<IMusicSourceProvider, KugouSourceProvider>();
         services.AddSingleton<IMusicSourceProvider, MiguSourceProvider>();
         services.AddSingleton<IMusicSourceProvider, NeteaseSourceProvider>();
         services.AddScoped<SourceDownloadService>();
@@ -440,6 +456,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IPlaylistParser, NeteasePlaylistParser>();
         services.AddSingleton<IPlaylistParser, QQMusicPlaylistParser>();
         services.AddSingleton<IPlaylistParser, KuwoPlaylistParser>();
+        services.AddSingleton<IPlaylistParser, KugouPlaylistParser>();
         services.AddSingleton<IPlaylistParser, YtDlpPlaylistParser>();
         services.AddScoped<PlaylistImportService>();
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 歌单解析导入：粘贴外部平台（网易云/QQ 音乐/酷我/YouTube Music）歌单链接，
+ * 歌单解析导入：粘贴外部平台（网易云/QQ 音乐/酷我/酷狗/YouTube Music）歌单链接，
  * 解析预览（标记已匹配曲库的曲目）→ 一键导入生成新歌单，未匹配曲目后台静默下载补齐。
  */
 import { computed, onMounted, reactive, ref } from 'vue'
@@ -138,7 +138,7 @@ onMounted(loadPlaylists)
         type="info"
         :closable="false"
         class="tip"
-        title="支持平台：网易云音乐、QQ 音乐、酷我音乐、YouTube Music（YouTube Music 需服务端配置网络代理）。粘贴歌单链接后点击解析。"
+        title="支持平台：网易云音乐、QQ 音乐、酷我音乐、酷狗音乐、YouTube Music（YouTube Music 需服务端配置网络代理）。粘贴歌单链接后点击解析。"
       />
 
       <div class="url-row">

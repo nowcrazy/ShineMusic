@@ -8,13 +8,14 @@
 import { API_PREFIX, request } from './http'
 
 /** 平台标识（与后端 IPlaylistParser.Platform 对齐） */
-export type PlaylistImportPlatform = 'netease' | 'qqmusic' | 'kuwo' | 'ytmusic'
+export type PlaylistImportPlatform = 'netease' | 'qqmusic' | 'kuwo' | 'kugou' | 'ytmusic'
 
 /** 平台展示名（界面徽章用） */
 export const PlaylistImportPlatformLabel: Record<string, string> = {
   netease: '网易云音乐',
   qqmusic: 'QQ 音乐',
   kuwo: '酷我音乐',
+  kugou: '酷狗音乐',
   ytmusic: 'YouTube Music',
 }
 

@@ -1,4 +1,5 @@
-// SqlSugar CodeFirst 建表引导：启动时幂等建表并完成空库初始化。
+// SqlSugar CodeFirst 建表引导：启动时幂等建表并完成空库初始化；
+// 另提供 EnsureDatabase：--create-database 命令在连库前先把业务库本身建出来（已存在则跳过）。
 // - 仅在空库（全新部署）时执行：存量库结构以实际库为准（沿用历史表名与列类型），
 //   SqlSugar CodeFirst 的存量表同步会把 text 收窄为 varchar(255)、误加 NOT NULL，
 //   对已有数据有破坏风险，绝不自动执行；
@@ -9,6 +10,7 @@
 
 using System.Reflection;
 using Microsoft.Extensions.Logging;
+using Npgsql;
 using SqlSugar;
 
 namespace ShineMusic.Repository.Data;
@@ -16,6 +18,41 @@ namespace ShineMusic.Repository.Data;
 /// <summary>SqlSugar CodeFirst 初始化器：空库启动时创建全部实体表结构。</summary>
 public static class SqlSugarSchemaBootstrap
 {
+    /// <summary>
+    /// 确保连接串中的业务库存在：不存在则创建，已存在则跳过。返回是否实际新建。
+    /// 此时业务库可能还不存在、无法连接，因此改连 PG 维护库 postgres，查 pg_database 后按需建库；
+    /// 库名与属主名走 NpgsqlCommandBuilder.QuoteIdentifier（CREATE DATABASE 不支持参数化标识符）。
+    /// </summary>
+    public static bool EnsureDatabase(string connectionString, ILogger logger)
+    {
+        var builder = new NpgsqlConnectionStringBuilder(connectionString);
+        var databaseName = builder.Database;
+        if (string.IsNullOrWhiteSpace(databaseName))
+            throw new InvalidOperationException("Database:ConnectionString must specify a Database name.");
+
+        builder.Database = "postgres";
+        using var connection = new NpgsqlConnection(builder.ConnectionString);
+        connection.Open();
+
+        using var existsCommand = new NpgsqlCommand("SELECT 1 FROM pg_database WHERE datname = @name", connection);
+        existsCommand.Parameters.AddWithValue("name", databaseName);
+        if (existsCommand.ExecuteScalar() is not null)
+        {
+            logger.LogInformation("Database {Database} already exists; creation skipped.", databaseName);
+            return false;
+        }
+
+        var quote = new NpgsqlCommandBuilder();
+        var owner = string.IsNullOrWhiteSpace(builder.Username)
+            ? string.Empty
+            : $" OWNER {quote.QuoteIdentifier(builder.Username)}";
+        logger.LogInformation("Database {Database} does not exist; creating it.", databaseName);
+        using var createCommand = new NpgsqlCommand($"CREATE DATABASE {quote.QuoteIdentifier(databaseName)}{owner}", connection);
+        createCommand.ExecuteNonQuery();
+        logger.LogInformation("Database {Database} created.", databaseName);
+        return true;
+    }
+
     /// <summary>库为空（核心表 AspNetUsers 不存在）时对所有 [SugarTable] 实体执行 CodeFirst 建表；否则仅补建缺失的新表与新列。</summary>
     public static void Initialize(ISqlSugarClient db, ILogger logger)
     {

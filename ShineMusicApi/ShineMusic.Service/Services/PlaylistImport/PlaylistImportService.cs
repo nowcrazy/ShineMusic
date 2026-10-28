@@ -198,7 +198,7 @@ public sealed partial class PlaylistImportService(
             throw new PlaylistParseException("请粘贴歌单链接。");
         var parser = parsers.FirstOrDefault(candidate => candidate.CanHandle(url));
         if (parser is null)
-            throw new PlaylistParseException("暂不支持该平台歌单，当前支持：网易云音乐、QQ 音乐、酷我音乐、YouTube Music。");
+            throw new PlaylistParseException("暂不支持该平台歌单，当前支持：网易云音乐、QQ 音乐、酷我音乐、酷狗音乐、YouTube Music。");
         try
         {
             return (parser, await parser.ParseAsync(url.Trim(), cancellationToken));
@@ -262,12 +262,18 @@ public sealed partial class PlaylistImportService(
             .FirstOrDefault() ?? matched[0].Id;
     }
 
-    /// <summary>静默下载：酷我音源搜索最佳候选并逐条建任务；搜不到/不可用则标记 no_source。</summary>
+    /// <summary>静默下载：酷狗歌单曲目自带平台 hash 直接建酷狗任务（零搜索错配）；其余平台用酷我音源搜索最佳候选逐条建任务；搜不到/不可用则标记 no_source。</summary>
     private async Task TryStartSilentDownloadAsync(
         UserPlaylistPendingTrack pending, ParsedPlaylistTrack track, Guid userId, CancellationToken cancellationToken)
     {
         try
         {
+            // 酷狗歌单：解析结果自带曲目 hash，直接建酷狗下载任务；酷狗不可用则回落酷我搜索。
+            if (string.Equals(pending.SourcePlatform, "kugou", StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(track.SourceTrackId)
+                && await TryCreateDirectTaskAsync(pending, track, userId, cancellationToken))
+                return;
+
             var kuwo = providers.FirstOrDefault(candidate => candidate.Provider == "kuwo");
             if (kuwo is null || !kuwo.IsEnabled)
             {
@@ -310,6 +316,33 @@ public sealed partial class PlaylistImportService(
                 return;
             pending.Status = PendingStatuses.Pending;
         }
+    }
+
+    /// <summary>酷狗直连建任务：用解析出的 hash 直接创建酷狗下载任务（元数据取自解析结果）。成功返回 true；酷狗不可用/建任务失败返回 false 以回落酷我搜索。</summary>
+    private async Task<bool> TryCreateDirectTaskAsync(
+        UserPlaylistPendingTrack pending, ParsedPlaylistTrack track, Guid userId, CancellationToken cancellationToken)
+    {
+        var kugou = providers.FirstOrDefault(candidate => candidate.Provider == "kugou");
+        if (kugou is null || !kugou.IsEnabled)
+            return false;
+
+        var metadata = new Dictionary<string, SourceSearchItemDto>
+        {
+            [track.SourceTrackId!] = new SourceSearchItemDto(
+                kugou.Provider, track.SourceTrackId!, track.Title, track.Artists, track.AlbumTitle,
+                track.DurationMs, [], null, track.SourceUrl, null,
+                SourceQualities.Standard, false)
+        };
+        var created = await sourceDownloadService.CreateTasksAsync(kugou.Provider, [track.SourceTrackId!], metadata, userId, cancellationToken);
+        var taskRow = created.Created.Count > 0 ? created.Created[0] : null;
+        taskRow ??= await db.Queryable<ExternalDownloadTask>().FirstAsync(
+                candidate => candidate.Provider == kugou.Provider && candidate.ProviderTrackId == track.SourceTrackId,
+                cancellationToken);
+        if (taskRow is null)
+            return false;
+        pending.DownloadTaskId = taskRow.Id;
+        pending.Status = PendingStatuses.Downloading;
+        return true;
     }
 
     /// <summary>候选挑选：标题归一化相等优先，其次时长最接近（3 秒窗口内）。</summary>

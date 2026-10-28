@@ -1,6 +1,8 @@
 // 应用程序入口：组装依赖注入容器、配置 HTTP 中间件管道与端点映射；
 // 启动时由 StartupDataInitializer 完成 CodeFirst 建表 + 角色播种 + 合集播种，
-// 另支持以 --create-admin 命令行参数交互式创建首位管理员（创建后直接退出，不启动 Web 服务）。
+// 另支持两个命令行参数（均在启动数据准备之前/之后直接退出，不启动 Web 服务）：
+//   --create-database 确保业务库存在（不存在则创建，已存在则跳过）；
+//   --create-admin    创建管理员账号（可重复执行，不受“库中无用户”限制）。
 // 大块服务注册与中间件管道已提炼到 Extensions/ 与 Services/ 目录，本文件只保留调用入口。
 
 using Microsoft.AspNetCore.Builder;
@@ -9,6 +11,8 @@ using Microsoft.Extensions.Hosting;
 using ShineMusic.Api.Extensions;
 using ShineMusic.Api.Services;
 using ShineMusic.Common.Logging;
+using ShineMusic.Model.Options;
+using ShineMusic.Repository.Data;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -112,6 +116,18 @@ if (Directory.Exists(webDistPath))
         });
 }
 
+// ===== 命令行模式：--create-database 确保业务库存在（不存在则创建，已存在则跳过）=====
+// 必须在启动数据准备之前执行：初始化会立即连接业务库，库不存在会直接抛异常退出。
+// 单独使用本参数时建库后即退出；与 --create-admin 组合时继续走建表与管理员创建。
+if (args.Contains("--create-database", StringComparer.OrdinalIgnoreCase))
+{
+    SqlSugarSchemaBootstrap.EnsureDatabase(
+        builder.Configuration[$"{DatabaseOptions.SectionName}:ConnectionString"]!,
+        app.Logger);
+    if (!args.Contains("--create-admin", StringComparer.OrdinalIgnoreCase))
+        return;
+}
+
 // ===== 启动数据准备：CodeFirst 建表 + 角色播种 + 合集播种 =====
 await using (var scope = app.Services.CreateAsyncScope())
 {
@@ -122,8 +138,9 @@ await using (var scope = app.Services.CreateAsyncScope())
 // ===== 队列引导：恢复中断任务（必须在 CodeFirst 初始化之后执行）=====
 await ShineMusic.Tasks.QueueBootstrap.InitializeAsync(app.Services);
 
-// ===== 命令行模式：--create-admin 创建首位管理员 =====
-// 仅在库中还没有任何用户时允许执行；流程结束后直接退出，不启动 Web 主机。
+// ===== 命令行模式：--create-admin 创建管理员账号 =====
+// 可重复执行（不做“库中无用户”限制），重复的用户名/邮箱由 UserService 唯一性校验拦下。
+// 流程结束后直接退出，不启动 Web 主机。
 if (args.Contains("--create-admin", StringComparer.OrdinalIgnoreCase))
 {
     await using var scope = app.Services.CreateAsyncScope();

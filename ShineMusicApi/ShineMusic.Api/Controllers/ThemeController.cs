@@ -39,16 +39,18 @@ public sealed class ThemeController : ControllerBase
     private static readonly Regex HexColorRegex = new("^#[0-9a-fA-F]{6}$", RegexOptions.Compiled);
 
     // 【GET /api/v1/me/theme】读取当前用户自定义主题配置（未配置时返回全空配置）。
+    // 注意：单行查询不传 RequestAborted。客户端（页面刷新/切换）断连时传入取消令牌会让
+    // SqlSugar 抛 OperationCanceledException，调试器「抛出即中断」下每次都会弹异常框；
+    // 而这条查询本身极快，取消没有收益。
     [HttpGet(Name = "GetMyTheme")]
     public async Task<IResult> GetTheme(
         ISqlSugarClient db,
-        LibraryStoragePaths storagePaths,
-        CancellationToken cancellationToken)
+        LibraryStoragePaths storagePaths)
     {
         if (!HttpContext.User.TryGetUserId(out var userId))
             return Results.Unauthorized();
         var profile = await db.Queryable<UserThemeProfile>()
-            .FirstAsync(candidate => candidate.UserId == userId, cancellationToken);
+            .FirstAsync(candidate => candidate.UserId == userId);
         return Results.Ok(ToDto(storagePaths, userId, profile));
     }
 
@@ -91,8 +93,9 @@ public sealed class ThemeController : ControllerBase
         await System.IO.File.WriteAllBytesAsync(targetPath, content, cancellationToken);
 
         // 配置行不存在时创建默认行（颜色待前端取色后经 PUT 回填），并默认启用。
+        // 落库不走 RequestAborted：上传中途断连时仍希望保留已写入的主题状态，避免半成品数据。
         var profile = await db.Queryable<UserThemeProfile>()
-            .FirstAsync(candidate => candidate.UserId == userId, cancellationToken);
+            .FirstAsync(candidate => candidate.UserId == userId, CancellationToken.None);
         if (profile is null)
         {
             profile = new UserThemeProfile
@@ -101,7 +104,7 @@ public sealed class ThemeController : ControllerBase
                 WallpaperExtension = format.Value.Extension,
                 UpdatedAtUtc = DateTime.UtcNow
             };
-            await db.Insertable(profile).ExecuteCommandAsync(cancellationToken);
+            await db.Insertable(profile).ExecuteCommandAsync(CancellationToken.None);
         }
         else
         {
@@ -109,7 +112,7 @@ public sealed class ThemeController : ControllerBase
             profile.UpdatedAtUtc = DateTime.UtcNow;
             await db.Updateable(profile)
                 .UpdateColumns(item => new { item.WallpaperExtension, item.UpdatedAtUtc })
-                .ExecuteCommandAsync(cancellationToken);
+                .ExecuteCommandAsync(CancellationToken.None);
         }
 
         return Results.Ok(ToDto(storagePaths, userId, profile));
@@ -144,8 +147,7 @@ public sealed class ThemeController : ControllerBase
     public async Task<IResult> UpdateTheme(
         UpdateUserThemeRequest request,
         ISqlSugarClient db,
-        LibraryStoragePaths storagePaths,
-        CancellationToken cancellationToken)
+        LibraryStoragePaths storagePaths)
     {
         if (!HttpContext.User.TryGetUserId(out var userId))
             return Results.Unauthorized();
@@ -157,7 +159,7 @@ public sealed class ThemeController : ControllerBase
             return ApiResults.ValidationError(HttpContext, "maskOpacity", $"Mask opacity must be between 0 and {MaxMaskOpacity}.");
 
         var profile = await db.Queryable<UserThemeProfile>()
-            .FirstAsync(candidate => candidate.UserId == userId, cancellationToken);
+            .FirstAsync(candidate => candidate.UserId == userId);
         if (profile is null)
         {
             // 尚未上传壁纸时也允许先存色板；启用开关留待上传壁纸后再打开。
@@ -173,7 +175,7 @@ public sealed class ThemeController : ControllerBase
                 Enabled = request.Enabled,
                 UpdatedAtUtc = DateTime.UtcNow
             };
-            await db.Insertable(profile).ExecuteCommandAsync(cancellationToken);
+            await db.Insertable(profile).ExecuteCommandAsync();
         }
         else
         {
@@ -189,7 +191,7 @@ public sealed class ThemeController : ControllerBase
             // 显式全列更新：颜色字段允许清为 NULL，必须走 UpdateColumns（默认会跳过 null 值列）。
             await db.Updateable(profile)
                 .UpdateColumns(item => new { item.Accent, item.Accent2, item.Accent3, item.MaskOpacity, item.Enabled, item.UpdatedAtUtc })
-                .ExecuteCommandAsync(cancellationToken);
+                .ExecuteCommandAsync();
         }
 
         return Results.Ok(ToDto(storagePaths, userId, profile));
@@ -199,15 +201,14 @@ public sealed class ThemeController : ControllerBase
     [HttpDelete(Name = "DeleteMyTheme")]
     public async Task<IResult> DeleteTheme(
         ISqlSugarClient db,
-        LibraryStoragePaths storagePaths,
-        CancellationToken cancellationToken)
+        LibraryStoragePaths storagePaths)
     {
         if (!HttpContext.User.TryGetUserId(out var userId))
             return Results.Unauthorized();
         UserThemeFiles.DeleteAll(storagePaths, userId);
         await db.Deleteable<UserThemeProfile>()
             .Where(candidate => candidate.UserId == userId)
-            .ExecuteCommandAsync(cancellationToken);
+            .ExecuteCommandAsync();
         return Results.NoContent();
     }
 

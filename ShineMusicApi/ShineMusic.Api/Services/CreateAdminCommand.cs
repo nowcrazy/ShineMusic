@@ -1,5 +1,6 @@
-// --create-admin 命令处理服务：系统首个账号入口（注册采用邀请制）。
-// 仅在库中还没有任何用户时允许执行，防止该参数被重复利用来越权追加管理员。
+// --create-admin 命令处理服务：创建管理员账号（注册仍采用邀请制）。
+// 不限制“库中必须没有用户”：首次部署与后续追加管理员共用同一入口，可重复执行；
+// 用户名/邮箱的唯一性仍由 UserService.CreateAsync 校验，重复凭证会直接报错。
 // 支持两种模式：
 //   1) 环境变量非交互模式：ADMIN_EMAIL / ADMIN_USERNAME / ADMIN_NAME / ADMIN_PASSWORD
 //   2) 交互模式：未设置环境变量时，控制台提示输入
@@ -12,7 +13,7 @@ using SqlSugar;
 
 namespace ShineMusic.Api.Services;
 
-/// <summary>首位管理员创建命令。</summary>
+/// <summary>管理员账号创建命令。</summary>
 public class CreateAdminCommand
 {
     private readonly ISqlSugarClient _sqlSugar;
@@ -29,12 +30,6 @@ public class CreateAdminCommand
     /// </summary>
     public async Task<bool> ExecuteAsync()
     {
-        if (await _userService.AnyUsersAsync())
-        {
-            Console.Error.WriteLine("Admin initialization is only allowed before the first user exists.");
-            return false;
-        }
-
         // 优先从环境变量读取（非交互/自动化场景），缺失则回退到控制台交互输入。
         // username 与 email 均为登录凭证（登录时可二选一 + password），需分别设置；
         // displayName 为昵称，仅用于展示。
@@ -105,7 +100,7 @@ public class CreateAdminCommand
             await _sqlSugar.Ado.RollbackTranAsync();
             throw;
         }
-        Console.WriteLine($"Initial administrator created: {admin.UserName} ({admin.Email}).");
+        Console.WriteLine($"Administrator created: {admin.UserName} ({admin.Email}).");
         return true;
     }
 

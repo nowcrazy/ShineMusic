@@ -47,9 +47,6 @@ public sealed class UserService(ISqlSugarClient db)
     public async Task<ApplicationUser?> FindByIdAsync(Guid userId) =>
         await db.Queryable<ApplicationUser>().FirstAsync(user => user.Id == userId);
 
-    /// <summary>库中是否已存在任何用户（--create-admin 的守卫条件）。</summary>
-    public Task<bool> AnyUsersAsync() => db.Queryable<ApplicationUser>().AnyAsync();
-
     /// <summary>获取用户的角色名集合（联 AspNetUserRoles/AspNetRoles）。</summary>
     public async Task<List<string>> GetRolesAsync(Guid userId) =>
         await db.Queryable<ApplicationUserRole, ApplicationRole>((userRole, role) => userRole.RoleId == role.Id)

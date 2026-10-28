@@ -22,6 +22,9 @@ public sealed class SourceDownloadOptions
     /// <summary>酷我音乐音源配置（免密钥直链，音质 320k）。</summary>
     public KuwoSourceOptions Kuwo { get; set; } = new();
 
+    /// <summary>酷狗音乐音源配置（免密钥直链，免登录 128k）。</summary>
+    public KugouSourceOptions Kugou { get; set; } = new();
+
     /// <summary>网易云音乐音源配置（免密钥，覆盖主流中文曲，320k MP3）。</summary>
     public NeteaseSourceOptions Netease { get; set; } = new();
 
@@ -72,6 +75,13 @@ public sealed class JamendoSourceOptions
 
 /// <summary>酷我音源配置。</summary>
 public sealed class KuwoSourceOptions
+{
+    /// <summary>是否启用该音源（免密钥，默认开启）。</summary>
+    public bool Enabled { get; set; } = true;
+}
+
+/// <summary>酷狗音源配置。</summary>
+public sealed class KugouSourceOptions
 {
     /// <summary>是否启用该音源（免密钥，默认开启）。</summary>
     public bool Enabled { get; set; } = true;

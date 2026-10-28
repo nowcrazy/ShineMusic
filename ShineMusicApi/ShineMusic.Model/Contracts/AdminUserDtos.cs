@@ -45,6 +45,7 @@ public sealed record OperationAuditItem(
     string Action,
     string ResourceType,
     string ResourceId,
+    string? ResourceName,
     string? DetailsJson,
     string? Ip,
     string? ClientType,

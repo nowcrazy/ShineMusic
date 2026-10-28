@@ -178,6 +178,20 @@ public sealed class SourceDownloadJob(
     private static readonly TimeSpan[] AutoRetryBackoffs =
         [TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(2), TimeSpan.FromMinutes(10)];
 
+    /// <summary>
+    /// 频控专用快速退避节奏：第 1/2/3 次分别等待 15s / 30s / 60s。
+    /// 适用于酷狗等平台的 errcode:1002「操作太频繁」——封禁是瞬时条件，
+    /// 应更快重试而非等待 2min/10min 把任务拖死。
+    /// </summary>
+    private static readonly TimeSpan[] RateLimitBackoffs =
+        [TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(1)];
+
+    /// <summary>判定异常是否由平台频控引起（酷狗等平台返回 errcode:1002 / "操作太频繁"）。</summary>
+    private static bool IsRateLimited(Exception exception) =>
+        exception is SourceUnavailableException unavailable
+        && (unavailable.Message.Contains("频控", StringComparison.Ordinal)
+            || unavailable.Message.Contains("操作太频繁", StringComparison.Ordinal));
+
     /// <summary>跨源时长佐证的按任务记忆化缓存（job 实例随消息 DI 作用域创建，天然任务级隔离）。</summary>
     private long? _crossSourceDurationMs;
     private bool _crossSourceDurationLoaded;
@@ -449,12 +463,15 @@ public sealed class SourceDownloadJob(
                 MediaProcessingException media => (media.Code, media.Message),
                 _ => (ErrorCodes.InternalError, "The download task could not be processed.")
             };
-            // 自动重试：重复/超限属于永久失败，重试无意义直接终态；其余失败按 30s/2min/10min 退避定点重排，
+            // 自动重试：重复/超限属于永久失败，重试无意义直接终态；其余失败按退避定点重排，
             // 达到上限才转 failed（保留手动重试入口）。
+            // 频控（酷狗 errcode:1002 等）走更短的 15s/30s/60s 退避——封禁是瞬时条件，快重试可尽快恢复；
+            // 其他失败走 30s/2min/10min 指数退避，给网络/平台恢复留时间。
             var retryable = exception is not SourceDuplicateException and not SourceDownloadTooLargeException;
             if (retryable && task.AutoRetryCount < MaxAutoRetries)
             {
-                var nextRetryAt = DateTime.UtcNow + AutoRetryBackoffs[Math.Min(task.AutoRetryCount, AutoRetryBackoffs.Length - 1)];
+                var backoffs = IsRateLimited(exception) ? RateLimitBackoffs : AutoRetryBackoffs;
+                var nextRetryAt = DateTime.UtcNow + backoffs[Math.Min(task.AutoRetryCount, backoffs.Length - 1)];
                 task.AutoRetryCount++;
                 task.Status = ExternalDownloadTaskStatuses.Queued;
                 task.NextRetryAtUtc = nextRetryAt;
@@ -464,8 +481,8 @@ public sealed class SourceDownloadJob(
                 await db.Updateable(task).ExecuteCommandAsync(cancellationToken);
                 // 定点重试：退避时间已写入 NextRetryAtUtc，由 SourceDownloadRetrySweepService 到点重新投递。
                 logger.LogWarning(exception,
-                    "Source download task {TaskId} failed with {ErrorCode}; auto retry {Attempt}/{Max} scheduled at {NextRetryAtUtc}.",
-                    taskId, code, task.AutoRetryCount, MaxAutoRetries, nextRetryAt);
+                    "Source download task {TaskId} failed with {ErrorCode}; {Mode} auto retry {Attempt}/{Max} scheduled at {NextRetryAtUtc}.",
+                    taskId, code, IsRateLimited(exception) ? "rate-limit" : "standard", task.AutoRetryCount, MaxAutoRetries, nextRetryAt);
                 return;
             }
             logger.LogWarning(exception, "Source download task {TaskId} failed with {ErrorCode}.", taskId, code);

@@ -3,13 +3,16 @@
 // 都需要取 IP，而 Service 已依赖 Common，不能反向依赖。
 //
 // 取值顺序：
-// 1. HttpContext.Connection.RemoteIpAddress —— 经 ForwardedHeaders 中间件回填后即为真实客户端 IP；
-// 2. X-Forwarded-For 首跳 —— 兜底，应对未配置 ForwardedHeaders 的场景；
-// 3. 本机非回环 IPv4 —— 浏览器经 localhost 访问时前两步均为 127.0.0.1，
-//    回退到本机 LAN IP（如 192.168.100.107），避免日志全是 127.0.0.1。
+// 1. X-Forwarded-For 首跳 —— 反向代理（Vite dev proxy 的 xfwd、Nginx 等）注入的真实客户端 IP；
+// 2. HttpContext.Connection.RemoteIpAddress —— 直连或 ForwardedHeaders 已回填的地址；
+// 3. 两者都是回环（浏览器经 localhost 访问）→ 显示"本机"。
+//
+// 注意：不再"猜测"本机出口网卡 IP 充当客户端 IP。那样在开着 VPN 的开发机上会得到
+// 100.64/10 这类 Tailscale 地址，看似是客户端 IP、实则与服务端无关，属于误导性数据。
+// 拿不到真实客户端时如实显示"本机"。
 //
 // IPv6 处理：
-// - ::1（IPv6 回环）→ 127.0.0.1；
+// - ::1（IPv6 回环）→ 本机；
 // - ::ffff:1.2.3.4（IPv4-mapped IPv6）→ 1.2.3.4；
 // - 纯 IPv6 地址原样返回（极少数客户端仅有 IPv6 公网地址）。
 
@@ -24,73 +27,23 @@ public static class ClientIp
     /// <summary>从 HTTP 上下文解析客户端真实 IP（优先 IPv4）。</summary>
     public static string Resolve(HttpContext context)
     {
-        var ip = context.Connection.RemoteIpAddress;
-        // 兜底：ForwardedHeaders 未生效时，手动读 X-Forwarded-For 首跳。
-        if (ip is null || IPAddress.IsLoopback(ip))
-        {
-            var forwarded = context.Request.Headers["X-Forwarded-For"].ToString();
-            if (!string.IsNullOrWhiteSpace(forwarded))
-            {
-                var first = forwarded.Split(',')[0].Trim();
-                if (IPAddress.TryParse(first, out var forwardedIp))
-                    ip = forwardedIp;
-                else
-                    return Truncate(first, 64);
-            }
-        }
-        // 仍为回环（浏览器经 localhost 访问 + 代理也未转发真实 IP）→ 回退本机 LAN IPv4。
-        if (ip is null || IPAddress.IsLoopback(ip))
-            ip = ResolveLocalLanIp();
+        var ip = ResolveForwarded(context) ?? context.Connection.RemoteIpAddress;
         return Truncate(Normalize(ip), 64);
     }
 
-    /// <summary>解析本机用于出站的 IPv4 地址（即真正上网的网卡 IP，如 WiFi 的 192.168.100.107）。</summary>
-    /// <remarks>
-    /// 用 UDP socket connect 到公网地址的技巧：OS 会按路由表选择出站接口，
-    /// LocalEndPoint 即为该接口的 IP。不实际发送数据，仅用于探测路由。
-    /// 拿不到时回退到遍历网卡取第一个私网 IPv4。
-    /// </remarks>
-    private static IPAddress? ResolveLocalLanIp()
+    /// <summary>读取 X-Forwarded-For 首跳（最靠近客户端的一跳）；回环地址视为无效。</summary>
+    private static IPAddress? ResolveForwarded(HttpContext context)
     {
-        try
-        {
-            using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-            // 8.8.8.8 是公网 DNS，connect 不发包，仅让 OS 选定出站接口
-            socket.Connect("8.8.8.8", 65530);
-            if (socket.LocalEndPoint is IPEndPoint localEp && !IPAddress.IsLoopback(localEp.Address))
-                return localEp.Address;
-        }
-        catch { /* 忽略，走回退 */ }
-
-        // 回退：遍历网卡，取第一个处于 Up 状态的非虚拟网卡的私网 IPv4
-        try
-        {
-            return System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces()
-                .Where(ni => ni.OperationalStatus == System.Net.NetworkInformation.OperationalStatus.Up
-                    && ni.NetworkInterfaceType is not System.Net.NetworkInformation.NetworkInterfaceType.Loopback
-                    and not System.Net.NetworkInformation.NetworkInterfaceType.Tunnel)
-                .SelectMany(ni => ni.GetIPProperties().UnicastAddresses)
-                .Select(addr => addr.Address)
-                .FirstOrDefault(a =>
-                    a.AddressFamily == AddressFamily.InterNetwork &&
-                    !IPAddress.IsLoopback(a) &&
-                    !IsApipa(a) &&
-                    !IsCgnat(a));
-        }
-        catch
-        {
+        var forwarded = context.Request.Headers["X-Forwarded-For"].ToString();
+        if (string.IsNullOrWhiteSpace(forwarded))
             return null;
-        }
+        var first = forwarded.Split(',')[0].Trim().Trim('"');
+        if (!IPAddress.TryParse(first, out var parsed))
+            return null;
+        return IPAddress.IsLoopback(parsed) ? null : parsed;
     }
 
-    /// <summary>169.254.0.0/16 —— APIPA 链路本地地址（未连上网络的网卡）。</summary>
-    private static bool IsApipa(IPAddress ip)
-    {
-        var bytes = ip.GetAddressBytes();
-        return bytes[0] == 169 && bytes[1] == 254;
-    }
-
-    /// <summary>100.64.0.0/10 —— CGNAT 段（Tailscale 等 VPN 常用），不作为真实局域网 IP。</summary>
+    /// <summary>100.64.0.0/10 —— CGNAT 段（Tailscale 等 VPN 常用），标注为 VPN 便于识别。</summary>
     private static bool IsCgnat(IPAddress ip)
     {
         var bytes = ip.GetAddressBytes();

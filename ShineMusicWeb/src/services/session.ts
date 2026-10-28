@@ -20,6 +20,19 @@ import { http, setRefreshHandler } from './http'
 import { syncRemoteTheme } from './user-theme'
 import { clearTokens, getRefreshToken, hasSession, restoreTokens, saveTokens } from './tokens'
 import { clearActivity, hasIdleExpired, markActivity } from './idle-session'
+import { useAdminStore } from '@/stores/admin'
+
+/**
+ * 清空后台访问标签（面包屑）。标签只存在内存中，不持久化，
+ * 因此刷新页面天然清空；这里补齐「登录 / 登出 / 会话失效」三个边界。
+ */
+function resetAdminBreadcrumbs() {
+  try {
+    useAdminStore().resetBreadcrumbs()
+  } catch {
+    // Pinia 尚未安装时忽略（极早期调用），此时本就没有内存标签
+  }
+}
 
 interface SessionState {
   /** 当前用户资料；null 表示未登录或尚未加载 */
@@ -58,6 +71,7 @@ setRefreshHandler(() => {
         clearTokens()
         state.user = null
         state.status = 'anonymous'
+        resetAdminBreadcrumbs()
         return false
       } finally {
         refreshing = null
@@ -123,6 +137,7 @@ export async function login(email: string, password: string) {
   )
   saveTokens(tokens.accessToken, tokens.refreshToken)
   markActivity()
+  resetAdminBreadcrumbs()
   await loadCurrentUser()
   // 登录成功后同步自定义图片主题（远端启用则应用；失败静默）。
   void syncRemoteTheme()
@@ -155,6 +170,7 @@ export async function logout() {
     clearActivity()
     state.user = null
     state.status = 'anonymous'
+    resetAdminBreadcrumbs()
   }
 }
 
@@ -167,6 +183,7 @@ export function expireInactiveSession() {
   clearActivity()
   state.user = null
   state.status = 'anonymous'
+  resetAdminBreadcrumbs()
 }
 
 /**
@@ -193,6 +210,7 @@ export async function restoreSession() {
     clearActivity()
     state.user = null
     state.status = 'anonymous'
+    resetAdminBreadcrumbs()
     return
   }
   if (!hasSession()) {
@@ -207,6 +225,7 @@ export async function restoreSession() {
     clearTokens()
     state.user = null
     state.status = 'anonymous'
+    resetAdminBreadcrumbs()
   }
 }
 
