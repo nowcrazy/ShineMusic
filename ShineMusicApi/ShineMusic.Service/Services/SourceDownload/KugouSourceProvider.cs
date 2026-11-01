@@ -80,7 +80,8 @@ public sealed partial class KugouSourceProvider(
                 SourcePageUrl: $"https://www.kugou.com/song/#hash={fileHash}",
                 License: null,
                 SourceQualities.Standard,
-                IsLosslessAvailable: false));
+                IsLosslessAvailable: false,
+                ReleaseYear: SourceReleaseYearParser.FromJson(entry, "PublishYear", "PublishDate", "PublishTime", "Year")));
         }
         return results.ToArray();
     }
@@ -127,7 +128,8 @@ public sealed partial class KugouSourceProvider(
                 $"https://www.kugou.com/song/#hash={providerTrackId}",
                 null,
                 SourceQualities.Standard,
-                IsLosslessAvailable: false);
+                IsLosslessAvailable: false,
+                ReleaseYear: SourceReleaseYearParser.FromJson(root, "PublishYear", "PublishDate", "PublishTime", "Year"));
         }
         catch (JsonException)
         {
@@ -155,6 +157,30 @@ public sealed partial class KugouSourceProvider(
             throw new SourceUnavailableException("酷狗未返回可下载资源（该曲目可能需要 VIP、无版权或已下架）。");
 
         return new SourceDownloadInfo(url, "mp3", IsLossless: false, BitrateKbps: 128, SourceQualities.Standard);
+    }
+
+    /// <summary>
+    /// 轻量预判：复用 getSongInfo.php 缓存响应，检查 status==1 且 url 非空。
+    /// 频控/异常时返回 true（保守放行，不误删可下载的曲目）。
+    /// </summary>
+    public async Task<bool> CanDownloadAsync(string providerTrackId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var json = await PlayInfoJsonAsync(providerTrackId, cancellationToken);
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+            var status = root.TryGetProperty("status", out var statusElement)
+                && statusElement.ValueKind == JsonValueKind.Number
+                    ? statusElement.GetInt32()
+                    : 0;
+            var url = GetString(root, "url")?.Trim();
+            return status == 1 && !string.IsNullOrWhiteSpace(url) && url.StartsWith("http", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return true; // 超时/异常时保守放行
+        }
     }
 
     /// <summary>

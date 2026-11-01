@@ -32,9 +32,12 @@ interface ApiDailyRecommendation {
 let _dailyCache: DailyRecommendation | null = null
 let _dailyInFlight: Promise<DailyRecommendation> | null = null
 
-async function fetchDailyRaw(limit: number): Promise<DailyRecommendation> {
+async function fetchDailyRaw(limit?: number): Promise<DailyRecommendation> {
+  const path = limit == null
+    ? `${API_PREFIX}/recommendations/daily`
+    : `${API_PREFIX}/recommendations/daily?limit=${limit}`
   const data = await http.get<ApiDailyRecommendation>(
-    `${API_PREFIX}/recommendations/daily?limit=${limit}`,
+    path,
     false,
   )
   return {
@@ -44,7 +47,7 @@ async function fetchDailyRaw(limit: number): Promise<DailyRecommendation> {
   }
 }
 
-async function refreshDailySilently(limit: number): Promise<void> {
+async function refreshDailySilently(limit?: number): Promise<void> {
   try {
     _dailyCache = await fetchDailyRaw(limit)
   } catch {
@@ -59,7 +62,7 @@ async function refreshDailySilently(limit: number): Promise<void> {
  * - 后端保证同一自然日内结果稳定，所以缓存跨次调用完全安全。
  * - 跨日时刷新会自动替换缓存。
  */
-export async function getDailyRecommendations(limit = 30): Promise<DailyRecommendation> {
+export async function getDailyRecommendations(limit?: number): Promise<DailyRecommendation> {
   if (_dailyCache) {
     void refreshDailySilently(limit)
     return _dailyCache

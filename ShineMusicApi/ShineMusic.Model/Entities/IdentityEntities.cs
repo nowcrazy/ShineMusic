@@ -268,6 +268,42 @@ public sealed class UserPlaylistPendingTrack
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
 }
 
+/// <summary>从外部歌单解析后独立加入的下载队列曲目，不创建或关联用户歌单。</summary>
+[SugarTable("PlaylistDownloadQueueItems")]
+public sealed class PlaylistDownloadQueueItem
+{
+    [SetsRequiredMembers]
+    public PlaylistDownloadQueueItem()
+    {
+        Title = null!;
+        ArtistsJson = null!;
+        SourcePlatform = null!;
+    }
+
+    [SugarColumn(IsPrimaryKey = true)]
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid UserId { get; set; }
+    public required string Title { get; set; }
+    [SugarColumn(ColumnDataType = "text")]
+    public required string ArtistsJson { get; set; }
+    [SugarColumn(IsNullable = true)]
+    public string? AlbumTitle { get; set; }
+    [SugarColumn(IsNullable = true)]
+    public int? DurationMs { get; set; }
+    public required string SourcePlatform { get; set; }
+    [SugarColumn(IsNullable = true)]
+    public string? SourceTrackId { get; set; }
+    [SugarColumn(IsNullable = true)]
+    public string? SourceUrl { get; set; }
+    public string Status { get; set; } = "pending";
+    [SugarColumn(IsNullable = true)]
+    public Guid? DownloadTaskId { get; set; }
+    [SugarColumn(ColumnDataType = "timestamptz")]
+    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+    [SugarColumn(ColumnDataType = "timestamptz")]
+    public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
+}
+
 /// <summary>点歌/求歌记录：用户提交想要上架的曲目，管理员走审核流程处理，其他用户可投票顶歌。</summary>
 [SugarTable("SongRequests")]
 public sealed class SongRequestRecord

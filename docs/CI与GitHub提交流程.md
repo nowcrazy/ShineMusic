@@ -31,20 +31,25 @@
 执行目录：任意（**整段一次性复制粘贴，不要逐行**）
 
 ```powershell
+$fail = @()
 cd c:\Learn\ShineMusic\ShineMusicApp
-yarn check:contracts;  if ($LASTEXITCODE -ne 0) { throw "闸门①失败：契约漂移，执行 yarn gen:contracts 后重新检查" }
-yarn typecheck;        if ($LASTEXITCODE -ne 0) { throw "闸门②失败：App 类型检查报错，按输出修复" }
-yarn check:i18n;       if ($LASTEXITCODE -ne 0) { throw "闸门③失败：新增 UI 中文未走语言包，接线后重查；确属逻辑值则 yarn check:i18n --update 更新基线" }
-yarn build:app;        if ($LASTEXITCODE -ne 0) { throw "闸门④失败：App 构建报错，按输出修复" }
+yarn check:contracts;  if ($LASTEXITCODE -ne 0) { $fail += "闸门①失败：契约漂移，执行 yarn gen:contracts 后重新检查" }
+yarn typecheck;        if ($LASTEXITCODE -ne 0) { $fail += "闸门②失败：App 类型检查报错，按输出修复" }
+yarn check:i18n;       if ($LASTEXITCODE -ne 0) { $fail += "闸门③失败：新增 UI 中文未走语言包，接线后重查；确属逻辑值则 yarn check:i18n --update 更新基线" }
+yarn build:app;        if ($LASTEXITCODE -ne 0) { $fail += "闸门④失败：App 构建报错，按输出修复" }
 cd c:\Learn\ShineMusic\ShineMusicWeb
-yarn typecheck;        if ($LASTEXITCODE -ne 0) { throw "闸门⑤失败：Web 类型检查报错，按输出修复" }
-yarn build:only;       if ($LASTEXITCODE -ne 0) { throw "闸门⑥失败：Web 构建报错，按输出修复" }
+yarn typecheck;        if ($LASTEXITCODE -ne 0) { $fail += "闸门⑤失败：Web 类型检查报错，按输出修复" }
+yarn build:only;       if ($LASTEXITCODE -ne 0) { $fail += "闸门⑥失败：Web 构建报错，按输出修复" }
 cd c:\Learn\ShineMusic
-dotnet build ShineMusicApi/ShineMusic.slnx -c Release --nologo; if ($LASTEXITCODE -ne 0) { throw "闸门⑦失败：后端构建报错/有警告" }
+dotnet build ShineMusicApi/ShineMusic.slnx -c Release --nologo; if ($LASTEXITCODE -ne 0) { $fail += "闸门⑦失败：后端构建报错/有警告" }
+if ($fail.Count -gt 0) { Write-Host ("===== [FAIL] " + ($fail -join "；")) -ForegroundColor Red; exit 1 }
 Write-Host "===== [OK] 七道闸门全过，进入第 2 步 =====" -ForegroundColor Green
 ```
 
-✅ 成功标志：最后一行绿色 `[OK]`，且中途没有任何 throw 中断。
+✅ 成功标志：最后一行是绿色 `[OK]`。若出现红色 `[FAIL]` 并列出失败闸门，则一律不得进入第 2 步——按清单修好后整段重跑。
+
+> 脚本用 `$fail` 累计失败原因，绿色 `[OK]` 只在「零失败」时打印，因此结局与过程不会互相矛盾。
+> 早期版本是「逐条 `throw` + 结尾写死成功文案」：`throw` 只终止当前那一条命令，逐行粘贴执行时后面的闸门照常跑完，结尾那句成功提示无条件输出，会出现「中途报错、结尾仍喊全过」的假绿，已弃用。
 
 闸门说明：
 

@@ -47,7 +47,13 @@ const routes: RouteRecordRaw[] = [
         path: 'collections',
         name: 'collections',
         component: () => import('@/pages/admin/collections.vue'),
-        meta: { title: '运营歌单' },
+        meta: { title: '精选歌单' },
+      },
+      {
+        path: 'recommendation-settings',
+        name: 'recommendation-settings',
+        component: () => import('@/pages/admin/recommendation-settings.vue'),
+        meta: { title: '推荐策略' },
       },
       {
         path: 'invitations',

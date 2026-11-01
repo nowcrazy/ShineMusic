@@ -127,3 +127,42 @@ public sealed class DailyRecommendationItem
     [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 }
+
+/// <summary>个性化推荐策略版本；每个生效日期最多一条，修改策略从指定日期开始生效。</summary>
+[SugarTable("RecommendationStrategyVersions")]
+public sealed class RecommendationStrategyVersion
+{
+    /// <summary>策略生效日期键，格式 yyyyMMdd，同时作为主键避免同日重复版本。</summary>
+    [SugarColumn(IsPrimaryKey = true)]
+    public int EffectiveDateKey { get; set; }
+
+    /// <summary>默认每日推荐曲目数。</summary>
+    public int DailyTrackCount { get; set; }
+    /// <summary>艺人亲和度权重。</summary>
+    public double ArtistAffinityWeight { get; set; }
+    /// <summary>播放次数权重。</summary>
+    public double PlayCountWeight { get; set; }
+    /// <summary>单曲播放加分的封顶次数。</summary>
+    public int PlayCountCap { get; set; }
+    /// <summary>跳过行为惩罚。</summary>
+    public double SkipPenalty { get; set; }
+    /// <summary>收藏加分。</summary>
+    public double FavoriteBoost { get; set; }
+    /// <summary>喜欢反馈加分。</summary>
+    public double LikeBoost { get; set; }
+    /// <summary>不喜欢反馈惩罚。</summary>
+    public double DislikePenalty { get; set; }
+    /// <summary>近期推荐降权的天数。</summary>
+    public int NonRepeatDays { get; set; }
+    /// <summary>近期重复推荐惩罚。</summary>
+    public double RecentRecommendationPenalty { get; set; }
+    /// <summary>新歌加权的线性衰减天数。</summary>
+    public int NewTrackBoostDays { get; set; }
+    /// <summary>新歌发布当天的最高加分。</summary>
+    public double NewTrackBoostMax { get; set; }
+    /// <summary>最后修改时间（UTC）。</summary>
+    [SugarColumn(ColumnDataType = "timestamptz")]
+    public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
+    /// <summary>最后修改策略的管理员用户 Id。</summary>
+    public Guid UpdatedByUserId { get; set; }
+}

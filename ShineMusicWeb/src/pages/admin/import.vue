@@ -160,7 +160,8 @@ function handleSortChange({ prop, order }: { prop: string; order: 'ascending' | 
     duration: 'duration',
     createdAt: 'created',
   }
-  sortField.value = order ? fieldMap[prop] ?? 'created' : 'created'
+  if (order && !fieldMap[prop]) return
+  sortField.value = order ? fieldMap[prop] : 'created'
   sortOrder.value = order === 'ascending' ? 'asc' : 'desc'
   page.value = 1
   void loadItems()
@@ -478,7 +479,7 @@ onMounted(loadItems)
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="艺人" min-width="140">
+        <el-table-column label="艺人" prop="metadata.artists" sortable min-width="140">
           <template #default="{ row }">{{ row.metadata.artists.join('、') || '—' }}</template>
         </el-table-column>
         <el-table-column label="状态" prop="status" sortable="custom" width="120">
@@ -514,7 +515,7 @@ onMounted(loadItems)
             <span v-else class="text-faint">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="转码" width="120">
+        <el-table-column label="转码" prop="transcode.status" sortable width="120">
           <template #default="{ row }">
             <div class="transcode">
               <span>{{ row.transcode.status || '—' }}</span>
@@ -522,7 +523,7 @@ onMounted(loadItems)
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="关联需求" width="100">
+        <el-table-column label="关联需求" prop="songRequestId" sortable width="100">
           <template #default="{ row }">
             <el-tag v-if="row.songRequestId" size="small" type="warning">已关联</el-tag>
             <span v-else class="text-faint">—</span>

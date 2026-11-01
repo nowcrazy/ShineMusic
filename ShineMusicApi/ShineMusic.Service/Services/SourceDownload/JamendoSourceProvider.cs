@@ -152,7 +152,8 @@ public sealed class JamendoSourceProvider(
             SourcePageUrl: GetString(item, "shareurl") ?? GetString(item, "shorturl"),
             License: GetString(item, "license_ccurl"),
             Quality: isFlac ? SourceQualities.Lossless : SourceQualities.High,
-            IsLosslessAvailable: isFlac);
+            IsLosslessAvailable: isFlac,
+            ReleaseYear: SourceReleaseYearParser.FromJson(item, "releasedate", "release_date", "release_year"));
     }
 
     /// <summary>从详情响应中提取下载地址与实际格式（audioformat=flac 请求下，无 FLAC 时平台回退 mp32）。</summary>

@@ -165,7 +165,8 @@ public sealed class AudiusSourceProvider(
             SourcePageUrl: AbsolutePermalink(GetString(item, "permalink")),
             License: GetString(item, "license"),
             Quality: downloadable ? SourceQualities.Lossless : SourceQualities.High,
-            IsLosslessAvailable: downloadable);
+            IsLosslessAvailable: downloadable,
+            ReleaseYear: SourceReleaseYearParser.FromJson(item, "release_year", "release_date", "releasedate"));
     }
 
     /// <summary>GET JSON 并解析；网络/格式异常返回 null（搜索场景容忍失败，由编排层聚合多源结果）。</summary>

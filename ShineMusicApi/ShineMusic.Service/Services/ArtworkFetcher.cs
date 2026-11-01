@@ -53,8 +53,8 @@ public sealed class ArtworkFetcher(
     /// 同时返回搜索结果中的 流派/专辑名/发行年 供调用方回填缺失字段。
     /// </summary>
     /// <param name="artist">歌手名（必填）</param>
-    /// <param name="album">专辑名（可选，有专辑优先搜专辑）</param>
-    /// <param name="song">歌曲名（可选，专辑搜索失败时回退搜歌曲）</param>
+    /// <param name="album">专辑名（可选，歌曲搜索未命中时作为回退）。</param>
+    /// <param name="song">歌曲名（可选，有歌名时优先搜索歌曲实体）。</param>
     /// <param name="storageKeyPrefix">存储键前缀，如 "artwork"</param>
     /// <param name="outputDirectory">封面图保存的物理目录</param>
     /// <param name="cancellationToken">取消令牌</param>
@@ -75,7 +75,6 @@ public sealed class ArtworkFetcher(
 
         try
         {
-            // 先从 iTunes 拿到完整元数据（包含封面 URL）
             var itunesResult = await SearchBestMatchAsync(artist, album, song, cancellationToken);
             if (itunesResult is null)
                 return new ItunesMetadataResult(false, Error: "No matching track found on iTunes.");
@@ -211,32 +210,27 @@ public sealed class ArtworkFetcher(
     private async Task<ItunesResult?> SearchByTitleAsync(string title, CancellationToken ct)
         => await SearchByTermAsync(title, "song", ct);
 
-    /// <summary>
-    /// 从 iTunes 搜索并返回最佳匹配的完整元数据项。
-    /// 搜索策略：优先用 artist+album 搜专辑 → 回退 artist+song 搜歌曲 → 最后仅 artist 搜专辑。
-    /// </summary>
+    /// <summary>优先搜索歌曲实体以获取曲序/碟序，歌曲未命中时回退搜索专辑。</summary>
     private async Task<ItunesResult?> SearchBestMatchAsync(
-        string artist, string? album, string? song, CancellationToken ct)
+        string artist,
+        string? album,
+        string? song,
+        CancellationToken ct)
     {
-        // 策略 1：有专辑名 → 搜专辑
-        if (!string.IsNullOrWhiteSpace(album))
-        {
-            var result = await SearchByTermAsync($"{artist} {album}", "album", ct);
-            if (result is not null) return result;
-        }
-
-        // 策略 2：搜歌曲（更精准拿到 primaryGenreName）
         if (!string.IsNullOrWhiteSpace(song))
         {
             var result = await SearchByTermAsync($"{artist} {song}", "song", ct);
-            if (result is not null) return result;
+            if (result is not null)
+                return result;
         }
 
-        // 策略 3：仅搜歌手，取第一张专辑
-        return await SearchByTermAsync(artist, "album", ct);
+        if (!string.IsNullOrWhiteSpace(album))
+            return await SearchByTermAsync($"{artist} {album}", "album", ct);
+
+        return null;
     }
 
-    /// <summary>按指定 term 和 entity 类型搜索 iTunes，返回第一个有效结果。</summary>
+    /// <summary>按指定 term 和 entity 类型搜索 iTunes，返回第一个含有可用元数据的结果。</summary>
     private async Task<ItunesResult?> SearchByTermAsync(string term, string entity, CancellationToken ct)
     {
         var url = $"{ItunesSearchUrl}?term={WebUtility.UrlEncode(term)}&media=music&entity={entity}&limit=5";
@@ -247,36 +241,35 @@ public sealed class ArtworkFetcher(
         try
         {
             var response = await client.GetAsync(url, ct);
-            if (!response.IsSuccessStatusCode) return null;
+            if (!response.IsSuccessStatusCode)
+                return null;
 
             var json = await response.Content.ReadAsStringAsync(ct);
-            var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-
-            if (!root.TryGetProperty("results", out var results) || results.ValueKind != JsonValueKind.Array)
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("results", out var results)
+                || results.ValueKind != JsonValueKind.Array)
                 return null;
 
             foreach (var item in results.EnumerateArray())
             {
-                var artworkOk = item.TryGetProperty("artworkUrl100", out var artwork)
-                                && artwork.ValueKind == JsonValueKind.String
-                                && artwork.GetString() is { Length: > 0 };
-                var genreOk = item.TryGetProperty("primaryGenreName", out var genre)
-                               && genre.ValueKind == JsonValueKind.String
-                               && genre.GetString() is { Length: > 0 };
-
-                // 只要有封面 OR 有流派就算有效结果
-                if (artworkOk || genreOk)
-                {
-                    return DeserializeResult(item);
-                }
+                var result = DeserializeResult(item);
+                if (!string.IsNullOrWhiteSpace(result.ArtworkUrl100)
+                    || !string.IsNullOrWhiteSpace(result.PrimaryGenreName)
+                    || result.TrackNumber is > 0
+                    || result.DiscNumber is > 0
+                    || !string.IsNullOrWhiteSpace(result.ReleaseDate))
+                    return result;
             }
 
             return null;
         }
-        catch (Exception ex)
+        catch (OperationCanceledException)
         {
-            logger.LogDebug(ex, "iTunes search failed for term={Term} entity={Entity}", term, entity);
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger.LogDebug(exception, "iTunes search failed for term={Term} entity={Entity}", term, entity);
             return null;
         }
     }

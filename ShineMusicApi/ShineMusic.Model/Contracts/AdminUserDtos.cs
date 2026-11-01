@@ -25,6 +25,18 @@ public sealed record AdminResetPasswordRequest(string NewPassword);
 /// <summary>管理员修改用户角色入参：user 普通用户 / tempadmin 临时管理员（3 天）/ admin 管理员。</summary>
 public sealed record AdminSetRoleRequest(string Role);
 
+/// <summary>
+/// 管理员新建用户入参：邮箱/用户名/昵称/密码 + 初始角色（user / tempadmin / admin）。
+/// 等价于命令行 --create-admin 的在线版——可在不停止服务的情况下直接创建任意角色账号，
+/// 尤其用于在线新增管理员，免去停服跑命令的麻烦。
+/// </summary>
+public sealed record AdminCreateUserRequest(
+    string Email,
+    string UserName,
+    string DisplayName,
+    string Password,
+    string Role);
+
 /// <summary>登录审计条目（管理端日志页展示）。</summary>
 public sealed record LoginAuditItem(
     Guid Id,

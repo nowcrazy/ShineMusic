@@ -1,9 +1,10 @@
 /**
- * 歌单解析导入服务：粘贴外部平台歌单链接 → 解析预览（含曲库匹配标记）→ 导入生成新歌单。
+ * 歌单解析服务：粘贴外部平台歌单链接 → 解析预览（含曲库匹配标记）→ 加入下载队列或导入歌单。
  *
  * 对齐后端 /api/v1/me/playlist-imports 端点（登录用户可用，受 UserCollections 开关控制）：
  * - POST /parse   解析歌单，逐曲标记是否已匹配曲库
- * - POST /import  导入生成新歌单，未匹配曲目后台静默下载补齐
+ * - POST /queue   未匹配曲目加入后台下载队列，不创建歌单
+ * - POST /import  导入生成新歌单
  */
 import { API_PREFIX, request } from './http'
 
@@ -47,6 +48,12 @@ export interface PlaylistImportResult {
   pending: number
 }
 
+export interface PlaylistDownloadQueueResult {
+  total: number
+  matched: number
+  queued: number
+}
+
 /** 重新补齐结果：各分项处理数量 */
 export interface PlaylistRematchResult {
   playlistId: string
@@ -54,7 +61,7 @@ export interface PlaylistRematchResult {
   total: number
   /** 命中曲库直接转正的曲目数 */
   promoted: number
-  /** 成功重建下载任务的曲目数 */
+  /** 重新排入后台补齐队列的曲目数 */
   retried: number
   /** 仍未找到可用音源的曲目数 */
   noSource: number
@@ -69,9 +76,31 @@ export async function parsePlaylistImport(url: string): Promise<PlaylistImportPa
   })
 }
 
-/** 导入歌单：立即生成新歌单并触发静默下载（含逐曲匹配与建任务，超时放宽到 120s）。 */
-export async function importPlaylist(url: string, name?: string): Promise<PlaylistImportResult> {
-  return request<PlaylistImportResult>('POST', `${API_PREFIX}/me/playlist-imports/import`, { url, name }, {
+/** 将解析结果中的未入库曲目加入后台下载队列，不创建用户歌单。 */
+export async function queuePlaylistDownloads(url: string): Promise<PlaylistDownloadQueueResult> {
+  return request<PlaylistDownloadQueueResult>('POST', `${API_PREFIX}/me/playlist-imports/queue`, { url }, {
+    timeoutMs: 120000,
+  })
+}
+
+/**
+ * 导入歌单：立即生成新歌单并返回。
+ *
+ * 后端在请求内只做「解析（复用预览结果）+ 曲库匹配 + 落库」，不做音源搜索，
+ * 未匹配曲目进入后台补齐队列由 worker 异步建下载任务，因此 200+ 首也能秒级返回。
+ *
+ * @param downloadMissing true＝未匹配曲目加入后台下载队列（默认）；false＝仅导入歌单，不下载
+ */
+export async function importPlaylist(
+  url: string,
+  name?: string,
+  downloadMissing = true,
+): Promise<PlaylistImportResult> {
+  return request<PlaylistImportResult>('POST', `${API_PREFIX}/me/playlist-imports/import`, {
+    url,
+    name,
+    downloadMissing,
+  }, {
     timeoutMs: 120000,
   })
 }
@@ -79,14 +108,14 @@ export async function importPlaylist(url: string, name?: string): Promise<Playli
 /**
  * 重新补齐歌单中待下载/无音源/下载任务丢失的曲目。
  *
- * 后端逐条重跑匹配（先查曲库、再搜索音源），每条约 250ms 节流，
- * 200+ 首预计 1~3 分钟，超时放宽到 600s。
+ * 后端逐条重跑曲库匹配（命中直接转正），未命中的重置为 pending 排入后台补齐队列，
+ * 接口本身不做音源搜索，因此立即返回；实际补齐由后台 worker 持续进行。
  */
 export async function rematchPlaylist(playlistId: string): Promise<PlaylistRematchResult> {
   return request<PlaylistRematchResult>(
     'POST',
     `${API_PREFIX}/me/playlist-imports/playlists/${playlistId}/rematch`,
     undefined,
-    { timeoutMs: 600000 },
+    { timeoutMs: 120000 },
   )
 }

@@ -348,31 +348,31 @@ onBeforeUnmount(() => {
                 <template #default="{ row }">
                   <div class="group-files">
                     <el-table :data="row.files" size="small">
-                      <el-table-column label="类型" width="80">
+                      <el-table-column label="类型" prop="kind" sortable width="80">
                         <template #default="{ row: file }">
                           <el-tag size="small" :type="file.kind === 'artwork' ? 'warning' : 'success'">
                             {{ file.kind === 'artwork' ? '封面' : '音频' }}
                           </el-tag>
                         </template>
                       </el-table-column>
-                      <el-table-column label="角色" width="90">
+                      <el-table-column label="角色" prop="role" sortable width="90">
                         <template #default="{ row: file }">
                           {{ file.role === 'primary' ? '主资产' : file.role === 'variant' ? '转码' : '封面' }}
                         </template>
                       </el-table-column>
-                      <el-table-column label="规格 / 说明" min-width="170" show-overflow-tooltip>
+                      <el-table-column label="规格 / 说明" prop="detail" sortable min-width="170" show-overflow-tooltip>
                         <template #default="{ row: file }">{{ file.detail || '—' }}</template>
                       </el-table-column>
-                      <el-table-column label="大小" width="100" align="right">
+                      <el-table-column label="大小" prop="sizeBytes" sortable width="100" align="right">
                         <template #default="{ row: file }">{{ formatBytes(file.sizeBytes) || '—' }}</template>
                       </el-table-column>
-                      <el-table-column label="磁盘" width="80">
+                      <el-table-column label="磁盘" prop="onDisk" sortable width="80">
                         <template #default="{ row: file }">
                           <el-tag v-if="file.onDisk" size="small" type="success">正常</el-tag>
                           <el-tag v-else size="small" type="danger">缺失</el-tag>
                         </template>
                       </el-table-column>
-                      <el-table-column label="存储键" min-width="300" show-overflow-tooltip>
+                      <el-table-column label="存储键" prop="storageKey" sortable min-width="300" show-overflow-tooltip>
                         <template #default="{ row: file }"><span class="mono">{{ file.storageKey }}</span></template>
                       </el-table-column>
                       <el-table-column label="操作" width="90" fixed="right">
@@ -409,7 +409,7 @@ onBeforeUnmount(() => {
                   <span v-else class="text-faint">—</span>
                 </template>
               </el-table-column>
-              <el-table-column label="曲目" min-width="220">
+              <el-table-column label="曲目" prop="title" sortable min-width="220">
                 <template #default="{ row }">
                   <div class="track-cell">
                     <strong>{{ row.title }}</strong>
@@ -419,10 +419,10 @@ onBeforeUnmount(() => {
                   </div>
                 </template>
               </el-table-column>
-              <el-table-column label="时长" width="80" align="right">
+              <el-table-column label="时长" prop="durationMs" sortable width="80" align="right">
                 <template #default="{ row }">{{ row.trackId ? durationText(row.durationMs) : '—' }}</template>
               </el-table-column>
-              <el-table-column label="状态" width="90">
+              <el-table-column label="状态" prop="isPublished" sortable width="90">
                 <template #default="{ row }">
                   <template v-if="row.trackId">
                     <el-tag v-if="row.isPublished" size="small" type="success">已发布</el-tag>
@@ -431,12 +431,12 @@ onBeforeUnmount(() => {
                   <el-tag v-else size="small" type="info">杂项</el-tag>
                 </template>
               </el-table-column>
-              <el-table-column label="文件" width="150" align="right">
+              <el-table-column label="文件" prop="totalBytes" sortable width="150" align="right">
                 <template #default="{ row }">
                   {{ row.files.length }} 个 · {{ formatBytes(row.totalBytes) || '0 KB' }}
                 </template>
               </el-table-column>
-              <el-table-column label="健康" width="90">
+              <el-table-column label="健康" sortable :sort-method="(a, b) => missingCountOf(a) - missingCountOf(b)" width="90">
                 <template #default="{ row }">
                   <el-tag v-if="missingCountOf(row) > 0" size="small" type="danger">
                     缺失 {{ missingCountOf(row) }}
@@ -473,17 +473,17 @@ onBeforeUnmount(() => {
             </div>
 
             <el-table :data="orphanPageRows" size="small" empty-text="没有孤儿文件">
-              <el-table-column label="存储键" prop="storageKey" min-width="300" show-overflow-tooltip>
+              <el-table-column label="存储键" prop="storageKey" sortable min-width="300" show-overflow-tooltip>
                 <template #default="{ row }"><span class="mono">{{ row.storageKey }}</span></template>
               </el-table-column>
-              <el-table-column label="类型" width="110">
+              <el-table-column label="类型" prop="kind" sortable width="110">
                 <template #default="{ row }">
                   <el-tag v-if="row.kind === 'artwork'" size="small" type="warning">图片 · {{ extOf(row.storageKey) }}</el-tag>
                   <el-tag v-else-if="row.kind === 'audio'" size="small" type="success">音频 · {{ extOf(row.storageKey) }}</el-tag>
                   <el-tag v-else size="small" type="info">{{ extOf(row.storageKey) || '—' }}</el-tag>
                 </template>
               </el-table-column>
-              <el-table-column label="大小" width="110" align="right">
+              <el-table-column label="大小" prop="sizeBytes" sortable width="110" align="right">
                 <template #default="{ row }">{{ formatBytes(row.sizeBytes) || '—' }}</template>
               </el-table-column>
               <el-table-column label="操作" width="90">
@@ -520,17 +520,17 @@ onBeforeUnmount(() => {
             </template>
 
             <el-table :data="missingPageRows" size="small" empty-text="没有缺失文件">
-              <el-table-column label="存储键" min-width="300" show-overflow-tooltip>
+              <el-table-column label="存储键" prop="storageKey" sortable min-width="300" show-overflow-tooltip>
                 <template #default="{ row }"><span class="mono">{{ row.storageKey }}</span></template>
               </el-table-column>
-              <el-table-column label="类型" width="110">
+              <el-table-column label="类型" prop="kind" sortable width="110">
                 <template #default="{ row }">
                   <el-tag v-if="row.kind === 'artwork'" size="small" type="warning">图片 · {{ extOf(row.storageKey) }}</el-tag>
                   <el-tag v-else-if="row.kind === 'audio'" size="small" type="success">音频 · {{ extOf(row.storageKey) }}</el-tag>
                   <el-tag v-else size="small" type="info">{{ extOf(row.storageKey) || '—' }}</el-tag>
                 </template>
               </el-table-column>
-              <el-table-column label="归属引用" min-width="240" show-overflow-tooltip>
+              <el-table-column label="归属引用" prop="referencedBy" sortable min-width="240" show-overflow-tooltip>
                 <template #default="{ row }">{{ row.referencedBy.join('；') || '—' }}</template>
               </el-table-column>
             </el-table>

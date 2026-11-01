@@ -38,19 +38,47 @@ const route = useRoute()
 const router = useRouter()
 const store = useAdminStore()
 
-const menuItems = [
-  { path: '/dashboard', label: '仪表盘', icon: Odometer },
-  { path: '/catalog', label: '曲库管理', icon: Headset },
-  { path: '/import', label: '导入审核', icon: UploadFilled },
-  { path: '/requests', label: '点歌需求', icon: ChatDotRound },
-  { path: '/collections', label: '运营歌单', icon: Collection },
-  { path: '/invitations', label: '邀请管理', icon: Postcard },
-  { path: '/users', label: '用户管理', icon: UserFilled },
-  { path: '/logs', label: '日志管理', icon: Document },
-  { path: '/source-download', label: '音源抓歌', icon: Download },
-  { path: '/playlist-import', label: '歌单解析', icon: Link },
-  { path: '/storage', label: '存储治理', icon: Coin },
-  { path: '/mq', label: '消息队列', icon: Bell },
+const menuGroups = [
+  {
+    index: 'content',
+    label: '内容管理',
+    icon: Headset,
+    items: [
+      { path: '/catalog', label: '曲库管理', icon: Headset },
+      { path: '/import', label: '导入审核', icon: UploadFilled },
+      { path: '/collections', label: '精选歌单', icon: Collection },
+      { path: '/recommendation-settings', label: '推荐策略', icon: Odometer },
+    ],
+  },
+  {
+    index: 'acquisition',
+    label: '内容获取',
+    icon: Download,
+    items: [
+      { path: '/source-download', label: '音源抓歌', icon: Download },
+      { path: '/playlist-import', label: '歌单解析', icon: Link },
+    ],
+  },
+  {
+    index: 'users',
+    label: '用户运营',
+    icon: UserFilled,
+    items: [
+      { path: '/requests', label: '点歌需求', icon: ChatDotRound },
+      { path: '/invitations', label: '邀请管理', icon: Postcard },
+      { path: '/users', label: '用户管理', icon: UserFilled },
+    ],
+  },
+  {
+    index: 'system',
+    label: '系统管理',
+    icon: Coin,
+    items: [
+      { path: '/storage', label: '存储治理', icon: Coin },
+      { path: '/logs', label: '日志管理', icon: Document },
+      { path: '/mq', label: '消息队列', icon: Bell },
+    ],
+  },
 ]
 
 const userName = computed(() => currentUser.value?.displayName || currentUser.value?.email || '管理员')
@@ -229,10 +257,20 @@ async function handleLogout() {
         text-color="#cbd5e1"
         active-text-color="#ffffff"
       >
-        <el-menu-item v-for="item in menuItems" :key="item.path" :index="item.path">
-          <el-icon><component :is="item.icon" /></el-icon>
-          <template #title>{{ item.label }}</template>
+        <el-menu-item index="/dashboard">
+          <el-icon><Odometer /></el-icon>
+          <template #title>仪表盘</template>
         </el-menu-item>
+        <el-sub-menu v-for="group in menuGroups" :key="group.index" :index="group.index">
+          <template #title>
+            <el-icon><component :is="group.icon" /></el-icon>
+            <span>{{ group.label }}</span>
+          </template>
+          <el-menu-item v-for="item in group.items" :key="item.path" :index="item.path">
+            <el-icon><component :is="item.icon" /></el-icon>
+            <template #title>{{ item.label }}</template>
+          </el-menu-item>
+        </el-sub-menu>
       </el-menu>
 
       <div v-if="!store.sidebarCollapsed" class="aside-foot">ShineMusic Admin · v0.1</div>

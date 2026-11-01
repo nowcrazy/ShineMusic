@@ -9,13 +9,15 @@
  */
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Key, Lock, Refresh, RefreshLeft, Search, Unlock, UserFilled } from '@element-plus/icons-vue'
+import { Key, Lock, Plus, Refresh, RefreshLeft, Search, Unlock, UserFilled } from '@element-plus/icons-vue'
 import {
+  createUser,
   getAdminUsers,
   lockUser,
   resetUserPassword,
   setUserRole,
   unlockUser,
+  type AdminCreateUserRequest,
   type AdminRole,
   type AdminUserItem,
 } from '@/services/admin-users'
@@ -48,6 +50,62 @@ const roleLabels: Record<AdminRole, string> = {
   user: '用户',
   tempadmin: '临时管理员',
   admin: '管理员',
+}
+
+const createDialog = reactive({
+  visible: false,
+  email: '',
+  userName: '',
+  displayName: '',
+  password: '',
+  role: 'user' as AdminRole,
+  submitting: false,
+})
+
+function openCreate() {
+  createDialog.email = ''
+  createDialog.userName = ''
+  createDialog.displayName = ''
+  createDialog.password = ''
+  createDialog.role = 'user'
+  createDialog.submitting = false
+  createDialog.visible = true
+}
+
+async function submitCreate() {
+  if (createDialog.email.trim().length === 0 || createDialog.userName.trim().length === 0 ||
+      createDialog.displayName.trim().length === 0) {
+    ElMessage.warning('邮箱、用户名、昵称均为必填')
+    return
+  }
+  if (createDialog.password.length < 8) {
+    ElMessage.warning('密码至少 8 位')
+    return
+  }
+  createDialog.submitting = true
+  const payload: AdminCreateUserRequest = {
+    email: createDialog.email.trim(),
+    userName: createDialog.userName.trim(),
+    displayName: createDialog.displayName.trim(),
+    password: createDialog.password,
+    role: createDialog.role,
+  }
+  try {
+    await createUser(payload)
+    ElMessage.success(
+      createDialog.role === 'admin'
+        ? `已创建管理员账号 ${payload.email}`
+        : createDialog.role === 'tempadmin'
+          ? `已创建临时管理员 ${payload.email}（3 日后自动降级为普通用户）`
+          : `已创建用户 ${payload.email}`,
+    )
+    createDialog.visible = false
+    void load()
+  } catch (error) {
+    ElMessage.error(describeError(error, '创建用户失败'))
+  } finally {
+    createDialog.submitting = false
+  }
 }
 
 async function load() {
@@ -170,9 +228,12 @@ onMounted(load)
     <div class="page-heading">
       <div>
         <h2>用户管理</h2>
-        <p>检索用户、修改角色（临时管理员 3 日后自动降级）、重置密码、禁用/启用账号</p>
+        <p>检索用户、添加用户（可选管理员角色）、修改角色（临时管理员 3 日后自动降级）、重置密码、禁用/启用账号</p>
       </div>
-      <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
+      <div class="heading-actions">
+        <el-button type="primary" :icon="Plus" @click="openCreate">添加用户</el-button>
+        <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
+      </div>
     </div>
 
     <div class="panel">
@@ -194,26 +255,26 @@ onMounted(load)
       </div>
 
       <el-table :data="rows" v-loading="loading" size="default" empty-text="没有用户">
-        <el-table-column label="用户 ID" width="100" show-overflow-tooltip>
+        <el-table-column label="用户 ID" prop="id" sortable width="100" show-overflow-tooltip>
           <template #default="{ row }">{{ row.id.slice(0, 8) }}</template>
         </el-table-column>
-        <el-table-column label="昵称" min-width="110" show-overflow-tooltip>
+        <el-table-column label="昵称" prop="displayName" sortable min-width="110" show-overflow-tooltip>
           <template #default="{ row }"><strong>{{ row.displayName }}</strong></template>
         </el-table-column>
-        <el-table-column label="用户名" min-width="150" show-overflow-tooltip>
+        <el-table-column label="用户名" prop="userName" sortable min-width="150" show-overflow-tooltip>
           <template #default="{ row }">{{ row.userName || '—' }}</template>
         </el-table-column>
-        <el-table-column label="邮箱" min-width="180" show-overflow-tooltip>
+        <el-table-column label="邮箱" prop="email" sortable min-width="180" show-overflow-tooltip>
           <template #default="{ row }">{{ row.email || '—' }}</template>
         </el-table-column>
-        <el-table-column label="角色" width="120">
+        <el-table-column label="角色" prop="roles" sortable :sort-method="(a, b) => roleLabels[primaryRole(a)].localeCompare(roleLabels[primaryRole(b)])" width="120">
           <template #default="{ row }">
             <el-tag size="small" :type="roleTagType(primaryRole(row))">
               {{ roleLabels[primaryRole(row)] }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="临时管理员到期" width="160">
+        <el-table-column label="临时管理员到期" prop="tempAdminUntilUtc" sortable width="160">
           <template #default="{ row }">
             <span v-if="primaryRole(row) === 'tempadmin' && row.tempAdminUntilUtc">
               {{ formatDateTime(row.tempAdminUntilUtc) }}
@@ -221,14 +282,14 @@ onMounted(load)
             <span v-else class="text-muted">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="90">
+        <el-table-column label="状态" prop="isLockedOut" sortable width="90">
           <template #default="{ row }">
             <el-tag size="small" :type="row.isLockedOut ? 'danger' : 'success'">
               {{ row.isLockedOut ? '已禁用' : '正常' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="注册时间" width="160">
+        <el-table-column label="注册时间" prop="createdAtUtc" sortable width="160">
           <template #default="{ row }">{{ formatDateTime(row.createdAtUtc) }}</template>
         </el-table-column>
         <el-table-column label="操作" width="300" fixed="right">
@@ -341,10 +402,70 @@ onMounted(load)
         </el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="createDialog.visible" title="添加用户" width="480px">
+      <el-form label-position="top">
+        <el-form-item label="邮箱（登录凭证，必填）">
+          <el-input v-model="createDialog.email" placeholder="name@example.com" autocomplete="off" />
+        </el-form-item>
+        <el-form-item label="用户名（登录凭证，必填）">
+          <el-input v-model="createDialog.userName" placeholder="用于登录的用户名" autocomplete="off" />
+        </el-form-item>
+        <el-form-item label="昵称（展示名，必填）">
+          <el-input v-model="createDialog.displayName" placeholder="对外展示的名称" />
+        </el-form-item>
+        <el-form-item label="初始密码（至少 8 位，必填）">
+          <el-input
+            v-model="createDialog.password"
+            type="password"
+            show-password
+            placeholder="设置初始登录密码"
+            autocomplete="new-password"
+            @keyup.enter="submitCreate"
+          />
+        </el-form-item>
+        <el-form-item label="角色">
+          <el-radio-group v-model="createDialog.role">
+            <el-radio value="user">用户</el-radio>
+            <el-radio value="tempadmin">临时管理员</el-radio>
+            <el-radio value="admin">管理员</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-alert
+          v-if="createDialog.role === 'admin'"
+          type="error"
+          :closable="false"
+          title="管理员拥有全部后台权限，请确认授予对象可信。"
+        />
+        <el-alert
+          v-else-if="createDialog.role === 'tempadmin'"
+          type="warning"
+          :closable="false"
+          title="临时管理员自创建起 3 日内拥有与管理员相同的权限，3 日后自动降级为普通用户。"
+        />
+        <el-alert
+          v-else
+          type="info"
+          :closable="false"
+          title="普通用户仅可访问前台功能；如需后台权限可稍后在列表中修改角色。"
+        />
+      </el-form>
+      <template #footer>
+        <el-button :icon="RefreshLeft" @click="createDialog.visible = false">取消</el-button>
+        <el-button type="primary" :loading="createDialog.submitting" @click="submitCreate">
+          创建用户
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <style scoped>
+.heading-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .filters {
   display: flex;
   gap: 8px;

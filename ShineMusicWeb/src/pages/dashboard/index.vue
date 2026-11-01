@@ -199,22 +199,22 @@ function providerLabel(provider: string) {
         <el-button size="small" :loading="failedLoading" @click="loadFailedTasks">刷新</el-button>
       </div>
       <el-table v-loading="failedLoading" :data="failedTasks" max-height="460" empty-text="暂无失败任务">
-        <el-table-column label="曲名" min-width="200" show-overflow-tooltip>
+        <el-table-column label="曲名" prop="title" sortable min-width="200" show-overflow-tooltip>
           <template #default="{ row }">{{ row.title || '—' }}</template>
         </el-table-column>
-        <el-table-column label="艺人" min-width="160" show-overflow-tooltip>
+        <el-table-column label="艺人" prop="artists" sortable min-width="160" show-overflow-tooltip>
           <template #default="{ row }">{{ row.artists.join(' / ') || '—' }}</template>
         </el-table-column>
-        <el-table-column label="专辑" min-width="150" show-overflow-tooltip>
+        <el-table-column label="专辑" prop="albumTitle" sortable min-width="150" show-overflow-tooltip>
           <template #default="{ row }">{{ row.albumTitle || '—' }}</template>
         </el-table-column>
-        <el-table-column label="音源" width="100">
+        <el-table-column label="音源" prop="provider" sortable width="100">
           <template #default="{ row }">{{ providerLabel(row.provider) }}</template>
         </el-table-column>
-        <el-table-column label="失败原因" min-width="240" show-overflow-tooltip>
+        <el-table-column label="失败原因" prop="errorMessage" sortable min-width="240" show-overflow-tooltip>
           <template #default="{ row }">{{ row.errorMessage || row.errorCode || '未知原因' }}</template>
         </el-table-column>
-        <el-table-column label="更新时间" width="170">
+        <el-table-column label="更新时间" prop="updatedAtUtc" sortable width="170">
           <template #default="{ row }">{{ formatDateTime(row.updatedAtUtc) }}</template>
         </el-table-column>
       </el-table>

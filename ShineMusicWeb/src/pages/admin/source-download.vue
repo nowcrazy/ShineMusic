@@ -2,7 +2,8 @@
 /**
  * 音源抓歌：从 Audius / Jamendo 等外部平台搜索曲目，批量创建下载任务并跟踪结果。
  */
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { Download, Refresh, Search } from '@element-plus/icons-vue'
 import {
@@ -10,9 +11,11 @@ import {
   getDownloadTasks,
   retryDownloadTask,
   searchSources,
+  switchSource,
   SourceProviderLabel,
   type ExternalDownloadTask,
   type SourceProviderFilter,
+  type SourceSearchMode,
   type SourceSearchItem,
 } from '@/services/admin-source-download'
 import { describeError } from '@/services/errors'
@@ -21,14 +24,29 @@ import type { ApiSourceProviderError } from '@/types/api.generated'
 
 const providerOptions: { value: SourceProviderFilter; label: string }[] = [
   { value: 'all', label: '全部平台' },
-  { value: 'netease', label: '网易云' },
-  { value: 'kuwo', label: '酷我' },
-  { value: 'kugou', label: '酷狗' },
+  { value: 'netease', label: 'sourceDownload.providerNetease' },
+  { value: 'kuwo', label: 'sourceDownload.providerKuwo' },
+  { value: 'kugou', label: 'sourceDownload.providerKugou' },
+  { value: 'migu', label: 'sourceDownload.providerMigu' },
   { value: 'audius', label: 'Audius' },
   { value: 'jamendo', label: 'Jamendo' },
-  { value: 'ytmusic', label: 'YT Music' },
-  { value: 'soundcloud', label: 'SoundCloud' },
 ]
+
+const { t } = useI18n()
+const searchModeOptions: { value: SourceSearchMode; label: string }[] = [
+  { value: 'title', label: 'sourceDownload.searchModeTitle' },
+  { value: 'artist', label: 'sourceDownload.searchModeArtist' },
+  { value: 'artist-track', label: 'sourceDownload.searchModeArtistTrack' },
+  { value: 'artist-album', label: 'sourceDownload.searchModeArtistAlbum' },
+  { value: 'album', label: 'sourceDownload.searchModeAlbum' },
+]
+const searchPlaceholderKeys: Record<SourceSearchMode, string> = {
+  title: 'sourceDownload.titleSearchPlaceholder',
+  artist: 'sourceDownload.artistSearchPlaceholder',
+  'artist-track': 'sourceDownload.artistTrackSearchPlaceholder',
+  'artist-album': 'sourceDownload.artistAlbumSearchPlaceholder',
+  album: 'sourceDownload.albumSearchPlaceholder',
+}
 
 const taskStatusOptions = [
   { value: '', label: '全部状态' },
@@ -62,12 +80,49 @@ const qualityText: Record<string, string> = {
 }
 
 // ===== 搜索 =====
-const searchForm = reactive({ query: '', provider: 'all' as SourceProviderFilter, limit: 20 })
+const searchForm = reactive({
+  query: '',
+  provider: 'all' as SourceProviderFilter,
+  mode: 'title' as SourceSearchMode,
+  limit: 20,
+})
 const searching = ref(false)
 const results = ref<SourceSearchItem[]>([])
 const providerErrors = ref<ApiSourceProviderError[]>([])
 const selected = ref<SourceSearchItem[]>([])
 const creating = ref(false)
+const resultSort = ref('quality:asc')
+const resultSortOptions = [
+  { value: 'quality:asc', label: 'sourceDownload.sortQuality' },
+  { value: 'releaseYear:desc', label: 'sourceDownload.sortYearNewest' },
+  { value: 'releaseYear:asc', label: 'sourceDownload.sortYearOldest' },
+  { value: 'title:asc', label: 'sourceDownload.sortTitleAsc' },
+  { value: 'title:desc', label: 'sourceDownload.sortTitleDesc' },
+  { value: 'durationMs:desc', label: 'sourceDownload.sortDuration' },
+]
+const sortedResults = computed(() => {
+  const [field, direction] = resultSort.value.split(':')
+  const sign = direction === 'desc' ? -1 : 1
+  return [...results.value].sort((a, b) => {
+    if (field === 'quality') {
+      if (searchForm.mode === 'album' || searchForm.mode === 'artist-album') {
+        const groupOrder = `${a.albumTitle ?? ''}|${a.artists.join(',')}|${a.provider}`
+          .localeCompare(`${b.albumTitle ?? ''}|${b.artists.join(',')}|${b.provider}`)
+        if (groupOrder !== 0) return groupOrder
+      }
+      return sign * ((qualityRank[a.quality] ?? 3) - (qualityRank[b.quality] ?? 3))
+    }
+    if (field === 'releaseYear') {
+      if (a.releaseYear == null) return b.releaseYear == null ? 0 : 1
+      if (b.releaseYear == null) return -1
+      return sign * (a.releaseYear - b.releaseYear)
+    }
+    if (field === 'durationMs') return sign * ((a.durationMs ?? 0) - (b.durationMs ?? 0))
+    const left = field === 'title' ? a.title : a.artists.join(' ')
+    const right = field === 'title' ? b.title : b.artists.join(' ')
+    return sign * left.localeCompare(right)
+  })
+})
 
 // ===== 任务 =====
 const taskLoading = ref(false)
@@ -76,18 +131,37 @@ const taskTotal = ref(0)
 const taskPage = ref(1)
 const taskPageSize = ref(100)
 const taskStatus = ref('')
+const taskSort = ref('createdAt:desc')
+const taskSortOptions = [
+  { value: 'createdAt:desc', label: 'sourceDownload.sortNewest' },
+  { value: 'createdAt:asc', label: 'sourceDownload.sortOldest' },
+  { value: 'releaseYear:desc', label: 'sourceDownload.sortYearNewest' },
+  { value: 'releaseYear:asc', label: 'sourceDownload.sortYearOldest' },
+  { value: 'title:asc', label: 'sourceDownload.sortTitleAsc' },
+  { value: 'title:desc', label: 'sourceDownload.sortTitleDesc' },
+  { value: 'status:asc', label: 'sourceDownload.sortStatus' },
+]
 /** 任务关键词：服务端匹配曲名 / 艺人 / 专辑。 */
 const taskKeyword = ref('')
 
-const selectedProvider = () => selected.value[0]?.provider ?? null
-
-function selectable(row: SourceSearchItem) {
-  const provider = selectedProvider()
-  return !provider || provider === row.provider
+// 音质排序权重（与后端 SourceQualities.Rank 对齐，值越小越好）。
+const qualityRank: Record<string, number> = {
+  lossless: 0,
+  high: 1,
+  standard: 2,
 }
 
 function onSelectionChange(rows: SourceSearchItem[]) {
   selected.value = rows
+}
+
+function resultKey(item: SourceSearchItem): string {
+  return `${item.provider}:${item.providerTrackId}`
+}
+
+function providerLabel(provider: string): string {
+  const label = SourceProviderLabel[provider] || provider
+  return label.startsWith('sourceDownload.') ? t(label) : label
 }
 
 async function runSearch() {
@@ -97,11 +171,19 @@ async function runSearch() {
   }
   searching.value = true
   try {
-    const result = await searchSources(searchForm.query.trim(), searchForm.provider, searchForm.limit)
+    const result = await searchSources(
+      searchForm.query.trim(),
+      searchForm.provider,
+      searchForm.limit,
+      searchForm.mode,
+    )
+    // 按音质从好到坏排序：lossless → high → standard → unknown。
     results.value = [...result.results]
     providerErrors.value = [...result.providerErrors]
     selected.value = []
-    if (results.value.length === 0) ElMessage.info('没有找到匹配的音源')
+    if (results.value.length === 0) ElMessage.info(t('sourceDownload.noExactResults'))
+    else if (result.filteredCount && result.filteredCount > 0)
+      ElMessage.info(`已过滤 ${result.filteredCount} 首不可下载的曲目（VIP/无版权/占位资源）`)
   } catch (error) {
     ElMessage.error(describeError(error, '音源搜索失败'))
   } finally {
@@ -133,11 +215,14 @@ async function downloadSelected() {
 async function loadTasks() {
   taskLoading.value = true
   try {
+    const [sortBy, sortDirection] = taskSort.value.split(':')
     const result = await getDownloadTasks(
       taskStatus.value || undefined,
       taskPage.value,
       taskPageSize.value,
       taskKeyword.value.trim() || undefined,
+      sortBy,
+      sortDirection,
     )
     tasks.value = [...result.items]
     taskTotal.value = result.total
@@ -153,6 +238,24 @@ function changeTaskFilter() {
   void loadTasks()
 }
 
+function handleTaskSortChange({
+  prop,
+  order,
+}: {
+  prop: string | null
+  order: 'ascending' | 'descending' | null
+}) {
+  const fieldMap: Record<string, string> = {
+    title: 'title',
+    releaseYear: 'releaseYear',
+    status: 'status',
+  }
+  if (!order || !prop || !fieldMap[prop]) return
+  taskSort.value = `${fieldMap[prop]}:${order === 'ascending' ? 'asc' : 'desc'}`
+  taskPage.value = 1
+  void loadTasks()
+}
+
 async function retry(task: ExternalDownloadTask) {
   try {
     await retryDownloadTask(task.id)
@@ -160,6 +263,20 @@ async function retry(task: ExternalDownloadTask) {
     await loadTasks()
   } catch (error) {
     ElMessage.error(describeError(error, '重试失败'))
+  }
+}
+
+async function switchSourceForTask(task: ExternalDownloadTask) {
+  try {
+    const result = await switchSource(task.id)
+    if (result.autoMatched) {
+      ElMessage.success(`已换源到 ${providerLabel(result.newProvider)}，新任务已创建`)
+    } else {
+      ElMessage.warning(result.message || `换源到 ${providerLabel(result.newProvider)}，请确认后下载`)
+    }
+    await loadTasks()
+  } catch (error) {
+    ElMessage.error(describeError(error, '换源失败'))
   }
 }
 
@@ -179,9 +296,17 @@ onMounted(loadTasks)
     <div class="panel">
       <div class="panel-title">搜索音源</div>
       <div class="filter-bar">
+        <el-select v-model="searchForm.mode" style="width: 110px">
+          <el-option
+            v-for="option in searchModeOptions"
+            :key="option.value"
+            :label="t(option.label)"
+            :value="option.value"
+          />
+        </el-select>
         <el-input
           v-model="searchForm.query"
-          placeholder="曲名 / 艺人"
+          :placeholder="t(searchPlaceholderKeys[searchForm.mode])"
           style="width: 280px"
           clearable
           @keyup.enter="runSearch"
@@ -189,10 +314,23 @@ onMounted(loadTasks)
           <template #prefix><el-icon><Search /></el-icon></template>
         </el-input>
         <el-select v-model="searchForm.provider" style="width: 150px">
-          <el-option v-for="option in providerOptions" :key="option.value" :label="option.label" :value="option.value" />
+          <el-option
+            v-for="option in providerOptions"
+            :key="option.value"
+            :label="option.label.startsWith('sourceDownload.') ? t(option.label) : option.label"
+            :value="option.value"
+          />
         </el-select>
         <el-select v-model="searchForm.limit" style="width: 110px">
           <el-option v-for="count in [10, 20, 30, 50]" :key="count" :label="`${count} 条`" :value="count" />
+        </el-select>
+        <el-select v-model="resultSort" style="width: 150px" :placeholder="t('sourceDownload.sortLabel')">
+          <el-option
+            v-for="option in resultSortOptions"
+            :key="option.value"
+            :label="t(option.label)"
+            :value="option.value"
+          />
         </el-select>
         <el-button type="primary" :icon="Search" :loading="searching" @click="runSearch">搜索</el-button>
         <el-button
@@ -215,20 +353,20 @@ onMounted(loadTasks)
         title="部分平台搜索失败"
       >
         <div v-for="error in providerErrors" :key="error.provider">
-          {{ SourceProviderLabel[error.provider] || error.provider }}：{{ error.message }}
+          {{ providerLabel(error.provider) }}：{{ error.message }}
         </div>
       </el-alert>
 
       <el-table
         v-loading="searching"
-        :data="results"
-        row-key="providerTrackId"
+        :data="sortedResults"
+        :row-key="resultKey"
         style="margin-top: 14px"
         empty-text="输入关键词搜索外部音源"
         @selection-change="onSelectionChange"
       >
-        <el-table-column type="selection" width="46" :selectable="selectable" />
-        <el-table-column label="曲名 / 艺人" min-width="240">
+        <el-table-column type="selection" width="46" />
+        <el-table-column label="曲名 / 艺人" prop="title" sortable min-width="240">
           <template #default="{ row }">
             <div class="title-cell">
               <strong>{{ row.title }}</strong>
@@ -236,25 +374,28 @@ onMounted(loadTasks)
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="平台" width="110">
+        <el-table-column label="平台" prop="provider" sortable width="110">
           <template #default="{ row }">
-            <el-tag size="small" type="info">{{ SourceProviderLabel[row.provider] || row.provider }}</el-tag>
+            <el-tag size="small" type="info">{{ providerLabel(row.provider) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="专辑" min-width="150">
+        <el-table-column label="专辑" prop="albumTitle" sortable min-width="150">
           <template #default="{ row }">{{ row.albumTitle || '—' }}</template>
         </el-table-column>
-        <el-table-column label="时长" width="80">
+        <el-table-column :label="t('sourceDownload.releaseYearLabel')" prop="releaseYear" sortable width="100">
+          <template #default="{ row }">{{ row.releaseYear ?? '—' }}</template>
+        </el-table-column>
+        <el-table-column label="时长" prop="durationMs" sortable width="80">
           <template #default="{ row }">{{ formatTime((row.durationMs ?? 0) / 1000) }}</template>
         </el-table-column>
-        <el-table-column label="音质" width="90">
+        <el-table-column label="音质" prop="quality" sortable width="90">
           <template #default="{ row }">
             <el-tag size="small" :type="row.isLosslessAvailable ? 'success' : 'info'">
               {{ qualityText[row.quality] || row.quality }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="来源页" width="90">
+        <el-table-column label="来源页" prop="sourcePageUrl" sortable width="90">
           <template #default="{ row }">
             <a v-if="row.sourcePageUrl" :href="row.sourcePageUrl" target="_blank" rel="noreferrer">打开</a>
             <span v-else class="text-faint">—</span>
@@ -280,10 +421,24 @@ onMounted(loadTasks)
         <el-select v-model="taskStatus" style="width: 150px" size="small" placeholder="全部状态" @change="changeTaskFilter">
           <el-option v-for="option in taskStatusOptions" :key="option.value" :label="option.label" :value="option.value" />
         </el-select>
+        <el-select v-model="taskSort" style="width: 170px" size="small" @change="changeTaskFilter">
+          <el-option
+            v-for="option in taskSortOptions"
+            :key="option.value"
+            :label="t(option.label)"
+            :value="option.value"
+          />
+        </el-select>
       </div>
 
-      <el-table v-loading="taskLoading" :data="tasks" row-key="id" empty-text="暂无下载任务">
-        <el-table-column label="曲名 / 艺人" min-width="230">
+      <el-table
+        v-loading="taskLoading"
+        :data="tasks"
+        row-key="id"
+        empty-text="暂无下载任务"
+        @sort-change="handleTaskSortChange"
+      >
+        <el-table-column label="曲名 / 艺人" prop="title" sortable="custom" min-width="230">
           <template #default="{ row }">
             <div class="title-cell">
               <strong>{{ row.title || row.providerTrackId }}</strong>
@@ -291,39 +446,45 @@ onMounted(loadTasks)
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="平台" width="110">
+        <el-table-column label="平台" prop="provider" sortable width="110">
           <template #default="{ row }">
-            <el-tag size="small" type="info">{{ SourceProviderLabel[row.provider] || row.provider }}</el-tag>
+            <el-tag size="small" type="info">{{ providerLabel(row.provider) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="110">
+        <el-table-column :label="t('sourceDownload.releaseYearLabel')" prop="releaseYear" sortable="custom" width="100">
+          <template #default="{ row }">{{ row.releaseYear ?? '—' }}</template>
+        </el-table-column>
+        <el-table-column label="状态" prop="status" sortable="custom" width="110">
           <template #default="{ row }">
             <el-tag size="small" :type="(taskStatusTone[row.status] as any) || 'info'">
               {{ taskStatusText[row.status] || row.status }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="音质" width="90">
+        <el-table-column label="音质" prop="quality" sortable width="90">
           <template #default="{ row }">{{ row.quality ? qualityText[row.quality] || row.quality : '—' }}</template>
         </el-table-column>
-        <el-table-column label="自动发布" width="90">
+        <el-table-column label="自动发布" prop="autoPublished" sortable width="90">
           <template #default="{ row }">
             <el-tag v-if="row.autoPublished" size="small" type="success">是</el-tag>
             <span v-else class="text-faint">否</span>
           </template>
         </el-table-column>
-        <el-table-column label="失败原因" min-width="180">
+        <el-table-column label="失败原因" prop="errorMessage" sortable min-width="180">
           <template #default="{ row }">
             <span v-if="row.errorMessage" class="text-muted">{{ row.errorCode || '' }} {{ row.errorMessage }}</span>
             <span v-else class="text-faint">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="重试" width="70">
+        <el-table-column label="重试" prop="autoRetryCount" sortable width="70">
           <template #default="{ row }">{{ row.autoRetryCount }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="90" fixed="right">
+        <el-table-column label="操作" width="130" fixed="right">
           <template #default="{ row }">
-            <el-button v-if="row.status === 'failed'" link type="primary" @click="retry(row)">重试</el-button>
+            <template v-if="row.status === 'failed'">
+              <el-button link type="primary" @click="retry(row)">重试</el-button>
+              <el-button link type="warning" @click="switchSourceForTask(row)">换源</el-button>
+            </template>
             <span v-else class="text-faint">—</span>
           </template>
         </el-table-column>

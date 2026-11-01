@@ -37,7 +37,12 @@ public sealed class QQMusicPlaylistParser(IHttpClientFactory httpClientFactory) 
             client, $"{ApiBase}?id={id}&format=json&newsong=1&platform=h5", cancellationToken);
 
         using var doc = JsonDocument.Parse(raw);
-        if (!doc.RootElement.TryGetProperty("cdlist", out var cdlist)
+        var root = doc.RootElement;
+        var payload = root.TryGetProperty("data", out var data)
+            && data.ValueKind == JsonValueKind.Object
+                ? data
+                : root;
+        if (!payload.TryGetProperty("cdlist", out var cdlist)
             || cdlist.ValueKind != JsonValueKind.Array
             || cdlist.GetArrayLength() == 0)
             throw new PlaylistParseException("歌单解析失败，请确认链接为公开歌单后重试。");
@@ -52,7 +57,9 @@ public sealed class QQMusicPlaylistParser(IHttpClientFactory httpClientFactory) 
         {
             foreach (var song in songlist.EnumerateArray())
             {
-                var title = GetString(song, "songname");
+                var title = GetString(song, "songname")
+                    ?? GetString(song, "title")
+                    ?? GetString(song, "name");
                 if (string.IsNullOrWhiteSpace(title))
                     continue;
                 var artists = new List<string>();
@@ -66,11 +73,16 @@ public sealed class QQMusicPlaylistParser(IHttpClientFactory httpClientFactory) 
                     }
                 }
                 int? durationMs = GetInt(song, "interval") is { } seconds ? seconds * 1000 : null;
-                var mid = GetString(song, "songmid");
+                var mid = GetString(song, "songmid") ?? GetString(song, "mid");
+                var album = GetString(song, "albumname");
+                if (album is null
+                    && song.TryGetProperty("album", out var albumElement)
+                    && albumElement.ValueKind == JsonValueKind.Object)
+                    album = GetString(albumElement, "name");
                 items.Add(new ParsedPlaylistTrack(
                     System.Net.WebUtility.HtmlDecode(title).Trim(),
                     artists,
-                    GetString(song, "albumname"),
+                    album,
                     durationMs,
                     mid,
                     mid is null ? null : $"https://y.qq.com/n/ryqq/songDetail/{mid}"));
@@ -78,6 +90,9 @@ public sealed class QQMusicPlaylistParser(IHttpClientFactory httpClientFactory) 
         }
         if (items.Count == 0)
             throw new PlaylistParseException("歌单解析失败，请确认链接为公开歌单后重试。");
+        var expectedTrackCount = GetInt(first, "cur_song_num") ?? GetInt(first, "songnum");
+        if (expectedTrackCount.HasValue && items.Count != expectedTrackCount.Value)
+            throw new PlaylistParseException("QQ 音乐歌单曲目未能完整解析，请稍后重试。");
         return new ParsedPlaylist(name.Trim(), cover, description, items);
     }
 

@@ -37,7 +37,7 @@ async function load() {
   loading.value = true
   loadError.value = false
   try {
-    const result = await getDailyRecommendations(30)
+    const result = await getDailyRecommendations()
     tracks.value = result.tracks
     personalized.value = result.personalized
     dateLabel.value = formatDate(result.date)

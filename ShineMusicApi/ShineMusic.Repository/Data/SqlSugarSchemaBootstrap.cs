@@ -75,6 +75,7 @@ public static class SqlSugarSchemaBootstrap
         // 而运行时用带引号的 PascalCase 标识符，两者不兼容。统一走手写 DDL 建表，
         // 并清掉历史残留的全小写表。无条件调用（内部幂等）。
         EnsurePendingTracksTable(db, logger);
+        EnsurePlaylistDownloadQueueTable(db, logger);
 
         // 存量库：只对“尚不存在的表”执行建表（新实体的安全落地通道），绝不触碰已有表结构。
         foreach (var type in entityTypes)
@@ -91,6 +92,7 @@ public static class SqlSugarSchemaBootstrap
         EnsureColumn(db, logger, "AdminAuditEntries", nameof(ShineMusic.Model.Entities.AdminAuditEntry.ClientType));
         EnsureColumn(db, logger, "AdminAuditEntries", nameof(ShineMusic.Model.Entities.AdminAuditEntry.DeviceInfo));
         EnsureColumn(db, logger, "AspNetUsers", nameof(ShineMusic.Model.Entities.ApplicationUser.TempAdminUntilUtc), "timestamptz");
+        EnsureColumn(db, logger, "ExternalDownloadTasks", nameof(ShineMusic.Model.Entities.ExternalDownloadTask.ReleaseYear), "integer");
     }
 
     /// <summary>列不存在时直接 AddColumn 补可空列（默认 varchar(255)）；绝不走 CodeFirst 表同步（会误改既有列为 NOT NULL）。</summary>
@@ -138,6 +140,33 @@ public static class SqlSugarSchemaBootstrap
                 "CreatedAtUtc" timestamp with time zone NOT NULL,
                 "UpdatedAtUtc" timestamp with time zone NOT NULL
             );
+            """;
+        db.Ado.ExecuteCommand(ddl);
+    }
+
+    private static void EnsurePlaylistDownloadQueueTable(ISqlSugarClient db, ILogger logger)
+    {
+        if (db.DbMaintenance.IsAnyTable("PlaylistDownloadQueueItems", false)) return;
+
+        logger.LogInformation("SqlSugar schema patch: creating table PlaylistDownloadQueueItems.");
+        const string ddl = """
+            CREATE TABLE "PlaylistDownloadQueueItems" (
+                "Id" uuid NOT NULL PRIMARY KEY,
+                "UserId" uuid NOT NULL,
+                "Title" character varying NOT NULL,
+                "ArtistsJson" text NOT NULL,
+                "AlbumTitle" character varying NULL,
+                "DurationMs" integer NULL,
+                "SourcePlatform" character varying NOT NULL,
+                "SourceTrackId" character varying NULL,
+                "SourceUrl" character varying NULL,
+                "Status" character varying NOT NULL,
+                "DownloadTaskId" uuid NULL,
+                "CreatedAtUtc" timestamp with time zone NOT NULL,
+                "UpdatedAtUtc" timestamp with time zone NOT NULL
+            );
+            CREATE INDEX "IX_PlaylistDownloadQueueItems_Status_CreatedAtUtc"
+                ON "PlaylistDownloadQueueItems" ("Status", "CreatedAtUtc");
             """;
         db.Ado.ExecuteCommand(ddl);
     }

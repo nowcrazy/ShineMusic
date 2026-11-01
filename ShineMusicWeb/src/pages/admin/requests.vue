@@ -79,6 +79,24 @@ async function load() {
   }
 }
 
+function handleSortChange({
+  prop,
+  order,
+}: {
+  prop: string | null
+  order: 'ascending' | 'descending' | null
+}) {
+  const sortMap: Record<string, 'votes' | 'createdAt'> = {
+    voteCount: 'votes',
+    createdAt: 'createdAt',
+  }
+  if (order && (!prop || !sortMap[prop])) return
+  if (order && prop) filter.sort = sortMap[prop]
+  else filter.sort = 'createdAt'
+  page.value = 1
+  void load()
+}
+
 function search() {
   page.value = 1
   void load()
@@ -180,8 +198,15 @@ onMounted(load)
         <span class="text-muted total">共 {{ total }} 条</span>
       </div>
 
-      <el-table v-loading="loading" :data="items" row-key="id" style="margin-top: 16px" empty-text="暂无需求">
-        <el-table-column label="曲名" min-width="180">
+      <el-table
+        v-loading="loading"
+        :data="items"
+        row-key="id"
+        style="margin-top: 16px"
+        empty-text="暂无需求"
+        @sort-change="handleSortChange"
+      >
+        <el-table-column label="曲名" prop="title" sortable min-width="180">
           <template #default="{ row }">
             <div class="title-cell">
               <strong>{{ row.title }}</strong>
@@ -189,19 +214,19 @@ onMounted(load)
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="艺人" min-width="140" prop="artistName" />
-        <el-table-column label="专辑" min-width="140">
+        <el-table-column label="艺人" min-width="140" prop="artistName" sortable />
+        <el-table-column label="专辑" min-width="140" prop="albumTitle" sortable>
           <template #default="{ row }">{{ row.albumTitle || '—' }}</template>
         </el-table-column>
-        <el-table-column label="票数" width="80" prop="voteCount" />
-        <el-table-column label="状态" width="100">
+        <el-table-column label="票数" width="80" prop="voteCount" sortable="custom" />
+        <el-table-column label="状态" prop="status" width="100" sortable>
           <template #default="{ row }">
             <el-tag size="small" :type="(statusTone[row.status] as any) || 'info'">
               {{ statusText[row.status] || row.status }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="提交时间" width="120">
+        <el-table-column label="提交时间" prop="createdAt" width="120" sortable="custom">
           <template #default="{ row }">{{ formatDate(row.createdAt) }}</template>
         </el-table-column>
         <el-table-column label="操作" width="180" fixed="right">

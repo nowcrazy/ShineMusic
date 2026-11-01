@@ -25,6 +25,10 @@ public static class ExternalDownloadTaskStatuses
 /// <summary>
 /// 外部音源下载任务：保存音源平台快照元数据（供展示与入库预填）、下载/评分结果，
 /// 以及移交后的导入条目 Id（ImportItemId）供管理端跳转审核。
+///
+/// 多候选换源模型：搜索阶段可带回多个 provider 的同曲候选，任务按音质从好到坏依次尝试
+/// （AttemptIndex 标记当前尝试，CandidateProvidersJson 保存所有候选），
+/// 某个候选失败（非瞬时故障）自动换下一个，全挂则聚合所有 provider 的错误信息。
 /// </summary>
 [SugarTable("ExternalDownloadTasks")]
 public sealed class ExternalDownloadTask
@@ -37,11 +41,29 @@ public sealed class ExternalDownloadTask
     [SugarColumn(IsPrimaryKey = true)]
     public Guid Id { get; set; } = Guid.NewGuid();
 
-    /// <summary>音源平台标识：audius / jamendo。与 ProviderTrackId 构成唯一索引防重复抓取。</summary>
+    /// <summary>
+    /// 当前正在尝试的音源平台标识。与 ProviderTrackId 构成唯一索引防重复抓取。
+    /// 换源时会被更新为 CandidateProvidersJson 中下一个候选的 provider。
+    /// </summary>
     public required string Provider { get; set; }
 
-    /// <summary>曲目在音源平台上的 Id。</summary>
+    /// <summary>当前正在尝试的平台曲目 Id。换源时同步更新。</summary>
     public required string ProviderTrackId { get; set; }
+
+    /// <summary>
+    /// 所有候选 provider 的曲目 Id 列表，JSON 数组：[{provider, providerTrackId, quality, title, artistsJson}]。
+    /// 创建任务时按音质从好到坏排序，下载阶段按顺序依次尝试，AttemptIndex 标记当前位置。
+    /// null 或空数组表示单 provider 任务（旧模型/兼容场景）。
+    /// </summary>
+    [SugarColumn(ColumnDataType = "text", IsNullable = true)]
+    public string? CandidateProvidersJson { get; set; }
+
+    /// <summary>
+    /// 当前正在尝试 CandidateProvidersJson 中的第几个候选（0 起）。
+    /// null 表示非换源任务（只有一个候选或旧模型创建）。
+    /// </summary>
+    [SugarColumn(IsNullable = true)]
+    public int? AttemptIndex { get; set; }
 
     /// <summary>平台返回的曲目标题（创建任务时的快照，入库时预填给导入条目）。</summary>
     [SugarColumn(IsNullable = true)]
@@ -54,6 +76,10 @@ public sealed class ExternalDownloadTask
     /// <summary>专辑标题快照。</summary>
     [SugarColumn(IsNullable = true)]
     public string? AlbumTitle { get; set; }
+
+    /// <summary>曲目发行年份快照。</summary>
+    [SugarColumn(IsNullable = true)]
+    public int? ReleaseYear { get; set; }
 
     /// <summary>流派列表快照，JSON 数组字符串（入库预填时经 GenreMoodMapper 映射为中文 mood）。</summary>
     [SugarColumn(ColumnDataType = "text")]
@@ -96,6 +122,13 @@ public sealed class ExternalDownloadTask
     /// <summary>面向用户的脱敏错误信息。</summary>
     [SugarColumn(IsNullable = true)]
     public string? ErrorMessage { get; set; }
+
+    /// <summary>
+    /// 多候选换源模式下的各 provider 尝试错误聚合，JSON 数组：[{provider, attemptIndex, errorCode, errorMessage}]。
+    /// 全源失败终态时完整保留每个候选的失败原因，便于管理端排查。
+    /// </summary>
+    [SugarColumn(ColumnDataType = "text", IsNullable = true)]
+    public string? AttemptErrorsJson { get; set; }
 
     /// <summary>自动重试已发生的次数（失败时按 30s/2min/10min 指数退避重排队，达 3 次才转 failed 终态）。</summary>
     public int AutoRetryCount { get; set; }

@@ -328,7 +328,7 @@ onMounted(loadTracks)
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="曲名" min-width="200">
+        <el-table-column label="曲名" prop="title" sortable min-width="200">
           <template #default="{ row }">
             <div class="title-cell">
               <strong>{{ row.title }}</strong>
@@ -336,16 +336,16 @@ onMounted(loadTracks)
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="艺人" min-width="150">
+        <el-table-column label="艺人" sortable :sort-method="(a, b) => artistText(a).localeCompare(artistText(b))" min-width="150">
           <template #default="{ row }">{{ artistText(row) }}</template>
         </el-table-column>
-        <el-table-column label="专辑" min-width="150">
+        <el-table-column label="专辑" sortable :sort-method="(a, b) => (a.album?.title || '').localeCompare(b.album?.title || '')" min-width="150">
           <template #default="{ row }">{{ row.album?.title || '—' }}</template>
         </el-table-column>
-        <el-table-column label="时长" width="90">
+        <el-table-column label="时长" prop="durationMs" sortable width="90">
           <template #default="{ row }">{{ formatTime((row.durationMs ?? 0) / 1000) }}</template>
         </el-table-column>
-        <el-table-column label="年份" width="80">
+        <el-table-column label="年份" prop="releaseYear" sortable width="80">
           <template #default="{ row }">{{ row.releaseYear ?? '—' }}</template>
         </el-table-column>
         <el-table-column label="操作" width="150" fixed="right">

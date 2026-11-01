@@ -1,4 +1,4 @@
-// 职责：外部歌单解析导入 API——POST parse 预览（含曲库匹配标记）、POST import 生成歌单并静默下载缺失曲目。
+// 职责：外部歌单解析 API——支持预览、独立加入下载队列，以及创建用户歌单。
 
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -31,11 +31,11 @@ public sealed class PlaylistImportController : ControllerBase
         PlaylistImportService importService,
         CancellationToken cancellationToken)
     {
-        if (!HttpContext.User.TryGetUserId(out _))
+        if (!HttpContext.User.TryGetUserId(out var userId))
             return Results.Unauthorized();
         try
         {
-            var preview = await importService.ParsePreviewAsync(request.Url ?? string.Empty, cancellationToken);
+            var preview = await importService.ParsePreviewAsync(request.Url ?? string.Empty, userId, cancellationToken);
             return Results.Ok(new PlaylistImportParseResponse(
                 preview.Platform,
                 preview.Name,
@@ -55,7 +55,32 @@ public sealed class PlaylistImportController : ControllerBase
         }
     }
 
-    /// <summary>导入歌单：立即生成新歌单，未匹配曲目后台静默下载补齐。</summary>
+    /// <summary>只把未匹配曲库的曲目加入后台下载队列，不创建歌单。</summary>
+    [HttpPost("queue", Name = "QueuePlaylistDownloads")]
+    public async Task<IResult> QueueDownloads(
+        PlaylistImportParseRequest request,
+        PlaylistImportService importService,
+        CancellationToken cancellationToken)
+    {
+        if (!HttpContext.User.TryGetUserId(out var userId))
+            return Results.Unauthorized();
+        try
+        {
+            var result = await importService.EnqueueDownloadsAsync(request.Url ?? string.Empty, userId, cancellationToken);
+            return Results.Accepted(value: new PlaylistDownloadQueueResponse(
+                result.Total, result.Matched, result.Queued));
+        }
+        catch (PlaylistParseException exception)
+        {
+            return ApiResults.ValidationError(HttpContext, "url", exception.Message);
+        }
+        catch (SourceUnavailableException exception)
+        {
+            return ApiResults.ValidationError(HttpContext, "url", exception.Message);
+        }
+    }
+
+    /// <summary>导入歌单：立即生成新歌单；downloadMissing 为 true 时未匹配曲目加入后台下载队列。</summary>
     [HttpPost("import", Name = "ImportPlaylist")]
     public async Task<IResult> Import(
         PlaylistImportRequest request,
@@ -66,7 +91,12 @@ public sealed class PlaylistImportController : ControllerBase
             return Results.Unauthorized();
         try
         {
-            var result = await importService.ImportAsync(request.Url ?? string.Empty, request.Name, userId, cancellationToken);
+            var result = await importService.ImportAsync(
+                request.Url ?? string.Empty,
+                request.Name,
+                userId,
+                request.DownloadMissing ?? true,
+                cancellationToken);
             return Results.Ok(new PlaylistImportResponse(result.PlaylistId, result.Total, result.Matched, result.Pending));
         }
         catch (PlaylistParseException exception)
@@ -110,7 +140,11 @@ public sealed record PlaylistImportParseRequest(string? Url);
 /// <summary>导入请求体。</summary>
 /// <param name="Url">外部平台歌单链接。</param>
 /// <param name="Name">新歌单名称（留空则用原歌单名）。</param>
-public sealed record PlaylistImportRequest(string? Url, string? Name);
+/// <param name="DownloadMissing">
+/// 未匹配曲目是否加入后台下载队列。缺省 true（加入队列）；
+/// 传 false 则仅导入歌单，未匹配曲目标记为跳过，不占用带宽，之后可在「重新补齐」中手动排入队列。
+/// </param>
+public sealed record PlaylistImportRequest(string? Url, string? Name, bool? DownloadMissing);
 
 /// <summary>解析预览响应中的单条曲目。</summary>
 public sealed record PlaylistImportPreviewTrackDto(
@@ -135,6 +169,9 @@ public sealed record PlaylistImportParseResponse(
 /// <param name="Matched">已匹配曲库直接入歌单的数量。</param>
 /// <param name="Pending">进入待补齐（静默下载）的数量。</param>
 public sealed record PlaylistImportResponse(Guid PlaylistId, int Total, int Matched, int Pending);
+
+/// <summary>独立下载队列响应，不包含歌单 Id，因为该操作不会创建歌单。</summary>
+public sealed record PlaylistDownloadQueueResponse(int Total, int Matched, int Queued);
 
 /// <summary>重新补齐响应：各分项处理结果。</summary>
 /// <param name="PlaylistId">歌单 Id。</param>

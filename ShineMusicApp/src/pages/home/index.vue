@@ -440,7 +440,7 @@ const inspirationTrack = computed<Track | null>(() => {
 async function loadDaily() {
   dailyLoading.value = true
   try {
-    const result = await getDailyRecommendations(30)
+    const result = await getDailyRecommendations()
     dailyTracks.value = result.tracks
   } catch {
     dailyTracks.value = recentTracks.value.slice(0, 30)
@@ -869,7 +869,7 @@ function coverOf(collection: ApiCollectionSummary) {
 
       <!-- 发现 -->
       <template v-else-if="activeTab === '发现'">
-        <!-- 未输入关键词：推荐歌单（首个大卡 + 其余横滑）+ 风格宫格浏览 -->
+        <!-- 未输入关键词：精选歌单（首个大卡 + 其余横滑）+ 风格宫格浏览 -->
         <view v-if="!query.trim()" class="discover-section">
           <view v-if="collections.length" class="discover-block">
             <view class="section-heading">
@@ -1358,7 +1358,7 @@ function coverOf(collection: ApiCollectionSummary) {
 .collection-cover { width: 220rpx; height: 220rpx; border-radius: 20rpx; overflow: hidden; background: var(--sm-surface-3); border: 1rpx solid var(--sm-border); }
 .collection-title { display: block; overflow: hidden; margin-top: 14rpx; color: var(--sm-text); font-size: 21rpx; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .collection-meta { display: block; margin-top: 5rpx; color: var(--sm-text-2); font-size: 16rpx; }
-/* 推荐歌单大卡（发现页首个歌单）：封面 + 推荐语 + 曲目数 */
+/* 精选歌单大卡（发现页首个歌单）：封面 + 推荐语 + 曲目数 */
 .playlist-hero { display: flex; align-items: center; gap: 26rpx; margin-top: 26rpx; padding: 24rpx; border: 1rpx solid var(--sm-border); border-radius: var(--sm-radius-card); background: var(--sm-surface); -webkit-backdrop-filter: blur(var(--sm-blur)); backdrop-filter: blur(var(--sm-blur)); box-shadow: var(--sm-shadow-sm); transition: transform .2s ease; }
 .playlist-hero:active { transform: scale(.985); }
 .playlist-hero-cover { flex: none; width: 200rpx; height: 200rpx; }

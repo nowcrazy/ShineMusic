@@ -16,10 +16,10 @@ public sealed class SourceDownloadOptions
     /// <summary>Jamendo 平台接入配置（需免费注册的 client_id；未配置时保持禁用）。</summary>
     public JamendoSourceOptions Jamendo { get; set; } = new();
 
-    /// <summary>yt-dlp 子进程桥接配置（YouTube Music / SoundCloud 音源共用）。</summary>
+    /// <summary>yt-dlp 子进程桥接配置（YouTube Music 音源）。</summary>
     public YtDlpSourceOptions YtDlp { get; set; } = new();
 
-    /// <summary>酷我音乐音源配置（免密钥直链，音质 320k）。</summary>
+    /// <summary>酷我音乐音源配置（免密钥直链，未登录 MP3 最高 128k，部分曲目可取 FLAC）。</summary>
     public KuwoSourceOptions Kuwo { get; set; } = new();
 
     /// <summary>酷狗音乐音源配置（免密钥直链，免登录 128k）。</summary>
@@ -39,6 +39,13 @@ public sealed class SourceDownloadOptions
     /// 其余源的结果照常返回；防止个别源（如不可达的 YouTube）挂起拖垮整体响应。默认 25 秒。
     /// </summary>
     public int SearchBudgetSeconds { get; set; } = 25;
+
+    /// <summary>
+    /// 歌单批量补齐（后台 worker）的单源预算（秒）。默认 8 秒。
+    /// 批量补齐是「几百首排队」场景，追求吞吐而非单曲最优：预算收紧后慢源（如 yt-dlp 30s 超时）
+    /// 会被快速放弃，改由下载阶段的换源机制兜底，避免一首歌把整轮补齐拖住。
+    /// </summary>
+    public int BackfillSearchBudgetSeconds { get; set; } = 8;
 
     /// <summary>评分自动入库总开关：false 时音源条目一律转人工审核。</summary>
     public bool AutoPublishEnabled { get; set; } = true;
@@ -175,14 +182,14 @@ public sealed class MiguSourceOptions
     /// <summary>是否启用该音源（默认开启）。</summary>
     public bool Enabled { get; set; } = true;
 
-    /// <summary>下载音质：PQ=128k / HQ=320k / SQ=无损flac。默认 HQ（320k MP3）。</summary>
+    /// <summary>最高下载音质：PQ=128k / HQ=320k / SQ=无损flac；资源没有该档时回退到可用的较低档。默认 HQ。</summary>
     public string ToneFlag { get; set; } = "HQ";
 }
 
-/// <summary>yt-dlp 子进程桥接配置（YouTube Music / SoundCloud 音源共用）。</summary>
+/// <summary>yt-dlp 子进程桥接配置（YouTube Music 音源）。</summary>
 public sealed class YtDlpSourceOptions
 {
-    /// <summary>是否启用 yt-dlp 系音源（false 时 ytmusic/soundcloud 均不可用）。</summary>
+    /// <summary>是否启用 yt-dlp 系音源（false 时 ytmusic 不可用）。</summary>
     public bool Enabled { get; set; } = true;
 
     /// <summary>
@@ -197,7 +204,7 @@ public sealed class YtDlpSourceOptions
 
     /// <summary>
     /// 可选 HTTP/SOCKS 代理（传给 yt-dlp --proxy，如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080）。
-    /// 国内网络访问 YouTube/SoundCloud 需要配置；留空表示直连。
+    /// 国内网络访问 YouTube 需要时配置；留空表示直连。
     /// </summary>
     public string Proxy { get; set; } = string.Empty;
 

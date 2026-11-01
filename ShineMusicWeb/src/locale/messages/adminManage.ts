@@ -1,5 +1,5 @@
 // locale/messages/adminManage.ts
-// 管理员维护页文案包（由 i18n 补全任务生成）：曲目维护 / 歌单管理 / 邀请管理 / 需求管理
+// 管理员维护页文案包（由 i18n 补全任务生成）：曲目维护 / 精选歌单 / 邀请管理 / 需求管理
 // 覆盖 pages/admin/catalog.vue、pages/admin/collections.vue、pages/admin/invitation.vue、
 // pages/admin/requests.vue、services/admin-artwork.ts。
 // 在 locale/index.ts 中与 messages.ts 深合并；zh-CN 值与源文件原文逐字一致，便于后续接线替换。
@@ -22,7 +22,7 @@ export const adminManageMessages = {
       editTrackInfo: '编辑曲目信息',
     },
     collectionsAdmin: {
-      pageTitle: '歌单管理',
+      pageTitle: '精选歌单',
     },
     invitationAdmin: {
       pageTitle: '邀请管理',

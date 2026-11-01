@@ -3,6 +3,7 @@
 // 每个扩展方法对应一块职责，新增配置时就近追加到对应方法即可，避免 Program.cs 持续膨胀。
 
 using System.IdentityModel.Tokens.Jwt;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Claims;
 using System.Text;
@@ -107,7 +108,9 @@ public static class ServiceCollectionExtensions
     }
 
     /// <summary>注册横切关注点：HttpClient、反向代理头、响应压缩、限流。</summary>
-    public static IServiceCollection AddShineMusicCrossCutting(this IServiceCollection services)
+    public static IServiceCollection AddShineMusicCrossCutting(
+        this IServiceCollection services,
+        IConfiguration configuration)
     {
         services.AddHttpClient();
         // 反向代理头：让 HttpContext.Connection.RemoteIpAddress / Request.Scheme 反映真实客户端地址与协议。
@@ -115,6 +118,13 @@ public static class ServiceCollectionExtensions
         {
             options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
             options.ForwardLimit = 2;
+            foreach (var proxy in configuration.GetSection("ForwardedHeaders:KnownProxies").Get<string[]>() ?? [])
+            {
+                if (!IPAddress.TryParse(proxy, out var address))
+                    throw new InvalidOperationException(
+                        $"Invalid forwarded-header proxy IP address '{proxy}'. Configure ForwardedHeaders:KnownProxies with IP addresses.");
+                options.KnownProxies.Add(address);
+            }
         });
         // 响应压缩：对 JSON 等文本响应启用 gzip/brotli。
         services.AddResponseCompression(options =>
@@ -351,6 +361,7 @@ public static class ServiceCollectionExtensions
         services.AddHostedService<ShineMusic.Tasks.SongRequestArchiveService>();
         services.AddHostedService<ShineMusic.Tasks.LibraryImportRetrySweepService>();
         services.AddHostedService<ShineMusic.Tasks.SourceDownloadRetrySweepService>();
+        services.AddHostedService<ShineMusic.Tasks.PlaylistPendingBackfillService>();
         // 业务处理器注册。
         services.AddTransient<LibraryImportJob>();
         services.AddTransient<LibraryImportRetrySweepJob>();
@@ -358,6 +369,7 @@ public static class ServiceCollectionExtensions
         services.AddTransient<SourceDownloadRetrySweepJob>();
         services.AddTransient<ShineMusic.Tasks.LyricsBackfillJob>();
         services.AddTransient<ShineMusic.Tasks.SongRequestArchiveJob>();
+        services.AddTransient<ShineMusic.Tasks.PlaylistPendingBackfillJob>();
         return services;
     }
 
@@ -381,6 +393,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ILyricsResolver, LyricsResolver>();
         services.AddScoped<StorageGovernanceService>();
         services.AddScoped<MessageQueueStatusService>();
+        services.AddScoped<RecommendationStrategyService>();
         // RabbitMQ Management HTTP API 客户端（管理后台队列监控）：BaseAddress + Basic 认证随 RabbitMQ 配置走。
         services.AddHttpClient(MessageQueueStatusService.HttpClientName, (serviceProvider, client) =>
         {
@@ -397,7 +410,6 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient(AudiusSourceProvider.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(120));
         services.AddHttpClient(JamendoSourceProvider.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(120));
         services.AddHttpClient(YouTubeMusicSourceProvider.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(120));
-        services.AddHttpClient(SoundCloudSourceProvider.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(120));
         services.AddHttpClient(KuwoSourceProvider.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(120));
         // 酷狗：plist/getSongInfo 系接口要求移动端 UA（缺省返回非 JSON），下载直链 sharefs 无特殊要求。
         // 全局频控网关 KugouRateLimitHandler：令牌桶限流（默认 2 QPS），防止触发酷狗 errcode:1002「操作太频繁」封禁。
@@ -433,12 +445,12 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IMusicSourceProvider, JamendoSourceProvider>();
         services.AddSingleton<YtDlpBridge>();
         services.AddSingleton<IMusicSourceProvider, YouTubeMusicSourceProvider>();
-        services.AddSingleton<IMusicSourceProvider, SoundCloudSourceProvider>();
         services.AddSingleton<IMusicSourceProvider, KuwoSourceProvider>();
         services.AddSingleton<IMusicSourceProvider, KugouSourceProvider>();
         services.AddSingleton<IMusicSourceProvider, MiguSourceProvider>();
         services.AddSingleton<IMusicSourceProvider, NeteaseSourceProvider>();
         services.AddScoped<SourceDownloadService>();
+        services.AddScoped<SourceDownloadFallbackService>();
 
         // ===== 外部歌单解析导入 =====
         services.AddHttpClient(NeteasePlaylistParser.HttpClientName, client =>
@@ -453,11 +465,20 @@ public static class ServiceCollectionExtensions
             client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36");
             client.DefaultRequestHeaders.Referrer = new Uri("https://y.qq.com/");
         });
+        services.AddHttpClient(QishuiPlaylistParser.HttpClientName, client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(30);
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36");
+            client.DefaultRequestHeaders.Referrer = new Uri("https://music.douyin.com/qishui/");
+        });
         services.AddSingleton<IPlaylistParser, NeteasePlaylistParser>();
         services.AddSingleton<IPlaylistParser, QQMusicPlaylistParser>();
         services.AddSingleton<IPlaylistParser, KuwoPlaylistParser>();
         services.AddSingleton<IPlaylistParser, KugouPlaylistParser>();
+        services.AddSingleton<IPlaylistParser, QishuiPlaylistParser>();
         services.AddSingleton<IPlaylistParser, YtDlpPlaylistParser>();
+        // 解析结果缓存（单例）：预览与导入复用同一次平台抓取，避免导入时二次解析大歌单。
+        services.AddSingleton<PlaylistParseCache>();
         services.AddScoped<PlaylistImportService>();
 
         // ===== 用户/鉴权服务 =====

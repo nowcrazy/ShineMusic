@@ -188,7 +188,7 @@ onMounted(load)
       </div>
 
       <el-table v-loading="loading" :data="items" row-key="id" style="margin-top: 12px" empty-text="暂无邀请">
-        <el-table-column label="邮箱 / 类型" min-width="220">
+        <el-table-column label="邮箱 / 类型" prop="email" sortable min-width="220">
           <template #default="{ row }">
             <div class="email-cell">
               <strong>{{ row.email || '注册码邀请' }}</strong>
@@ -196,23 +196,23 @@ onMounted(load)
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="120">
+        <el-table-column label="状态" prop="status" sortable width="120">
           <template #default="{ row }">
             <el-tag size="small" :type="(statusTone[row.status] as any) || 'info'">
               {{ statusText[row.status] || row.status }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="创建时间" width="120">
+        <el-table-column label="创建时间" prop="createdAt" sortable width="120">
           <template #default="{ row }">{{ formatDate(row.createdAt) }}</template>
         </el-table-column>
-        <el-table-column label="过期时间" width="120">
+        <el-table-column label="过期时间" prop="expiresAt" sortable width="120">
           <template #default="{ row }">{{ formatDate(row.expiresAt) }}</template>
         </el-table-column>
-        <el-table-column label="发送时间" width="120">
+        <el-table-column label="发送时间" prop="sentAt" sortable width="120">
           <template #default="{ row }">{{ row.sentAt ? formatDate(row.sentAt) : '—' }}</template>
         </el-table-column>
-        <el-table-column label="注册时间" width="120">
+        <el-table-column label="注册时间" prop="redeemedAt" sortable width="120">
           <template #default="{ row }">{{ row.redeemedAt ? formatDate(row.redeemedAt) : '—' }}</template>
         </el-table-column>
         <el-table-column label="操作" width="150" fixed="right">

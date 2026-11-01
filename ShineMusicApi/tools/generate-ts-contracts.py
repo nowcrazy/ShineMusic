@@ -266,8 +266,15 @@ def main() -> int:
                 "file": str(path.relative_to(ROOT)).replace("\\", "/"),
             }
 
-    # 第一遍：收集全部类型名，供 alias 推断
-    alias = {n: ts_name(n) for n in records}
+    # 第一遍：收集全部类型名，供 alias 推断；仅在去后缀后发生重名时保留 C# record 后缀。
+    base_names = {name: ts_name(name) for name in records}
+    name_counts: dict[str, int] = {}
+    for type_name in base_names.values():
+        name_counts[type_name] = name_counts.get(type_name, 0) + 1
+    alias = {
+        name: f"Api{name}" if name_counts[base_names[name]] > 1 else base_names[name]
+        for name in records
+    }
 
     lines = [HEADER]
     unknown_refs = set()
@@ -275,7 +282,7 @@ def main() -> int:
     for name in sorted(records):
         info = records[name]
         generic = info["generic"]
-        ts = ts_name(name)
+        ts = alias[name]
         gparam = ""
         if generic:
             only = [g.strip() for g in generic.split(",")][0]

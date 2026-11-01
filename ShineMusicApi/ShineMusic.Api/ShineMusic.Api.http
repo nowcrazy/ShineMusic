@@ -4,3 +4,31 @@ GET {{ShineMusic.Api_HostAddress}}/weatherforecast/
 Accept: application/json
 
 ###
+# Admin recommendation strategy (requires an administrator access token).
+@adminToken = replace-with-admin-access-token
+
+GET {{ShineMusic.Api_HostAddress}}/api/v1/admin/recommendations/strategy
+Authorization: Bearer {{adminToken}}
+Accept: application/json
+
+###
+PUT {{ShineMusic.Api_HostAddress}}/api/v1/admin/recommendations/strategy
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "dailyTrackCount": 30,
+  "artistAffinityWeight": 2.5,
+  "playCountWeight": 3,
+  "playCountCap": 20,
+  "skipPenalty": 4,
+  "favoriteBoost": 6,
+  "likeBoost": 8,
+  "dislikePenalty": 40,
+  "nonRepeatDays": 7,
+  "recentRecommendationPenalty": 25,
+  "newTrackBoostDays": 90,
+  "newTrackBoostMax": 3
+}
+
+###

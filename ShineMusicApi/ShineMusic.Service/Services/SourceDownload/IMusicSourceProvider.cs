@@ -10,6 +10,15 @@ public static class SourceQualities
     public const string Lossless = "lossless";
     public const string High = "high";
     public const string Standard = "standard";
+
+    /// <summary>音质等级排序权重（值越小越好）；未知音质默认最低。</summary>
+    public static int Rank(string? quality) => quality switch
+    {
+        Lossless => 0,
+        High => 1,
+        Standard => 2,
+        _ => 3
+    };
 }
 
 /// <summary>音源搜索结果条目（跨平台统一模型）。</summary>
@@ -25,6 +34,7 @@ public static class SourceQualities
 /// <param name="License">许可信息（如 CC-BY）。</param>
 /// <param name="Quality">音质等级（见 <see cref="SourceQualities"/>）。</param>
 /// <param name="IsLosslessAvailable">平台侧是否有无损原文件可下载。</param>
+/// <param name="ReleaseYear">曲目发行年份；平台未提供时为 null。</param>
 public sealed record SourceSearchResult(
     string Provider,
     string ProviderTrackId,
@@ -37,7 +47,8 @@ public sealed record SourceSearchResult(
     string? SourcePageUrl,
     string? License,
     string Quality,
-    bool IsLosslessAvailable);
+    bool IsLosslessAvailable,
+    int? ReleaseYear = null);
 
 /// <summary>解析后的下载信息。</summary>
 /// <param name="DownloadUrl">音频文件下载地址（可能含重定向）。</param>
@@ -73,6 +84,19 @@ public interface IMusicSourceProvider
     /// <summary>解析下载地址：优先无损原文件，无则兜底平台最高码率流。</summary>
     /// <exception cref="SourceUnavailableException">平台不可用或曲目不可下载时抛出。</exception>
     Task<SourceDownloadInfo> ResolveDownloadAsync(string providerTrackId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// 轻量预判：该曲目是否可下载（不实际下载音频文件）。
+    /// 各 provider 按自身平台能力实现——能预判的做轻量 HTTP 探测（如酷我检查占位 URL、酷狗检查 status），
+    /// 无法轻量预判的（如咪咕需 curl 解密、yt-dlp 需子进程）默认返回 true。
+    /// 搜索接口用此方法过滤搜索结果，只展示可下载的曲目。
+    /// 超时/异常时返回 true（不误伤，宁可见不可下载也不误删可下载的）。
+    /// </summary>
+    /// <param name="providerTrackId">平台曲目 Id。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>true 表示可下载（或无法预判，保守放行）；false 表示不可下载。</returns>
+    Task<bool> CanDownloadAsync(string providerTrackId, CancellationToken cancellationToken) =>
+        Task.FromResult(true);
 }
 
 /// <summary>平台不可用或曲目不可下载时抛出。</summary>

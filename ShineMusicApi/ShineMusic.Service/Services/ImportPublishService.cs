@@ -290,7 +290,25 @@ public sealed class ImportPublishService(
                 if (!item.ReleaseYear.HasValue && itunesResult.ReleaseYear.HasValue)
                 {
                     item.ReleaseYear = itunesResult.ReleaseYear.Value;
+                    track.ReleaseYear = itunesResult.ReleaseYear.Value;
                 }
+
+                if (!item.TrackNumber.HasValue && itunesResult.TrackNumber is > 0)
+                {
+                    item.TrackNumber = itunesResult.TrackNumber.Value;
+                    track.TrackNumber = itunesResult.TrackNumber.Value;
+                }
+
+                if (!item.DiscNumber.HasValue && itunesResult.DiscNumber is > 0)
+                {
+                    item.DiscNumber = itunesResult.DiscNumber.Value;
+                    track.DiscNumber = itunesResult.DiscNumber.Value;
+                }
+
+                if (!item.ItunesTrackId.HasValue && itunesResult.ItunesTrackId is > 0)
+                    item.ItunesTrackId = itunesResult.ItunesTrackId;
+                if (string.IsNullOrWhiteSpace(item.ItunesCountry) && !string.IsNullOrWhiteSpace(itunesResult.Country))
+                    item.ItunesCountry = itunesResult.Country.Trim();
             }
             System.IO.File.Copy(sourcePath, finalOriginalPath, overwrite: false);
             copiedPaths.Add(finalOriginalPath);

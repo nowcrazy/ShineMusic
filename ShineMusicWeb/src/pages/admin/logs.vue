@@ -226,11 +226,11 @@ onMounted(loadLogin)
           </div>
 
           <el-table :data="loginRows" v-loading="loginLoading" size="default" empty-text="暂无登录日志">
-            <el-table-column label="时间" width="170">
+            <el-table-column label="时间" prop="createdAtUtc" sortable width="170">
               <template #default="{ row }">{{ formatDateTime(row.createdAtUtc) }}</template>
             </el-table-column>
-            <el-table-column label="账号" prop="login" min-width="180" show-overflow-tooltip />
-            <el-table-column label="结果" width="130">
+            <el-table-column label="账号" prop="login" sortable min-width="180" show-overflow-tooltip />
+            <el-table-column label="结果" prop="result" sortable width="130">
               <template #default="{ row }">
                 <el-tag size="small" :type="row.result === 'success' ? 'success' : 'danger'">
                   {{ row.result === 'success' ? '成功' : '失败' }}
@@ -240,17 +240,17 @@ onMounted(loadLogin)
                 </span>
               </template>
             </el-table-column>
-            <el-table-column label="客户端" width="110">
+            <el-table-column label="客户端" prop="clientType" sortable width="110">
               <template #default="{ row }">
                 <el-tag size="small" :type="clientTag(row.clientType).type" effect="plain">
                   {{ clientTag(row.clientType).label }}
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="设备" min-width="180" show-overflow-tooltip>
+            <el-table-column label="设备" prop="deviceInfo" sortable min-width="180" show-overflow-tooltip>
               <template #default="{ row }">{{ row.deviceInfo || '—' }}</template>
             </el-table-column>
-            <el-table-column label="IP" width="170">
+            <el-table-column label="IP" prop="ip" sortable width="170">
               <template #default="{ row }">
                 <template v-if="describeIp(row.ip).kind === 'public'">
                   <span class="mono ip-public" :title="describeIp(row.ip).full">{{ describeIp(row.ip).display }}</span>
@@ -319,21 +319,21 @@ onMounted(loadLogin)
           </div>
 
           <el-table :data="opRows" v-loading="opLoading" size="default" empty-text="暂无操作日志">
-            <el-table-column label="时间" width="170">
+            <el-table-column label="时间" prop="createdAtUtc" sortable width="170">
               <template #default="{ row }">{{ formatDateTime(row.createdAtUtc) }}</template>
             </el-table-column>
-            <el-table-column label="操作人" width="140" show-overflow-tooltip>
+            <el-table-column label="操作人" prop="actorUserId" sortable width="140" show-overflow-tooltip>
               <template #default="{ row }">
                 <el-tag v-if="isSystemActor(row)" size="small" type="info" effect="plain">系统</el-tag>
                 <span v-else>{{ actorLabel(row) }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="动作" width="170">
+            <el-table-column label="动作" prop="action" sortable width="170">
               <template #default="{ row }">
                 <span class="action-label" :title="row.action">{{ actionLabel(row.action) }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="对象" min-width="220" show-overflow-tooltip>
+            <el-table-column label="对象" prop="resourceName" sortable min-width="220" show-overflow-tooltip>
               <template #default="{ row }">
                 <div class="object-cell">
                   <el-tag size="small" type="info" effect="plain">{{ resourceTypeLabel(row.resourceType) }}</el-tag>
@@ -343,7 +343,7 @@ onMounted(loadLogin)
                 </div>
               </template>
             </el-table-column>
-            <el-table-column label="详情" min-width="240" show-overflow-tooltip>
+            <el-table-column label="详情" prop="detailsJson" sortable min-width="240" show-overflow-tooltip>
               <template #default="{ row }">
                 <span v-if="!detailPairs(row.detailsJson).length" class="text-faint">—</span>
                 <span v-else class="detail-list">
@@ -353,14 +353,14 @@ onMounted(loadLogin)
                 </span>
               </template>
             </el-table-column>
-            <el-table-column label="客户端" width="110">
+            <el-table-column label="客户端" prop="clientType" sortable width="110">
               <template #default="{ row }">
                 <el-tag size="small" :type="clientTag(row.clientType).type" effect="plain">
                   {{ clientTag(row.clientType).label }}
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="IP" width="170">
+            <el-table-column label="IP" prop="ip" sortable width="170">
               <template #default="{ row }">
                 <template v-if="describeIp(row.ip).kind === 'public'">
                   <span class="mono ip-public" :title="describeIp(row.ip).full">{{ describeIp(row.ip).display }}</span>

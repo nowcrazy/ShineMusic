@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
- * 歌单管理页（管理员）：运营歌单（推荐歌单）的创建、信息编辑、删除与曲目编排。
- * 进入方式：首页头像抽屉 →「歌单管理」（仅管理员可见）。
+ * 精选歌单管理页（管理员）：人工精选内容的创建、信息编辑、删除与曲目编排。
+ * 进入方式：首页头像抽屉 →「精选歌单」（仅管理员可见）。
  * 对应后端接口：services/admin-collections（POST/PUT/DELETE /admin/collections、
  *                PUT /admin/collections/{id}/tracks）；
  *                曲目检索复用 services/catalog.searchTracks。
@@ -77,7 +77,7 @@ function goBack() {
   }
 }
 
-/** 加载全部歌单（后端单次返回上限 50，运营歌单数量可控） */
+/** 加载全部歌单（后端单次返回上限 50，精选歌单数量可控） */
 async function loadCollections() {
   loading.value = true
   listMessage.value = ''

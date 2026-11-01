@@ -89,6 +89,9 @@ public sealed partial class NeteasePlaylistParser(IHttpClientFactory httpClientF
             var name = GetString(container, "name") ?? $"网易云歌单 {id}";
             var cover = GetString(container, "coverImgUrl");
             var description = GetString(container, "description");
+            var trackIds = ExtractTrackIds(container);
+            var expectedTrackCount = GetInt(container, "trackCount")
+                ?? (trackIds.Count > 0 ? trackIds.Count : null);
 
             var items = new List<ParsedPlaylistTrack>();
             foreach (var track in tracks.EnumerateArray())
@@ -120,6 +123,8 @@ public sealed partial class NeteasePlaylistParser(IHttpClientFactory httpClientF
                     trackId is null ? null : $"https://music.163.com/song?id={trackId}"));
             }
             return items.Count == 0
+                || !expectedTrackCount.HasValue
+                || items.Count != expectedTrackCount.Value
                 ? null
                 : new ParsedPlaylist(name.Trim(), cover, description, items);
         }
@@ -147,14 +152,24 @@ public sealed partial class NeteasePlaylistParser(IHttpClientFactory httpClientF
         // 全量曲目 Id 在 trackIds 中。当 trackIds 多于 tracks 时，需分批调用
         // /api/v3/song/detail 补全曲目详情，否则歌单会被截断。
         var trackIds = ExtractTrackIds(playlist);
+        var expectedTrackCount = GetInt(playlist, "trackCount")
+            ?? (trackIds.Count > 0 ? trackIds.Count : null);
+        if (expectedTrackCount.HasValue && trackIds.Count > 0 && trackIds.Count != expectedTrackCount.Value)
+            throw new PlaylistParseException("网易云歌单曲目编号不完整，请稍后重试。");
+
         JsonElement tracksToUse = tracks;
         List<JsonElement>? pooledSongs = null;
 
-        if (trackIds.Count > tracks.GetArrayLength())
+        if (trackIds.Count > tracks.GetArrayLength()
+            || (expectedTrackCount.HasValue && expectedTrackCount.Value > tracks.GetArrayLength()))
         {
-            pooledSongs = await FetchSongsByIdAsync(client, trackIds, cancellationToken);
-            if (pooledSongs.Count > 0)
-                tracksToUse = default; // 标记使用 pooledSongs
+            if (trackIds.Count == 0)
+                throw new PlaylistParseException("网易云未返回完整歌单曲目编号，无法保证全部解析。");
+            var songsById = await FetchSongsByIdAsync(client, trackIds, cancellationToken);
+            if (trackIds.Any(trackId => !songsById.ContainsKey(trackId)))
+                throw new PlaylistParseException("网易云部分歌单曲目详情不可用，未能完整解析。");
+            pooledSongs = trackIds.Select(trackId => songsById[trackId]).ToList();
+            tracksToUse = default;
         }
 
         var items = new List<ParsedPlaylistTrack>();
@@ -171,6 +186,8 @@ public sealed partial class NeteasePlaylistParser(IHttpClientFactory httpClientF
 
         if (items.Count == 0)
             throw new PlaylistParseException("歌单解析失败，请确认链接为公开歌单后重试。");
+        if (expectedTrackCount.HasValue && items.Count != expectedTrackCount.Value)
+            throw new PlaylistParseException("网易云歌单曲目未能完整解析，请稍后重试。");
         return new ParsedPlaylist(name.Trim(), cover, description, items);
     }
 
@@ -190,9 +207,12 @@ public sealed partial class NeteasePlaylistParser(IHttpClientFactory httpClientF
     }
 
     /// <summary>分批调用 /api/v3/song/detail 获取曲目详情（字段 ar/al/dt）。</summary>
-    private static async Task<List<JsonElement>> FetchSongsByIdAsync(HttpClient client, IReadOnlyList<string> trackIds, CancellationToken cancellationToken)
+    private static async Task<Dictionary<string, JsonElement>> FetchSongsByIdAsync(
+        HttpClient client,
+        IReadOnlyList<string> trackIds,
+        CancellationToken cancellationToken)
     {
-        var songs = new List<JsonElement>();
+        var songs = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
         for (var offset = 0; offset < trackIds.Count; offset += SongDetailBatchSize)
         {
             var batch = trackIds.Skip(offset).Take(SongDetailBatchSize).ToList();
@@ -203,7 +223,11 @@ public sealed partial class NeteasePlaylistParser(IHttpClientFactory httpClientF
             if (doc.RootElement.TryGetProperty("songs", out var songsArray) && songsArray.ValueKind == JsonValueKind.Array)
             {
                 foreach (var song in songsArray.EnumerateArray())
-                    songs.Add(song.Clone());
+                {
+                    var id = GetNumberAsString(song, "id");
+                    if (id is not null)
+                        songs[id] = song.Clone();
+                }
             }
         }
         return songs;

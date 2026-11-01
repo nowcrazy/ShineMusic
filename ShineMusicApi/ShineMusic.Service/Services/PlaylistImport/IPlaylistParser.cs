@@ -7,7 +7,7 @@ namespace ShineMusic.Service.PlaylistImport;
 /// <summary>外部平台歌单解析器：判断能否处理给定 URL，并把歌单页面/接口解析为统一模型。</summary>
 public interface IPlaylistParser
 {
-    /// <summary>平台标识：netease / qqmusic / kuwo / ytmusic / spotify。</summary>
+    /// <summary>平台标识：netease / qqmusic / kugou / kuwo / qishui / ytmusic。</summary>
     string Platform { get; }
 
     /// <summary>判断该解析器是否支持给定 URL（按域名/路径形态匹配）。</summary>

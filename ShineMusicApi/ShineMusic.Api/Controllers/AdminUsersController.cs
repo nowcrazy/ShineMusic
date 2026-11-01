@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using ShineMusic.Model.Contracts;
 using ShineMusic.Model.Entities;
@@ -182,5 +183,71 @@ public sealed class AdminUsersController : ControllerBase
         await userService.ClearLockoutAsync(user);
         AdminAudit.Add(HttpContext, db, "user.unlocked", "user", id);
         return Results.Ok(new { id, locked = false });
+    }
+
+    /// <summary>
+    /// 【POST /api/v1/admin/users】管理员新建用户并授予初始角色（user / tempadmin / admin）。
+    /// 等价于命令行 --create-admin 的在线版：可在不停止服务的情况下创建任意角色账号，
+    /// 尤其用于直接新增管理员，免去停服跑命令的麻烦。
+    /// tempadmin 自创建起 3 天内视同管理员，到期后端自动降级为普通用户。
+    /// 用户名/邮箱唯一冲突或密码不合规（至少 8 位）由后端拦截并返回 400。
+    /// </summary>
+    [HttpPost(Name = "AdminCreateUser")]
+    public async Task<IResult> CreateUser(AdminCreateUserRequest request, ISqlSugarClient db, UserService userService)
+    {
+        var email = request.Email?.Trim();
+        var userName = request.UserName?.Trim();
+        var displayName = request.DisplayName?.Trim();
+        var password = request.Password ?? string.Empty;
+        var role = request.Role?.Trim().ToLowerInvariant();
+
+        if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(userName) ||
+            string.IsNullOrWhiteSpace(displayName) || string.IsNullOrWhiteSpace(password))
+            return ApiResults.ValidationError(HttpContext, "fields", "Email, username, displayName and password are required.");
+
+        if (password.Length < 8)
+            return ApiResults.ValidationError(HttpContext, "password", "Password must be at least 8 characters.");
+
+        if (role is not (RoleNames.User or RoleNames.TempAdmin or RoleNames.Admin))
+            return ApiResults.ValidationError(HttpContext, "role", "Role must be one of: user, tempadmin, admin.");
+
+        var user = new ApplicationUser
+        {
+            Email = email,
+            UserName = userName,
+            DisplayName = displayName,
+            EmailConfirmed = true,
+        };
+
+        DateTime? tempAdminUntil = null;
+        try
+        {
+            await db.Ado.UseTranAsync(async () =>
+            {
+                // 建号失败（唯一冲突/密码不合规）整体回滚；AddToRoleAsync 失败同样回滚，避免留下无角色残留账号。
+                var createResult = await userService.CreateAsync(user, password);
+                if (!createResult.Succeeded)
+                    throw new InvalidOperationException(createResult.Errors.First().Description);
+
+                if (role == RoleNames.TempAdmin)
+                {
+                    tempAdminUntil = DateTime.UtcNow.AddDays(3);
+                    user.TempAdminUntilUtc = tempAdminUntil;
+                    await db.Updateable(user).UpdateColumns(item => new { item.TempAdminUntilUtc }).ExecuteCommandAsync();
+                }
+
+                var addResult = await userService.AddToRoleAsync(user.Id, role);
+                if (!addResult.Succeeded)
+                    throw new InvalidOperationException(addResult.Errors.First().Description);
+            });
+        }
+        catch (InvalidOperationException exception)
+        {
+            // 唯一冲突/密码不合规等可预期错误：以 400 返回具体原因，而非 500。
+            return ApiResults.ValidationError(HttpContext, "create", exception.Message);
+        }
+
+        AdminAudit.Add(HttpContext, db, "user.created", "user", user.Id, new { role, tempAdminUntilUtc = tempAdminUntil });
+        return Results.Ok(new { id = user.Id, role, tempAdminUntilUtc = tempAdminUntil });
     }
 }

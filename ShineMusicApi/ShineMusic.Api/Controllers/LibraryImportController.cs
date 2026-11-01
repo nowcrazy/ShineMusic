@@ -369,7 +369,8 @@ public sealed class LibraryImportController : ControllerBase
             || item.ReleaseYear is null
             || DeserializeList(item.GenresJson).Count == 0
             || string.IsNullOrWhiteSpace(item.ArtworkStorageKey)
-            || item.TrackNumber is null;
+            || item.TrackNumber is null
+            || item.DiscNumber is null;
         var firstArtist = artists.FirstOrDefault();
         if (needsMetadata && (!string.IsNullOrWhiteSpace(firstArtist) || !string.IsNullOrWhiteSpace(item.Title)))
         {

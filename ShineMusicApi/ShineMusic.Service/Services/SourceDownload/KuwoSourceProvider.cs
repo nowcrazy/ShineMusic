@@ -27,6 +27,14 @@ public sealed partial class KuwoSourceProvider(
     private const string DetailBase = "http://wapi.kuwo.cn/api/www/music/musicInfo";
     private const string AntiBase = "http://antiserver.kuwo.cn/anti.s";
 
+    /// <summary>
+    /// 酷我 anti.s 对无版权/VIP 曲目返回的通用 11 秒占位试听文件名。
+    /// 路径特征：/nf/resource/n1/69/32/588957081.mp3 —— 所有不可下载曲目都会返回这个文件的直链，
+    /// 只是前面的鉴权 token 不同，下载下来的内容完全一致（约 11 秒）。
+    /// 真实可下载曲目走 /resource/30106/trackmedia/ 路径，每首歌有唯一文件名。
+    /// </summary>
+    private const string PlaceholderFileName = "588957081.mp3";
+
     /// <inheritdoc />
     public string Provider => "kuwo";
 
@@ -74,8 +82,9 @@ public sealed partial class KuwoSourceProvider(
                 CoverUrl: null,
                 SourcePageUrl: $"https://www.kuwo.cn/play_detail/{numericId}",
                 License: null,
-                SourceQualities.High,
-                IsLosslessAvailable: false));
+                SourceQualities.Standard,
+                IsLosslessAvailable: false,
+                ReleaseYear: SourceReleaseYearParser.FromJson(entry, "releaseYear", "releaseDate", "publishTime", "year")));
         }
         return results.ToArray();
     }
@@ -132,7 +141,8 @@ public sealed partial class KuwoSourceProvider(
                 $"https://www.kuwo.cn/play_detail/{rid}",
                 null,
                 SourceQualities.Standard,
-                IsLosslessAvailable: false);
+                IsLosslessAvailable: false,
+                ReleaseYear: SourceReleaseYearParser.FromJson(data, "releaseYear", "releaseDate", "publishTime", "year"));
         }
         catch (JsonException)
         {
@@ -153,6 +163,10 @@ public sealed partial class KuwoSourceProvider(
     /// 注意：不能传 br=192k/320k/320kmp3 —— 实测（2026-10）带这些参数时 anti.s 对任意 rid 都返回
     /// 同一个兜底直链（.../588957081.mp3），会让不同歌曲下载出相同字节并被误判为重复。
     /// 不传 br 才会返回该曲目自身的资源（未登录态下最高 128k）。
+    ///
+    /// 前置拦截：酷我 anti.s 对无版权/VIP 曲目不报错误码而是返回 11 秒占位试听文件（588957081.mp3），
+    /// 会被下载阶段的时长校验拦截为「占位/试听资源」——但那样会白白浪费 3 次自动重试。
+    /// 这里提前识别占位 URL 并直接抛出，让失败语义更明确、也不浪费重试配额。
     /// </remarks>
     public async Task<IReadOnlyList<SourceDownloadInfo>> ResolveDownloadCandidatesAsync(
         string providerTrackId,
@@ -169,7 +183,7 @@ public sealed partial class KuwoSourceProvider(
             client,
             $"{AntiBase}?type=convert_url3&rid={Uri.EscapeDataString(rid)}&format=flac&response=url",
             cancellationToken);
-        if (flacUrl is not null)
+        if (flacUrl is not null && !IsPlaceholderUrl(flacUrl))
             candidates.Add(new SourceDownloadInfo(flacUrl, "flac", IsLossless: true, BitrateKbps: null, SourceQualities.Lossless));
 
         // 2) 有损兜底：该曲目自身的最高可用码率（未登录态为 128k）。
@@ -177,13 +191,47 @@ public sealed partial class KuwoSourceProvider(
             client,
             $"{AntiBase}?type=convert_url&rid={Uri.EscapeDataString(rid)}&format=mp3&response=url",
             cancellationToken);
-        if (mp3Url is not null && !candidates.Any(c => string.Equals(c.DownloadUrl, mp3Url, StringComparison.Ordinal)))
+        if (mp3Url is not null && !IsPlaceholderUrl(mp3Url)
+            && !candidates.Any(c => string.Equals(c.DownloadUrl, mp3Url, StringComparison.Ordinal)))
             candidates.Add(new SourceDownloadInfo(mp3Url, "mp3", IsLossless: false, BitrateKbps: 128, SourceQualities.Standard));
 
         if (candidates.Count == 0)
-            throw new SourceUnavailableException("酷我未返回可下载资源（该曲目可能无版权、已下架或需要登录）。");
+            throw new SourceUnavailableException("酷我未返回可下载资源（该曲目可能需要 VIP、无版权或已下架）。");
         return candidates;
     }
+
+    /// <summary>
+    /// 轻量预判：调 anti.s convert_url 检查返回的直链是否为占位 URL。
+    /// 占位 URL（588957081.mp3）意味着该曲目需要 VIP / 无版权，不可下载。
+    /// 超时/异常时返回 true（保守放行）。
+    /// </summary>
+    public async Task<bool> CanDownloadAsync(string providerTrackId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var rid = providerTrackId.StartsWith("MUSIC_", StringComparison.OrdinalIgnoreCase)
+                ? providerTrackId
+                : $"MUSIC_{providerTrackId}";
+            var client = httpClientFactory.CreateClient(HttpClientName);
+            // 用 convert_url（有损档）做预判：anti.s 返回纯文本，无需下载音频文件。
+            var url = await TryResolveUrlAsync(
+                client,
+                $"{AntiBase}?type=convert_url&rid={Uri.EscapeDataString(rid)}&format=mp3&response=url",
+                cancellationToken);
+            return url is not null && !IsPlaceholderUrl(url);
+        }
+        catch
+        {
+            return true; // 超时/异常时保守放行
+        }
+    }
+
+    /// <summary>
+    /// 判断 anti.s 返回的直链是否指向占位试听文件（588957081.mp3，所有不可下载曲目共用的 11 秒片段）。
+    /// 真实可下载曲目走 trackmedia/ 路径，每首歌文件名唯一。
+    /// </summary>
+    private static bool IsPlaceholderUrl(string url) =>
+        url.Contains(PlaceholderFileName, StringComparison.Ordinal);
 
     /// <summary>解析一个 convert_url 请求：返回 http 直链，失败/空资源返回 null（不抛异常，便于逐级降档）。</summary>
     private static async Task<string?> TryResolveUrlAsync(HttpClient client, string url, CancellationToken cancellationToken)

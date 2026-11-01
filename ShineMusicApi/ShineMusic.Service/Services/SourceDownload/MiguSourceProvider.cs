@@ -26,6 +26,8 @@ public sealed partial class MiguSourceProvider(
     IHttpClientFactory httpClientFactory,
     IOptions<SourceDownloadOptions> options) : IMusicSourceProvider, ISourceFileDownloader
 {
+    private sealed record MiguResourceInfo(string? ContentId, bool HasSq, bool HasHq);
+
     /// <summary>系统 curl.exe 路径（Windows 自带于 System32）。</summary>
     private static readonly string CurlPath = ResolveCurlPath();
 
@@ -122,8 +124,9 @@ public sealed partial class MiguSourceProvider(
                 coverUrl,
                 SourcePageUrl: string.IsNullOrWhiteSpace(songId) ? null : $"https://music.migu.cn/v3/music/song/{songId}",
                 License: null,
-                InferQuality(entry),
-                IsLosslessAvailable: HasQuality(entry, "SQ")));
+                InferQuality(entry, options.Value.Migu.ToneFlag),
+                IsLosslessAvailable: HasQuality(entry, "SQ"),
+                ReleaseYear: SourceReleaseYearParser.FromJson(entry, "releaseYear", "releaseDate", "publishDate", "publishTime")));
         }
         return results.ToArray();
     }
@@ -172,12 +175,12 @@ public sealed partial class MiguSourceProvider(
             coverUrl,
             SourcePageUrl: string.IsNullOrWhiteSpace(songId) ? null : $"https://music.migu.cn/v3/music/song/{songId}",
             License: null,
-            InferQuality(entry),
-            IsLosslessAvailable: HasQuality(entry, "SQ"));
+            InferQuality(entry, options.Value.Migu.ToneFlag),
+            IsLosslessAvailable: HasQuality(entry, "SQ"),
+            ReleaseYear: SourceReleaseYearParser.FromJson(entry, "releaseYear", "releaseDate", "publishDate", "publishTime"));
     }
 
-    /// <summary>按 copyrightId 调 resourceinfo 取 contentId（HTTP 端点，.NET 可直连）。</summary>
-    private async Task<string?> GetContentIdAsync(string providerTrackId, CancellationToken cancellationToken)
+    private async Task<MiguResourceInfo?> GetResourceInfoAsync(string providerTrackId, CancellationToken cancellationToken)
     {
         var client = httpClientFactory.CreateClient(HttpClientName);
         var infoUrl = $"{ResourceInfoBase}?copyrightId={Uri.EscapeDataString(providerTrackId)}&resourceType=2";
@@ -192,7 +195,13 @@ public sealed partial class MiguSourceProvider(
         if (infoDoc.RootElement.TryGetProperty("resource", out var res)
             && res.ValueKind == JsonValueKind.Array
             && res.GetArrayLength() > 0)
-            return GetString(res[0], "contentId");
+        {
+            var entry = res[0];
+            return new MiguResourceInfo(
+                GetString(entry, "contentId"),
+                HasQuality(entry, "SQ"),
+                HasQuality(entry, "HQ"));
+        }
         return null;
     }
 
@@ -200,14 +209,13 @@ public sealed partial class MiguSourceProvider(
     public async Task<SourceDownloadInfo> ResolveDownloadAsync(string providerTrackId, CancellationToken cancellationToken)
     {
         // 1) 取 contentId（resourceinfo 按 copyrightId 查询）。
-        var contentId = await GetContentIdAsync(providerTrackId, cancellationToken);
-        if (string.IsNullOrWhiteSpace(contentId))
+        var resource = await GetResourceInfoAsync(providerTrackId, cancellationToken);
+        if (resource is null || string.IsNullOrWhiteSpace(resource.ContentId))
             throw new SourceUnavailableException("咪咕未返回 contentId，无法解析下载地址。");
+        var contentId = resource.ContentId;
 
         // 2) 调 h5/v2.4 取 PQ 直链（响应加密）。
-        var desiredTone = options.Value.Migu.ToneFlag;
-        if (!ToneUrlSegments.ContainsKey(desiredTone))
-            desiredTone = "HQ";
+        var desiredTone = SelectTone(resource, options.Value.Migu.ToneFlag);
         var listenUrl = $"{ListenUrlH5Base}?contentId={Uri.EscapeDataString(contentId)}"
             + $"&copyrightId={Uri.EscapeDataString(providerTrackId)}&resourceType=2&netType=01"
             + $"&toneFlag=PQ&scene=&lowerQualityContentId={Uri.EscapeDataString(contentId)}";
@@ -245,7 +253,7 @@ public sealed partial class MiguSourceProvider(
             "SQ" => null,
             _ => 320,
         };
-        var quality = isLossless ? SourceQualities.Lossless : (bitrate >= 256 ? SourceQualities.High : SourceQualities.Standard);
+        var quality = QualityForTone(desiredTone);
         var container = ToneExtensions.TryGetValue(desiredTone, out var ext) ? ext.TrimStart('.') : "mp3";
         return new SourceDownloadInfo(finalUrl, container, isLossless, bitrate, quality);
     }
@@ -292,14 +300,38 @@ public sealed partial class MiguSourceProvider(
     }
 
     /// <summary>从搜索/详情条目推断音质等级。</summary>
-    private static string InferQuality(JsonElement entry)
+    private static string InferQuality(JsonElement entry, string configuredTone)
     {
-        if (HasQuality(entry, "SQ"))
+        var maxTone = NormalizeTone(configuredTone);
+        if (maxTone == "SQ" && HasQuality(entry, "SQ"))
             return SourceQualities.Lossless;
-        if (HasQuality(entry, "HQ"))
+        if (maxTone != "PQ" && HasQuality(entry, "HQ"))
             return SourceQualities.High;
         return SourceQualities.Standard;
     }
+
+    private static string SelectTone(MiguResourceInfo resource, string configuredTone)
+    {
+        var maxTone = NormalizeTone(configuredTone);
+        if (maxTone == "SQ" && resource.HasSq)
+            return "SQ";
+        if (maxTone != "PQ" && resource.HasHq)
+            return "HQ";
+        return "PQ";
+    }
+
+    private static string NormalizeTone(string tone)
+    {
+        var normalized = tone.ToUpperInvariant();
+        return ToneUrlSegments.ContainsKey(normalized) ? normalized : "HQ";
+    }
+
+    private static string QualityForTone(string tone) => tone switch
+    {
+        "SQ" => SourceQualities.Lossless,
+        "HQ" => SourceQualities.High,
+        _ => SourceQualities.Standard
+    };
 
     /// <summary>检查条目是否提供指定音质（遍历 newRateFormats/rateFormats）。</summary>
     private static bool HasQuality(JsonElement entry, string formatType)
@@ -416,14 +448,12 @@ public sealed partial class MiguSourceProvider(
     public async Task<SourceFileDownload> DownloadToFileAsync(
         string providerTrackId, string outputDirectory, string fileBaseName, CancellationToken cancellationToken)
     {
-        var desiredTone = options.Value.Migu.ToneFlag;
-        if (!ToneUrlSegments.ContainsKey(desiredTone))
-            desiredTone = "HQ";
-
         // 1) 取 contentId（resourceinfo 为 HTTP，.NET 可直连）。
-        var contentId = await GetContentIdAsync(providerTrackId, cancellationToken);
-        if (string.IsNullOrWhiteSpace(contentId))
+        var resource = await GetResourceInfoAsync(providerTrackId, cancellationToken);
+        if (resource is null || string.IsNullOrWhiteSpace(resource.ContentId))
             throw new SourceUnavailableException("咪咕未返回 contentId，无法解析下载地址。");
+        var contentId = resource.ContentId;
+        var desiredTone = SelectTone(resource, options.Value.Migu.ToneFlag);
 
         // 2) curl 取 h5/v2.4 加密响应并解密得到 PQ 直链。
         var listenUrl = $"{ListenUrlH5Base}?contentId={Uri.EscapeDataString(contentId)}"
@@ -454,7 +484,7 @@ public sealed partial class MiguSourceProvider(
         var finalUrl = ChangeQuality(pqUrl, desiredTone);
         var extension = ToneExtensions.TryGetValue(desiredTone, out var ext) ? ext : ".mp3";
         var isLossless = desiredTone == "SQ";
-        var quality = isLossless ? SourceQualities.Lossless : (desiredTone == "HQ" ? SourceQualities.High : SourceQualities.Standard);
+        var quality = QualityForTone(desiredTone);
         var outputPath = Path.Combine(outputDirectory, fileBaseName + extension);
 
         // 4) curl 下载音频文件到隔离区（CDN 同样拦截 .NET HttpClient）。

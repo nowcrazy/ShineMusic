@@ -1,5 +1,5 @@
 /**
- * 管理端运营歌单服务：歌单的创建、信息修改、删除与曲目编排。
+ * 管理端精选歌单服务：精选内容的创建、信息修改、删除与曲目编排。
  *
  * 对齐后端 /api/v1/admin/collections 下的端点（仅管理员）：
  * - POST   /admin/collections            创建歌单（标题 + 曲目数组 + 可选描述/封面）
@@ -33,7 +33,7 @@ export interface UpdateCollectionInput {
   artworkId?: string | null // 新封面 ID（可选）
 }
 
-/** 创建运营歌单，返回新建歌单摘要。 */
+/** 创建精选歌单，返回新建歌单摘要。 */
 export function createCollection(input: CreateCollectionInput): Promise<ApiCollectionSummary> {
   return http.post<ApiCollectionSummary>(`${API_PREFIX}/admin/collections`, input)
 }

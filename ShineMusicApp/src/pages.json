@@ -77,7 +77,7 @@
     },
     {
       "path": "pages/admin/collections",
-      "style": { "navigationBarTitleText": "歌单管理" }
+      "style": { "navigationBarTitleText": "精选歌单" }
     },
     {
       "path": "pages/admin/catalog",

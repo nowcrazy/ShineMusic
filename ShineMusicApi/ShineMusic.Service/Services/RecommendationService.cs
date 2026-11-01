@@ -14,6 +14,7 @@
 // 匿名用户或个性化候选为空时，退化为“全局热度 + 最新”兜底列表（Personalized=false）。
 
 using ShineMusic.Model.Entities;
+using ShineMusic.Model.Contracts;
 using SqlSugar;
 
 namespace ShineMusic.Service;
@@ -25,18 +26,15 @@ namespace ShineMusic.Service;
 public sealed record DailyRecommendationResult(IReadOnlyList<Track> Tracks, bool Personalized, DateOnly Date);
 
 /// <summary>每日推荐服务（Scoped，依赖 SqlSugar 客户端；读写与调用方共享同一请求作用域）。</summary>
-public sealed class RecommendationService(ISqlSugarClient db)
+public sealed class RecommendationService(ISqlSugarClient db, RecommendationStrategyService strategyService)
 {
-    /// <summary>跨日去重窗口：近 N 天内已推荐过的曲目会被降权。</summary>
-    private const int NonRepeatDays = 7;
-
     /// <summary>
     /// 获取某用户的每日推荐。
     /// </summary>
     /// <param name="userId">用户 ID；为 null 表示匿名（走兜底列表）。</param>
     /// <param name="limit">返回条数上限（默认 30）。</param>
     /// <param name="cancellationToken">取消令牌。</param>
-    public async Task<DailyRecommendationResult> GetDailyAsync(Guid? userId, int limit, CancellationToken cancellationToken)
+    public async Task<DailyRecommendationResult> GetDailyAsync(Guid? userId, int? limit, CancellationToken cancellationToken)
     {
         var today = DateOnly.FromDateTime(DateTime.Now);
         var dateKey = ToDateKey(today);
@@ -58,7 +56,14 @@ public sealed class RecommendationService(ISqlSugarClient db)
             }
 
             // 2) 现算并落库。
-            var personalized = await ComputePersonalizedAsync(uid, limit, today, dateKey, cancellationToken);
+            var strategy = await strategyService.GetActiveAsync(today, cancellationToken);
+            var personalized = await ComputePersonalizedAsync(
+                uid,
+                Math.Clamp(limit ?? strategy.DailyTrackCount, 1, 50),
+                today,
+                dateKey,
+                strategy,
+                cancellationToken);
             if (personalized.Count > 0)
             {
                 await PersistAsync(uid, dateKey, personalized.Select(track => track.Id).ToList(), cancellationToken);
@@ -67,12 +72,21 @@ public sealed class RecommendationService(ISqlSugarClient db)
         }
 
         // 3) 匿名 / 无个性化候选：热度 + 最新兜底（不落库）。
-        var fallback = await ComputeFallbackAsync(limit, cancellationToken);
+        var fallbackStrategy = await strategyService.GetActiveAsync(today, cancellationToken);
+        var fallback = await ComputeFallbackAsync(
+            Math.Clamp(limit ?? fallbackStrategy.DailyTrackCount, 1, 50),
+            cancellationToken);
         return new DailyRecommendationResult(fallback, false, today);
     }
 
     /// <summary>基于用户行为计算个性化推荐（内存打分排序）。</summary>
-    private async Task<List<Track>> ComputePersonalizedAsync(Guid userId, int limit, DateOnly today, int dateKey, CancellationToken cancellationToken)
+    private async Task<List<Track>> ComputePersonalizedAsync(
+        Guid userId,
+        int limit,
+        DateOnly today,
+        int dateKey,
+        RecommendationStrategyValuesDto strategy,
+        CancellationToken cancellationToken)
     {
         // —— 聚合行为信号 ——
         var playCounts = await db.Queryable<ListeningEvent>()
@@ -103,8 +117,8 @@ public sealed class RecommendationService(ISqlSugarClient db)
             .ToListAsync(cancellationToken);
 
         // —— 近 N 天已推荐过的曲目（跨日去重） ——
-        var recentKeys = new List<int>(NonRepeatDays);
-        for (var offset = 1; offset <= NonRepeatDays; offset++)
+        var recentKeys = new List<int>(strategy.NonRepeatDays);
+        for (var offset = 1; offset <= strategy.NonRepeatDays; offset++)
             recentKeys.Add(ToDateKey(today.AddDays(-offset)));
         var recentRecommended = await db.Queryable<DailyRecommendationItem>()
             .Where(item => item.UserId == userId && recentKeys.Contains(item.DateKey))
@@ -150,27 +164,27 @@ public sealed class RecommendationService(ISqlSugarClient db)
 
             // 歌手亲和：用户越常听该艺人的歌，其曲目越靠前。
             foreach (var artistId in artistIdsByTrack.GetValueOrDefault(candidate.Id) ?? [])
-                score += 2.5 * artistMap.GetValueOrDefault(artistId, 0);
+                score += strategy.ArtistAffinityWeight * artistMap.GetValueOrDefault(artistId, 0);
 
             // 歌曲播放次数（封顶，避免单曲刷分）。
-            score += 3.0 * Math.Min(playMap.GetValueOrDefault(candidate.Id, 0), 20);
+            score += strategy.PlayCountWeight * Math.Min(playMap.GetValueOrDefault(candidate.Id, 0), strategy.PlayCountCap);
 
             // 跳过惩罚。
-            score -= 4.0 * skipMap.GetValueOrDefault(candidate.Id, 0);
+            score -= strategy.SkipPenalty * skipMap.GetValueOrDefault(candidate.Id, 0);
 
             // 显式正/负反馈。
-            if (favoriteSet.Contains(candidate.Id)) score += 6;
-            if (likedSet.Contains(candidate.Id)) score += 8;
-            if (dislikedSet.Contains(candidate.Id)) score -= 40;
+            if (favoriteSet.Contains(candidate.Id)) score += strategy.FavoriteBoost;
+            if (likedSet.Contains(candidate.Id)) score += strategy.LikeBoost;
+            if (dislikedSet.Contains(candidate.Id)) score -= strategy.DislikePenalty;
 
             // 跨日去重：近 N 天推过则降权（不硬排除，曲库不足时仍可补位）。
-            if (recentSet.Contains(candidate.Id)) score -= 25;
+            if (recentSet.Contains(candidate.Id)) score -= strategy.RecentRecommendationPenalty;
 
-            // 新歌轻微加权（30 天内线性衰减）。
+            // 新歌加权在线性窗口内衰减。
             if (candidate.PublishedAt.HasValue)
             {
                 var days = (DateTimeOffset.UtcNow - candidate.PublishedAt.Value).TotalDays;
-                score += Math.Max(0, 3 - days / 30.0);
+                score += Math.Max(0, strategy.NewTrackBoostMax * (1 - days / strategy.NewTrackBoostDays));
             }
 
             // 稳定抖动：同日同用户结果可复现。

@@ -93,6 +93,36 @@ public sealed class NeteaseSourceProvider(
     }
 
     /// <summary>
+    /// 轻量预判：调 enhance/player/url 检查官方 API 是否返回有效下载直链。
+    /// 不做 VIP 回退探测（第三方端点开销大），仅检查官方接口。
+    /// fee!=0 的 VIP 曲目官方 API 通常返回空 url → 判定不可下载（除非 VIP 回退开启）。
+    /// 超时/异常时返回 true（保守放行）。
+    /// </summary>
+    public async Task<bool> CanDownloadAsync(string providerTrackId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var ids = JsonSerializer.Serialize(new[] { long.Parse(providerTrackId) });
+            var url = $"{PlayerUrlBase()}?ids={Uri.EscapeDataString(ids)}&br={options.Value.Netease.Bitrate}";
+            using var doc = await GetJsonAsync(url, cancellationToken);
+            if (doc is null || !doc.RootElement.TryGetProperty("data", out var data)
+                || data.ValueKind != JsonValueKind.Array || data.GetArrayLength() == 0)
+                return true; // 响应异常，保守放行
+            var downloadUrl = GetString(data[0], "url");
+            // VIP 回退开启时，官方返回空 url 不代表真的不可下载——第三方端点可能解锁。
+            if (string.IsNullOrWhiteSpace(downloadUrl))
+                return !options.Value.Netease.VipFallback.Enabled
+                    && (options.Value.Netease.VipFallback.Endpoints is null
+                        || options.Value.Netease.VipFallback.Endpoints.Count == 0);
+            return true;
+        }
+        catch
+        {
+            return true; // 超时/异常时保守放行
+        }
+    }
+
+    /// <summary>
     /// VIP 曲目回退解析：按配置的端点链依次尝试第三方「解锁」服务获取下载直链。
     /// 端点类型：
     ///   - nextmusic：共享 VIP 账号，POST 两步（/api/ip 取 IP → /api/getSongUrl 取 url），返回完整歌曲（320k/无损）。
@@ -301,9 +331,11 @@ public sealed class NeteaseSourceProvider(
             Genres: [],
             coverUrl,
             SourcePageUrl: $"https://music.163.com/song?id={id}",
-            License: fee == 0 ? null : $"网易云 VIP（fee={fee}）",
+            License: DescribeFee(fee),
             Quality: SourceQualities.High,
-            IsLosslessAvailable: false);
+            IsLosslessAvailable: false,
+            ReleaseYear: SourceReleaseYearParser.FromJson(album, "publishTime", "releaseDate")
+                ?? SourceReleaseYearParser.FromJson(song, "publishTime", "releaseDate"));
     }
 
     /// <summary>解析详情条目（缩写字段 ar/al/dt，封面 picUrl 更完整）。</summary>
@@ -344,9 +376,11 @@ public sealed class NeteaseSourceProvider(
             Genres: [],
             coverUrl,
             SourcePageUrl: $"https://music.163.com/song?id={id}",
-            License: fee == 0 ? null : $"网易云 VIP（fee={fee}）",
+            License: DescribeFee(fee),
             Quality: SourceQualities.High,
-            IsLosslessAvailable: false);
+            IsLosslessAvailable: false,
+            ReleaseYear: SourceReleaseYearParser.FromJson(album, "publishTime", "releaseDate")
+                ?? SourceReleaseYearParser.FromJson(song, "publishTime", "releaseDate"));
     }
 
     /// <summary>GET JSON 并解析；网络/格式异常返回 null（搜索场景容忍失败，由编排层聚合多源结果）。</summary>
@@ -387,6 +421,20 @@ public sealed class NeteaseSourceProvider(
 
     private static int? GetInt(JsonElement element, string name)
         => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number) ? number : null;
+
+    /// <summary>
+    /// 把网易云的 fee 字段翻译成可读的版权说明（仅用于展示与失败文案，不参与「是否下载」的判定）。
+    /// 常见取值：0 免费；1 会员；4 数字专辑需购买；8 低音质免费、高音质需会员。
+    /// 注意 fee=8 并非 VIP 限制，直接写成「VIP」会误导。
+    /// </summary>
+    private static string? DescribeFee(int fee) => fee switch
+    {
+        0 => null,
+        1 => "网易云会员专享（fee=1）",
+        4 => "网易云数字专辑，需购买（fee=4）",
+        8 => "低音质免费、高音质需会员（fee=8）",
+        _ => $"网易云版权受限（fee={fee}）",
+    };
 
     /// <summary>数字或字符串形态的 Id 统一转字符串。</summary>
     private static string? GetNumberAsString(JsonElement element, string name)

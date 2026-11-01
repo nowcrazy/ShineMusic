@@ -33,13 +33,14 @@ import {
   getDownloadTasks,
   retryDownloadTask,
   searchSources,
+  switchSource,
   SourceProviderLabel,
   SourceQualityLabel,
   SourceTaskStatus,
   SourceTaskStatusLabel,
   type ExternalDownloadTask,
   type SourceProviderFilter,
-  type SourceProviderName,
+  type SourceSearchMode,
   type SourceSearchItem,
 } from '@/services/admin-source-download'
 
@@ -48,6 +49,7 @@ const { t } = useI18n()
 // —— 搜索区状态 ——
 const keyword = ref('')
 const providerFilter = ref<SourceProviderFilter>('all')
+const searchMode = ref<SourceSearchMode>('title')
 const searching = ref(false)
 const searchError = ref('')
 const searched = ref(false)
@@ -61,20 +63,86 @@ const tasks = ref<readonly ExternalDownloadTask[]>([])
 const tasksLoading = ref(false)
 const tasksError = ref('')
 const statusFilter = ref('')
+const taskSort = ref('createdAt:desc')
 const creating = ref(false)
 const retryingId = ref('')
+
+const resultSortOptions = [
+  { value: 'quality', label: 'sourceDownload.sortQuality' },
+  { value: 'year-desc', label: 'sourceDownload.sortYearNewest' },
+  { value: 'year-asc', label: 'sourceDownload.sortYearOldest' },
+  { value: 'title-asc', label: 'sourceDownload.sortTitleAsc' },
+  { value: 'title-desc', label: 'sourceDownload.sortTitleDesc' },
+  { value: 'duration-desc', label: 'sourceDownload.sortDuration' },
+] as const
+const resultSort = ref<(typeof resultSortOptions)[number]['value']>('quality')
+const sortedResults = computed(() => [...results.value].sort((a, b) => {
+  switch (resultSort.value) {
+    case 'year-desc':
+      return (b.releaseYear ?? Number.NEGATIVE_INFINITY) - (a.releaseYear ?? Number.NEGATIVE_INFINITY)
+    case 'year-asc':
+      return (a.releaseYear ?? Number.POSITIVE_INFINITY) - (b.releaseYear ?? Number.POSITIVE_INFINITY)
+    case 'title-asc':
+      return a.title.localeCompare(b.title)
+    case 'title-desc':
+      return b.title.localeCompare(a.title)
+    case 'duration-desc':
+      return (b.durationMs ?? 0) - (a.durationMs ?? 0)
+    default: {
+      if (searchMode.value === 'album' || searchMode.value === 'artist-album') {
+        const groupOrder = `${a.albumTitle ?? ''}|${a.artists.join(',')}|${a.provider}`
+          .localeCompare(`${b.albumTitle ?? ''}|${b.artists.join(',')}|${b.provider}`)
+        if (groupOrder !== 0) return groupOrder
+      }
+      return (qualityRank[a.quality] ?? 3) - (qualityRank[b.quality] ?? 3)
+    }
+  }
+}))
+const taskSortOptions = [
+  { value: 'createdAt:desc', label: 'sourceDownload.sortNewest' },
+  { value: 'createdAt:asc', label: 'sourceDownload.sortOldest' },
+  { value: 'releaseYear:desc', label: 'sourceDownload.sortYearNewest' },
+  { value: 'releaseYear:asc', label: 'sourceDownload.sortYearOldest' },
+  { value: 'title:asc', label: 'sourceDownload.sortTitleAsc' },
+  { value: 'title:desc', label: 'sourceDownload.sortTitleDesc' },
+  { value: 'status:asc', label: 'sourceDownload.sortStatus' },
+] as const
 
 // 自动刷新定时器
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
+// 音质排序权重（与后端 SourceQualities.Rank 对齐，值越小越好）
+const qualityRank: Record<string, number> = {
+  lossless: 0,
+  high: 1,
+  standard: 2,
+}
+
 const providerOptions: { value: SourceProviderFilter; label: string }[] = [
   { value: 'all', label: 'sourceDownload.providerAll' },
+  { value: 'netease', label: 'sourceDownload.providerNetease' },
+  { value: 'kuwo', label: 'sourceDownload.providerKuwo' },
+  { value: 'kugou', label: 'sourceDownload.providerKugou' },
+  { value: 'migu', label: 'sourceDownload.providerMigu' },
   { value: 'audius', label: 'Audius' },
   { value: 'jamendo', label: 'Jamendo' },
-  { value: 'ytmusic', label: 'YT Music' },
-  { value: 'soundcloud', label: 'SoundCloud' },
-  { value: 'kuwo', label: 'Kuwo' },
 ]
+
+const searchModeOptions: { value: SourceSearchMode; label: string }[] = [
+  { value: 'title', label: 'sourceDownload.searchModeTitle' },
+  { value: 'artist', label: 'sourceDownload.searchModeArtist' },
+  { value: 'artist-track', label: 'sourceDownload.searchModeArtistTrack' },
+  { value: 'artist-album', label: 'sourceDownload.searchModeArtistAlbum' },
+  { value: 'album', label: 'sourceDownload.searchModeAlbum' },
+]
+
+const searchPlaceholderKeys: Record<SourceSearchMode, string> = {
+  title: 'sourceDownload.titleSearchPlaceholder',
+  artist: 'sourceDownload.artistSearchPlaceholder',
+  'artist-track': 'sourceDownload.artistTrackSearchPlaceholder',
+  'artist-album': 'sourceDownload.artistAlbumSearchPlaceholder',
+  album: 'sourceDownload.albumSearchPlaceholder',
+}
 
 const statusFilters = ['', SourceTaskStatus.Queued, SourceTaskStatus.Downloading, SourceTaskStatus.ImportQueued, SourceTaskStatus.Completed, SourceTaskStatus.Failed]
 
@@ -130,13 +198,17 @@ async function doSearch() {
   searchError.value = ''
   searched.value = false
   try {
-    const response = await searchSources(query, providerFilter.value)
-    results.value = response.results
+    const response = await searchSources(query, providerFilter.value, 20, searchMode.value)
+    results.value = [...response.results]
     providerErrors.value = response.providerErrors
     searched.value = true
     // 音源切换后清掉已失效的勾选
     const validKeys = new Set(response.results.map((item) => resultKey(item)))
     selectedKeys.value = selectedKeys.value.filter((key) => validKeys.has(key))
+    // 提示过滤了不可下载的曲目
+    if (response.filteredCount && response.filteredCount > 0 && response.results.length > 0) {
+      uni.showToast({ title: t('sourceDownload.filteredUnavailable', { count: response.filteredCount }), icon: 'none' })
+    }
   } catch (error) {
     searchError.value = describeError(error, t('sourceDownload.searchFailed'))
   } finally {
@@ -148,6 +220,12 @@ async function doSearch() {
 function switchProvider(value: SourceProviderFilter) {
   if (providerFilter.value === value) return
   providerFilter.value = value
+  if (keyword.value.trim()) void doSearch()
+}
+
+function switchSearchMode(value: SourceSearchMode) {
+  if (searchMode.value === value) return
+  searchMode.value = value
   if (keyword.value.trim()) void doSearch()
 }
 
@@ -166,26 +244,16 @@ function isSelected(item: SourceSearchItem): boolean {
   return selectedKeys.value.includes(resultKey(item))
 }
 
-/** 下载所选：按音源分组批量创建任务 */
+/** 下载所选：跨 provider 同曲结果合并为多候选换源任务，按音质排序提交 */
 async function downloadSelected() {
   if (creating.value || selectedKeys.value.length === 0) return
   creating.value = true
   try {
-    // 按 provider 分组，逐组创建
-    const groups = new Map<string, string[]>()
-    for (const item of results.value) {
-      if (!isSelected(item)) continue
-      const list = groups.get(item.provider) ?? []
-      list.push(item.providerTrackId)
-      groups.set(item.provider, list)
-    }
-    let created = 0
-    let skipped = 0
-    for (const [provider, ids] of groups) {
-      const result = await createDownloadTasks(provider as SourceProviderName, ids)
-      created += result.created.length
-      skipped += result.skippedDuplicates.length
-    }
+    // 收集选中的搜索结果
+    const selectedItems = results.value.filter((item) => isSelected(item))
+    const result = await createDownloadTasks(selectedItems)
+    const created = result.created.length
+    const skipped = result.skippedDuplicates.length
     selectedKeys.value = []
     if (created > 0) {
       uni.showToast({ title: t('sourceDownload.downloadCreated', { count: created }), icon: 'none' })
@@ -205,7 +273,8 @@ async function loadTasks() {
   tasksLoading.value = true
   tasksError.value = ''
   try {
-    const result = await getDownloadTasks(statusFilter.value || undefined, 1, 50)
+    const [sortBy, sortDirection] = taskSort.value.split(':')
+    const result = await getDownloadTasks(statusFilter.value || undefined, 1, 50, sortBy, sortDirection)
     tasks.value = result.items
   } catch (error) {
     tasksError.value = describeError(error, t('sourceDownload.loadTasksFailed'))
@@ -217,7 +286,8 @@ async function loadTasks() {
 /** 静默刷新任务（不打 loading，不报错） */
 async function refreshTasksSilently() {
   try {
-    const result = await getDownloadTasks(statusFilter.value || undefined, 1, 50)
+    const [sortBy, sortDirection] = taskSort.value.split(':')
+    const result = await getDownloadTasks(statusFilter.value || undefined, 1, 50, sortBy, sortDirection)
     tasks.value = result.items
   } catch {
     // 静默失败
@@ -231,6 +301,12 @@ function switchStatusFilter(value: string) {
   void loadTasks()
 }
 
+function switchTaskSort(value: string) {
+  if (taskSort.value === value) return
+  taskSort.value = value
+  void loadTasks()
+}
+
 /** 重试失败任务 */
 async function retryTask(task: ExternalDownloadTask) {
   if (retryingId.value) return
@@ -241,6 +317,25 @@ async function retryTask(task: ExternalDownloadTask) {
     await loadTasks()
   } catch (error) {
     uni.showToast({ title: describeError(error, t('sourceDownload.retryFailed')), icon: 'none' })
+  } finally {
+    retryingId.value = ''
+  }
+}
+
+/** 换源：对已失败任务换一个音源平台重新创建下载任务 */
+async function switchSourceForTask(task: ExternalDownloadTask) {
+  if (retryingId.value) return
+  retryingId.value = task.id
+  try {
+    const result = await switchSource(task.id)
+    if (result.autoMatched) {
+      uni.showToast({ title: providerLabel(result.newProvider), icon: 'none' })
+    } else {
+      uni.showToast({ title: result.message || t('sourceDownload.switchSourceFailed'), icon: 'none' })
+    }
+    await loadTasks()
+  } catch (error) {
+    uni.showToast({ title: describeError(error, t('sourceDownload.switchSourceFailed')), icon: 'none' })
   } finally {
     retryingId.value = ''
   }
@@ -266,7 +361,8 @@ function qualityLabel(quality: string | null | undefined): string {
 
 /** 音源展示名（ytmusic → YT Music 等，未知名称回退原始 id） */
 function providerLabel(provider: string): string {
-  return SourceProviderLabel[provider] ?? provider
+  const label = SourceProviderLabel[provider] ?? provider
+  return label.startsWith('sourceDownload.') ? t(label) : label
 }
 
 /** 状态样式 */
@@ -313,13 +409,24 @@ function formatDuration(ms: number | null | undefined): string {
           <input
             v-model="keyword"
             class="search-input"
-            :placeholder="$t('sourceDownload.searchPlaceholder')"
+            :placeholder="$t(searchPlaceholderKeys[searchMode])"
             confirm-type="search"
             @confirm="doSearch"
           />
         </view>
         <view class="search-btn" :class="{ disabled: searching || !keyword.trim() }" @tap="doSearch">
           <text>{{ searching ? $t('sourceDownload.searching') : $t('sourceDownload.searchBtn') }}</text>
+        </view>
+      </view>
+      <view class="provider-row">
+        <view
+          v-for="option in searchModeOptions"
+          :key="option.value"
+          class="provider-chip"
+          :class="{ active: searchMode === option.value }"
+          @tap="switchSearchMode(option.value)"
+        >
+          <text>{{ $t(option.label) }}</text>
         </view>
       </view>
       <view class="provider-row">
@@ -340,7 +447,7 @@ function formatDuration(ms: number | null | undefined): string {
       <AlertCircle :size="15" />
       <text>
         {{ $t('sourceDownload.providerErrorTitle') }}：
-        {{ providerErrors.map((e) => `${e.provider} (${e.message})`).join('；') }}
+        {{ providerErrors.map((e) => `${providerLabel(e.provider)} (${e.message})`).join('；') }}
       </text>
     </view>
 
@@ -352,11 +459,23 @@ function formatDuration(ms: number | null | undefined): string {
     </view>
     <view v-else-if="searched && !results.length" class="state-message">
       <Music2 :size="26" />
-      <text>{{ $t('sourceDownload.noResults') }}</text>
+      <text>{{ $t('sourceDownload.noExactResults') }}</text>
     </view>
     <view v-else class="result-list">
+      <view class="sort-row">
+        <text class="sort-label">{{ $t('sourceDownload.sortLabel') }}</text>
+        <view
+          v-for="option in resultSortOptions"
+          :key="option.value"
+          class="sort-chip"
+          :class="{ active: resultSort === option.value }"
+          @tap="resultSort = option.value"
+        >
+          <text>{{ $t(option.label) }}</text>
+        </view>
+      </view>
       <view
-        v-for="item in results"
+        v-for="item in sortedResults"
         :key="resultKey(item)"
         class="result-row"
         :class="{ selected: isSelected(item) }"
@@ -375,6 +494,8 @@ function formatDuration(ms: number | null | undefined): string {
           <text class="result-title">{{ item.title || $t('sourceDownload.untitled') }}</text>
           <text class="result-meta">
             {{ item.artists.join(' / ') || $t('sourceDownload.unknownArtist') }}
+            <text v-if="item.albumTitle"> · {{ item.albumTitle }}</text>
+            <text v-if="item.releaseYear"> · {{ $t('sourceDownload.releaseYearLabel') }} {{ item.releaseYear }}</text>
             <text v-if="item.durationMs"> · {{ formatDuration(item.durationMs) }}</text>
           </text>
           <view class="result-badges">
@@ -414,6 +535,18 @@ function formatDuration(ms: number | null | undefined): string {
         >
           <text>{{ value ? statusLabel(value) : $t('sourceDownload.filterAll') }}</text>
         </view>
+        <view class="sort-row">
+          <text class="sort-label">{{ $t('sourceDownload.sortLabel') }}</text>
+          <view
+            v-for="option in taskSortOptions"
+            :key="option.value"
+            class="sort-chip"
+            :class="{ active: taskSort === option.value }"
+            @tap="switchTaskSort(option.value)"
+          >
+            <text>{{ $t(option.label) }}</text>
+          </view>
+        </view>
       </view>
 
       <view v-if="tasksLoading" class="state-message">{{ $t('sourceDownload.loadingTasks') }}</view>
@@ -432,6 +565,7 @@ function formatDuration(ms: number | null | undefined): string {
             <text class="task-title">{{ task.title || $t('sourceDownload.untitled') }}</text>
             <text class="task-meta">
               {{ task.artists.join(' / ') || $t('sourceDownload.unknownArtist') }}
+              <text v-if="task.releaseYear"> · {{ $t('sourceDownload.releaseYearLabel') }} {{ task.releaseYear }}</text>
               <text v-if="task.durationMs"> · {{ formatDuration(task.durationMs) }}</text>
             </text>
             <view class="task-badges">
@@ -465,6 +599,15 @@ function formatDuration(ms: number | null | undefined): string {
             >
               <RotateCcw :size="14" />
               <text>{{ $t('sourceDownload.retryBtn') }}</text>
+            </view>
+            <view
+              v-if="task.status === SourceTaskStatus.Failed"
+              class="action-btn switch"
+              :class="{ disabled: retryingId === task.id }"
+              @tap.stop="switchSourceForTask(task)"
+            >
+              <RefreshCw :size="14" />
+              <text>{{ $t('sourceDownload.switchSource') }}</text>
             </view>
             <view
               v-if="task.importItemId && !task.autoPublished"
@@ -522,6 +665,10 @@ function formatDuration(ms: number | null | undefined): string {
 .result-title { overflow: hidden; color: var(--sm-text); font-size: 24rpx; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .result-meta { overflow: hidden; color: var(--sm-text-2); font-size: 18rpx; text-overflow: ellipsis; white-space: nowrap; }
 .result-badges { display: flex; flex-wrap: wrap; gap: 10rpx; margin-top: 4rpx; }
+.sort-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10rpx; margin-bottom: 14rpx; }
+.sort-label { color: var(--sm-text-2); font-size: 18rpx; }
+.sort-chip { padding: 8rpx 16rpx; border: 1rpx solid var(--sm-border); border-radius: 24rpx; background: var(--sm-surface-2); color: var(--sm-text-2); font-size: 17rpx; }
+.sort-chip.active { border-color: var(--sm-accent-soft-border); background: var(--sm-accent-soft); color: var(--sm-accent); }
 
 /* 徽章 */
 .badge { display: inline-flex; align-items: center; gap: 5rpx; padding: 4rpx 14rpx; border-radius: 24rpx; font-size: 16rpx; font-weight: 700; }
@@ -569,5 +716,7 @@ function formatDuration(ms: number | null | undefined): string {
 .action-btn { display: flex; align-items: center; gap: 8rpx; padding: 12rpx 20rpx; border-radius: 26rpx; font-size: 18rpx; font-weight: 700; }
 .action-btn.retry { border: 1rpx solid var(--sm-accent-soft-border); background: var(--sm-accent-soft); color: var(--sm-accent); }
 .action-btn.retry.disabled { opacity: .5; }
+.action-btn.switch { border: 1rpx solid var(--sm-info-soft-border, var(--sm-border)); background: var(--sm-info-soft, var(--sm-surface-2)); color: var(--sm-accent-2); }
+.action-btn.switch.disabled { opacity: .5; }
 .action-btn.review { border: 1rpx solid var(--sm-border); background: var(--sm-surface-2); color: var(--sm-text-2); }
 </style>

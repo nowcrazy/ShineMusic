@@ -2,9 +2,9 @@
 // 放在 ShineMusic.Common 而非 Service，是因为中间件（Common 层）与业务服务（Service 层）
 // 都需要取 IP，而 Service 已依赖 Common，不能反向依赖。
 //
-// 取值顺序：
-// 1. X-Forwarded-For 首跳 —— 反向代理（Vite dev proxy 的 xfwd、Nginx 等）注入的真实客户端 IP；
-// 2. HttpContext.Connection.RemoteIpAddress —— 直连或 ForwardedHeaders 已回填的地址；
+// 取值来源：
+// HttpContext.Connection.RemoteIpAddress —— 直连地址，或由 ForwardedHeaders 中间件
+// 从可信代理的转发头回填的地址。不要在这里直接读取 X-Forwarded-For，避免信任客户端伪造的请求头。
 // 3. 两者都是回环（浏览器经 localhost 访问）→ 显示"本机"。
 //
 // 注意：不再"猜测"本机出口网卡 IP 充当客户端 IP。那样在开着 VPN 的开发机上会得到
@@ -27,20 +27,7 @@ public static class ClientIp
     /// <summary>从 HTTP 上下文解析客户端真实 IP（优先 IPv4）。</summary>
     public static string Resolve(HttpContext context)
     {
-        var ip = ResolveForwarded(context) ?? context.Connection.RemoteIpAddress;
-        return Truncate(Normalize(ip), 64);
-    }
-
-    /// <summary>读取 X-Forwarded-For 首跳（最靠近客户端的一跳）；回环地址视为无效。</summary>
-    private static IPAddress? ResolveForwarded(HttpContext context)
-    {
-        var forwarded = context.Request.Headers["X-Forwarded-For"].ToString();
-        if (string.IsNullOrWhiteSpace(forwarded))
-            return null;
-        var first = forwarded.Split(',')[0].Trim().Trim('"');
-        if (!IPAddress.TryParse(first, out var parsed))
-            return null;
-        return IPAddress.IsLoopback(parsed) ? null : parsed;
+        return Truncate(Normalize(context.Connection.RemoteIpAddress), 64);
     }
 
     /// <summary>100.64.0.0/10 —— CGNAT 段（Tailscale 等 VPN 常用），标注为 VPN 便于识别。</summary>

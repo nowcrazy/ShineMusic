@@ -1,8 +1,9 @@
 /**
- * 管理端用户服务：用户列表检索、角色管理、重置密码、禁用/启用。
+ * 管理端用户服务：用户列表检索、角色管理、新建用户、重置密码、禁用/启用。
  *
  * 对齐后端 /api/v1/admin/users（仅管理员）：
  * - GET  /admin/users?query=&page=&pageSize=  用户分页列表
+ * - POST /admin/users                         新建用户并授予初始角色（user/tempadmin/admin）
  * - POST /admin/users/{id}/role               修改角色（user/tempadmin/admin，互斥）
  * - POST /admin/users/{id}/reset-password     重置密码（并解除锁定、吊销刷新令牌）
  * - POST /admin/users/{id}/lock               禁用账号
@@ -35,6 +36,15 @@ export interface AdminUserList {
   total: number
 }
 
+/** 新建用户入参：邮箱/用户名/昵称/密码 + 初始角色。 */
+export interface AdminCreateUserRequest {
+  email: string
+  userName: string
+  displayName: string
+  password: string
+  role: AdminRole
+}
+
 /** 用户分页列表（query 模糊匹配邮箱/用户名/昵称）。 */
 export function getAdminUsers(query?: string, page = 1, pageSize = 20): Promise<AdminUserList> {
   const params = new URLSearchParams()
@@ -42,6 +52,11 @@ export function getAdminUsers(query?: string, page = 1, pageSize = 20): Promise<
   params.set('page', String(page))
   params.set('pageSize', String(pageSize))
   return http.get<AdminUserList>(`${API_PREFIX}/admin/users?${params.toString()}`)
+}
+
+/** 管理员新建用户并授予初始角色（等价于 --create-admin 的在线版，无需停服）。 */
+export function createUser(req: AdminCreateUserRequest): Promise<void> {
+  return http.post<void>(`${API_PREFIX}/admin/users`, req)
 }
 
 /** 修改用户角色（互斥替换）；tempadmin 自修改起 3 天内视同管理员，到期自动降级为普通用户。 */

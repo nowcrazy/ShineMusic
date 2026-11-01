@@ -45,6 +45,8 @@ public sealed partial class KugouPlaylistParser(IHttpClientFactory httpClientFac
         string? name = null;
         string? cover = null;
         string? description = null;
+        string? canonicalId = null;
+        int? metadataTotal = null;
 
         // 歌单元数据（名称/封面/简介）：plist/list 首页
         var metaRaw = await PlaylistHttpText.GetStringAsync(
@@ -57,26 +59,33 @@ public sealed partial class KugouPlaylistParser(IHttpClientFactory httpClientFac
                 name = GetString(listInfo, "specialname");
                 cover = GetString(listInfo, "imgurl")?.Replace("{size}", "150", StringComparison.Ordinal);
                 description = GetString(listInfo, "intro");
+                canonicalId = GetValueAsString(listInfo, "specialid");
+                metadataTotal = GetInt(listInfo, "songcount");
             }
         }
+        canonicalId ??= id.All(char.IsDigit) ? id : null;
+        if (canonicalId is null)
+            throw new PlaylistParseException("无法从酷狗歌单页面中读取歌单编号。");
 
         // 全量曲目：special/song 分页（plist/list 的 page/pagesize 参数被平台忽略，不可用）
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var total = int.MaxValue;
-        for (var page = 1; page <= MaxPages && items.Count < total; page++)
+        int? total = null;
+        for (var page = 1; page <= MaxPages && (!total.HasValue || items.Count < total.Value); page++)
         {
             var raw = await PlaylistHttpText.GetStringAsync(
-                client, $"{SongsBase}?specialid={id}&page={page}&pagesize={PageSize}&version=9150", cancellationToken);
+                client, $"{SongsBase}?specialid={Uri.EscapeDataString(canonicalId)}&page={page}&pagesize={PageSize}&version=9150", cancellationToken);
             using var doc = JsonDocument.Parse(raw);
             var root = doc.RootElement;
-            if (!root.TryGetProperty("data", out var data))
-                break;
-            if (page == 1
-                && data.TryGetProperty("total", out var totalElement)
-                && totalElement.ValueKind == JsonValueKind.Number)
-                total = totalElement.GetInt32();
+            if (!root.TryGetProperty("data", out var data)
+                || !data.TryGetProperty("total", out var totalElement)
+                || totalElement.ValueKind != JsonValueKind.Number
+                || !totalElement.TryGetInt32(out var pageTotal)
+                || pageTotal < 0)
+                throw new PlaylistParseException("酷狗未返回有效的歌单曲目总数。");
+            if (total.HasValue && total.Value != pageTotal)
+                throw new PlaylistParseException("酷狗歌单曲目总数在分页期间发生变化，请稍后重试。");
+            total = pageTotal;
             if (!data.TryGetProperty("info", out var tracks) || tracks.ValueKind != JsonValueKind.Array)
-                break;
+                throw new PlaylistParseException("酷狗歌单曲目列表格式无效。");
             var pageCount = tracks.GetArrayLength();
             if (pageCount == 0)
                 break;
@@ -87,7 +96,7 @@ public sealed partial class KugouPlaylistParser(IHttpClientFactory httpClientFac
                 var title = GetString(song, "remark");
                 if (string.IsNullOrWhiteSpace(title))
                     title = fallbackTitle;
-                if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(hash) || !seen.Add(hash))
+                if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(hash))
                     continue;
                 int? durationMs = song.TryGetProperty("duration", out var durationElement)
                     && durationElement.ValueKind == JsonValueKind.Number
@@ -105,6 +114,9 @@ public sealed partial class KugouPlaylistParser(IHttpClientFactory httpClientFac
                 break;
         }
 
+        if (!total.HasValue || items.Count != total.Value
+            || (metadataTotal.HasValue && metadataTotal.Value != total.Value))
+            throw new PlaylistParseException("酷狗歌单曲目未能完整解析，请稍后重试。");
         if (items.Count == 0)
             throw new PlaylistParseException("歌单解析失败，请确认链接为公开歌单后重试。");
         return new ParsedPlaylist(
@@ -112,7 +124,7 @@ public sealed partial class KugouPlaylistParser(IHttpClientFactory httpClientFac
             cover, description, items);
     }
 
-    /// <summary>从 URL 中提取歌单数字 Id（special/single/{id} 或 plist/list/{id}）。</summary>
+    /// <summary>从 URL 中提取歌单 Id（支持当前字母数字短 ID 与旧版数字 ID）。</summary>
     private static string? ExtractPlaylistId(string url)
     {
         var match = PlaylistIdRegex().Match(url);
@@ -152,6 +164,25 @@ public sealed partial class KugouPlaylistParser(IHttpClientFactory httpClientFac
             ? value.GetString()
             : null;
 
-    [GeneratedRegex(@"/(?:special/single|plist/list)/(\d+)")]
+    [GeneratedRegex(@"/(?:special/single|plist/list)/([A-Za-z0-9_-]+)")]
     private static partial Regex PlaylistIdRegex();
+
+    private static int? GetInt(JsonElement element, string property) =>
+        element.TryGetProperty(property, out var value)
+        && value.ValueKind == JsonValueKind.Number
+        && value.TryGetInt32(out var number)
+            ? number
+            : null;
+
+    private static string? GetValueAsString(JsonElement element, string property)
+    {
+        if (!element.TryGetProperty(property, out var value))
+            return null;
+        return value.ValueKind switch
+        {
+            JsonValueKind.Number => value.GetRawText(),
+            JsonValueKind.String => value.GetString(),
+            _ => null
+        };
+    }
 }

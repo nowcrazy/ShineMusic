@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 using ShineMusic.Model.Contracts;
 using ShineMusic.Service;
+using ShineMusic.Service.Messaging;
 
 namespace ShineMusic.Api.Controllers;
 
@@ -37,5 +38,33 @@ public sealed class MessageQueueAdminController : ControllerBase
                 ErrorCodes.UpstreamUnavailable,
                 "无法连接 RabbitMQ Management API，请确认 rabbitmq_management 插件已启用（默认端口 15672）。");
         }
+    }
+
+    /// <summary>查询下载/导入队列中等待或处理中的具体业务任务。</summary>
+    [HttpGet("tasks")]
+    [ProducesResponseType(typeof(Ok<MessageQueueTaskListDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    public async Task<IResult> GetTasks(
+        [FromQuery] string queue,
+        [FromQuery] string state,
+        [FromQuery] int limit,
+        [FromServices] MessageQueueStatusService service,
+        CancellationToken cancellationToken,
+        [FromQuery] int page = 1)
+    {
+        if (queue is not (QueueNames.Downloads or QueueNames.Imports))
+            return ApiResults.Error(HttpContext, StatusCodes.Status400BadRequest, ErrorCodes.ValidationError, "queue 必须是下载队列或导入队列。");
+
+        if (state is not ("all" or "waiting" or "processing"))
+            return ApiResults.Error(HttpContext, StatusCodes.Status400BadRequest, ErrorCodes.ValidationError, "state 必须是 all、waiting 或 processing。");
+
+        if (limit is < 1 or > 100)
+            return ApiResults.Error(HttpContext, StatusCodes.Status400BadRequest, ErrorCodes.ValidationError, "limit 必须在 1 到 100 之间。");
+
+        if (page is < 1 or > 100_000)
+            return ApiResults.Error(HttpContext, StatusCodes.Status400BadRequest, ErrorCodes.ValidationError, "page 必须在 1 到 100000 之间。");
+
+        var tasks = await service.GetTasksAsync(queue, state, limit, page, cancellationToken);
+        return Results.Ok(tasks);
     }
 }

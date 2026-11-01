@@ -59,6 +59,8 @@ public sealed class CatalogManagementController : ControllerBase
                 !SqlFunc.Subqueryable<TrackArtist>().Where(link => link.TrackId == track.Id).Any() ||
                 !track.AlbumId.HasValue ||
                 track.ReleaseYear == null ||
+                track.TrackNumber == null ||
+                track.DiscNumber == null ||
                 !SqlFunc.Subqueryable<TrackGenre>().Where(link => link.TrackId == track.Id).Any() ||
                 !(track.ArtworkId.HasValue || track.AlbumId.HasValue) ||
                 !(track.ArtworkId.HasValue ||
@@ -253,7 +255,7 @@ public sealed class CatalogManagementController : ControllerBase
         .ToArray();
 
     /// <summary>
-    /// 批量回填已发布但缺失元数据（流派/专辑/年份/封面）的曲目。
+    /// 批量回填已发布但缺失元数据（流派/专辑/曲序/碟序/年份/封面）的曲目。
     /// 逐个调 iTunes Search API，只补空字段，不覆盖已有值。
     /// 注意：iTunes 有频率限制（≈20次/分钟），每首间隔 3 秒。
     /// </summary>
@@ -270,6 +272,8 @@ public sealed class CatalogManagementController : ControllerBase
             .Where(t => t.PublishedAt.HasValue)
             .Where(t =>
                 !SqlFunc.Subqueryable<TrackGenre>().Where(link => link.TrackId == t.Id).Any()
+                || t.TrackNumber == null
+                || t.DiscNumber == null
                 || t.ReleaseYear == null
                 || !t.AlbumId.HasValue
                 || !(t.ArtworkId.HasValue || t.AlbumId.HasValue)
@@ -286,6 +290,8 @@ public sealed class CatalogManagementController : ControllerBase
         var newArtwork = 0;
         var newAlbum = 0;
         var newGenre = 0;
+        var newTrackNumber = 0;
+        var newDiscNumber = 0;
 
         var artworkDir = libraryPaths.TryResolve("artwork/.placeholder", out var placeholderPath)
             ? System.IO.Path.GetDirectoryName(placeholderPath)!
@@ -348,7 +354,21 @@ public sealed class CatalogManagementController : ControllerBase
                         changed = true;
                     }
 
-                    // 3. 回填专辑：原来没专辑 + iTunes 返回了专辑名
+                    // 3. 回填曲序与碟序：仅使用 iTunes 歌曲实体提供的正数值。
+                    if (track.TrackNumber == null && itunes.TrackNumber is > 0)
+                    {
+                        track.TrackNumber = itunes.TrackNumber.Value;
+                        newTrackNumber++;
+                        changed = true;
+                    }
+                    if (track.DiscNumber == null && itunes.DiscNumber is > 0)
+                    {
+                        track.DiscNumber = itunes.DiscNumber.Value;
+                        newDiscNumber++;
+                        changed = true;
+                    }
+
+                    // 4. 回填专辑：原来没专辑 + iTunes 返回了专辑名
                     if (track.AlbumId == null && !string.IsNullOrWhiteSpace(itunes.AlbumTitle))
                     {
                         var albumName = itunes.AlbumTitle.Trim();
@@ -364,7 +384,7 @@ public sealed class CatalogManagementController : ControllerBase
                         changed = true;
                     }
 
-                    // 4. 回填封面：原来没封面 + iTunes 下载成功
+                    // 5. 回填封面：原来没封面 + iTunes 下载成功
                     if (track.ArtworkId == null && itunes.StorageKey != null)
                     {
                         if (libraryPaths.TryResolve(itunes.StorageKey, out var artworkPath) && System.IO.File.Exists(artworkPath))
@@ -392,9 +412,16 @@ public sealed class CatalogManagementController : ControllerBase
                     }
 
                     if (changed)
-                        // ReleaseYear/AlbumId/ArtworkId 允许写 NULL 语义不存在（本流程只赋值非空），显式列回写即可。
+                        // 仅回写本流程可能补全的元数据列。
                         await db.Updateable(track)
-                            .UpdateColumns(item => new { item.ReleaseYear, item.AlbumId, item.ArtworkId })
+                            .UpdateColumns(item => new
+                            {
+                                item.TrackNumber,
+                                item.DiscNumber,
+                                item.ReleaseYear,
+                                item.AlbumId,
+                                item.ArtworkId
+                            })
                             .ExecuteCommandAsync(cancellationToken);
                     await db.Ado.CommitTranAsync();
                 }
@@ -425,7 +452,9 @@ public sealed class CatalogManagementController : ControllerBase
             Failed = failed,
             NewArtwork = newArtwork,
             NewAlbum = newAlbum,
-            NewGenre = newGenre
+            NewGenre = newGenre,
+            NewTrackNumber = newTrackNumber,
+            NewDiscNumber = newDiscNumber
         });
     }
 
@@ -440,7 +469,6 @@ public sealed class CatalogManagementController : ControllerBase
             error = ApiResults.ValidationError(ctx, "pageSize", "pageSize must be between 1 and 1000.");
         return error is null;
     }
-
 
 }
 

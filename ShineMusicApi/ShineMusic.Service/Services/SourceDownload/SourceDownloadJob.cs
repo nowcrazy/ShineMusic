@@ -28,6 +28,17 @@ public sealed record CreateSourceDownloadTasksResult(
     IReadOnlyList<ExternalDownloadTask> Created,
     IReadOnlyList<string> SkippedDuplicates);
 
+/// <summary>
+/// 多候选换源任务创建：一首歌跨多个 provider 的候选（已按音质从好到坏排序）。
+/// </summary>
+/// <param name="PrimaryTitle">主标题（用于元数据快照 + 管理端展示）。</param>
+/// <param name="PrimaryArtists">主艺人列表。</param>
+/// <param name="Candidates">跨 provider 的搜索结果候选，按音质从好到坏排序。</param>
+internal sealed record SongCandidateGroup(
+    string PrimaryTitle,
+    IReadOnlyList<string> PrimaryArtists,
+    IReadOnlyList<SourceSearchItemDto> Candidates);
+
 /// <summary>音源下载任务创建编排：元数据快照 + 去重 + 入队。</summary>
 public sealed class SourceDownloadService(
     ISqlSugarClient db,
@@ -35,103 +46,161 @@ public sealed class SourceDownloadService(
     IRabbitMessageBus messageBus)
 {
     /// <summary>
-    /// 为指定音源的一批平台曲目 Id 创建下载任务。
+    /// 从请求 DTO 解析出要创建的任务列表，兼容两种模式：
+    ///   1) 多候选换源模式（Candidates 非空）：每首歌的多个 provider 候选组；
+    ///   2) 单 provider 模式（Provider + ProviderTrackIds）：旧前端兼容。
+    /// </summary>
+    private static List<SongCandidateGroup> ResolveCandidateGroups(CreateSourceDownloadTasksRequest request)
+    {
+        if (request.Candidates is { Count: > 0 })
+        {
+            // 多候选模式：Candidates 已是跨 provider 聚合结果。
+            // 这里假设 Candidates 里的所有条目是**同一首歌**的不同 provider 候选
+            // （前端负责按 Title+Artists 分组），按音质重新排序。
+            var sorted = request.Candidates
+                .OrderBy(c => SourceQualities.Rank(c.Quality))
+                .ToList();
+            var primary = sorted[0];
+            return [new SongCandidateGroup(
+                primary.Title,
+                primary.Artists,
+                sorted)];
+        }
+
+        // 旧单 provider 模式：把每首 trackId 转成单候选组。
+        if (string.IsNullOrWhiteSpace(request.Provider) || request.ProviderTrackIds is null)
+            throw new ArgumentException("Either Candidates or Provider+ProviderTrackIds must be specified.");
+
+        var result = new List<SongCandidateGroup>();
+        foreach (var trackId in request.ProviderTrackIds.Distinct(StringComparer.Ordinal))
+        {
+            SourceSearchItemDto? prefilled = null;
+            if (request.Metadata is not null && request.Metadata.TryGetValue(trackId, out var meta))
+                prefilled = meta;
+            result.Add(new SongCandidateGroup(
+                prefilled?.Title ?? string.Empty,
+                prefilled?.Artists ?? [],
+                [new SourceSearchItemDto(
+                    request.Provider, trackId,
+                    prefilled?.Title ?? string.Empty,
+                    prefilled?.Artists ?? [],
+                    prefilled?.AlbumTitle,
+                    prefilled?.DurationMs,
+                    prefilled?.Genres ?? [],
+                    prefilled?.CoverUrl,
+                    prefilled?.SourcePageUrl,
+                    prefilled?.License,
+                    prefilled?.Quality ?? SourceQualities.Standard,
+                    prefilled?.IsLosslessAvailable ?? false,
+                    prefilled?.ReleaseYear)]));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// 为一批歌曲创建下载任务（每首歌可能跨多个 provider 带候选）。
     /// 已存在的同 (Provider, ProviderTrackId) 任务处理策略：
-    ///   - failed   → 重置为 queued 复用（避免唯一索引冲突）；
-    ///   - completed → 重置为 queued 覆盖重下（用户在 UI 上再次点下载 = 明确意图要重下）；
-    ///   - 其余中间态（queued / downloading / parsing / transcoding 等）→ 视为"已在处理中"，跳过。
-    /// 新任务优先使用请求带入的搜索结果元数据（避免依赖已失效的详情接口），
-    /// 缺失时回退 GetTrackAsync 取快照（取不到快照也建任务，留给下载阶段报错）。
+    ///   - failed/completed → 重置为 queued 复用；
+    ///   - 中间态（queued/downloading/import_queued）→ 跳过避免并发冲突。
+    /// 多候选换源模式下，任务的 Provider/ProviderTrackId 取音质最好的候选，
+    /// 所有候选序列化进 CandidateProvidersJson，下载阶段自动按顺序换源。
     /// </summary>
     public async Task<CreateSourceDownloadTasksResult> CreateTasksAsync(
-        string providerName,
-        IReadOnlyCollection<string> providerTrackIds,
-        IReadOnlyDictionary<string, SourceSearchItemDto>? metadata,
+        CreateSourceDownloadTasksRequest request,
         Guid adminUserId,
         CancellationToken cancellationToken)
     {
-        var provider = providers.FirstOrDefault(candidate =>
-            string.Equals(candidate.Provider, providerName, StringComparison.OrdinalIgnoreCase));
-        if (provider is null || !provider.IsEnabled)
-            throw new SourceUnavailableException(provider?.DisabledReason ?? $"Unknown source provider '{providerName}'.");
+        var groups = ResolveCandidateGroups(request);
+        if (groups.Count == 0)
+            throw new ArgumentException("At least one candidate group is required.");
 
+        // 验证所有候选用到的 provider 都存在且已启用（多候选场景下 Provider 字段各自不同）。
+        var providerLookup = providers.ToDictionary(p => p.Provider, StringComparer.OrdinalIgnoreCase);
         var created = new List<ExternalDownloadTask>();
-        var newTasks = new List<ExternalDownloadTask>();
         var skipped = new List<string>();
-        foreach (var providerTrackId in providerTrackIds.Distinct(StringComparer.Ordinal))
+        var newTasks = new List<ExternalDownloadTask>();
+
+        foreach (var group in groups)
         {
+            // 取音质最好的候选作为主 Provider/ProviderTrackId。
+            var primary = group.Candidates[0];
+            if (!providerLookup.TryGetValue(primary.Provider, out var primaryProvider) || !primaryProvider.IsEnabled)
+            {
+                // 主 provider 不可用，降级尝试候选里的其他 provider。
+                primary = group.Candidates.FirstOrDefault(c =>
+                    providerLookup.TryGetValue(c.Provider, out var p) && p.IsEnabled) ?? primary;
+            }
+            if (!providerLookup.TryGetValue(primary.Provider, out var targetProvider) || !targetProvider.IsEnabled)
+                throw new SourceUnavailableException(
+                    $"Provider '{primary.Provider}' is unavailable.");
+
             // (Provider, ProviderTrackId) 有唯一索引，先查重再决定新建/重置/跳过。
             var existing = await db.Queryable<ExternalDownloadTask>().FirstAsync(
-                task => task.Provider == provider.Provider && task.ProviderTrackId == providerTrackId, cancellationToken);
+                task => task.Provider == primary.Provider && task.ProviderTrackId == primary.ProviderTrackId,
+                cancellationToken);
             if (existing is not null)
             {
                 if (existing.Status == ExternalDownloadTaskStatuses.Queued
                     || existing.Status == ExternalDownloadTaskStatuses.Downloading
                     || existing.Status == ExternalDownloadTaskStatuses.ImportQueued)
                 {
-                    // 中间态：后台还在处理，前端重复点了，直接跳过避免并发冲突。
-                    skipped.Add(providerTrackId);
+                    skipped.Add(primary.ProviderTrackId);
                     continue;
                 }
-                // failed / completed / processing_failed → 重置复用：清空错误、产物关联、评分，重新入队。
+                // failed / completed → 重置复用。多候选模式下一并清空换源相关状态。
                 existing.Status = ExternalDownloadTaskStatuses.Queued;
                 existing.ErrorCode = null;
                 existing.ErrorMessage = null;
+                existing.AttemptErrorsJson = null;
                 existing.ImportItemId = null;
                 existing.AutoScore = null;
                 existing.AutoPublished = false;
                 existing.AutoRetryCount = 0;
                 existing.NextRetryAtUtc = null;
+                existing.CandidateProvidersJson = group.Candidates.Count > 1
+                    ? JsonSerializer.Serialize(group.Candidates)
+                    : null;
+                existing.AttemptIndex = group.Candidates.Count > 1 ? 0 : null;
+                existing.Provider = primary.Provider;
+                existing.ProviderTrackId = primary.ProviderTrackId;
+                existing.ReleaseYear = primary.ReleaseYear;
                 existing.UpdatedAtUtc = DateTime.UtcNow;
                 await db.Updateable(existing).ExecuteCommandAsync(cancellationToken);
                 created.Add(existing);
                 continue;
             }
 
-            // 元数据快照：优先使用前端从搜索结果带入的元数据（部分平台详情接口已失效，如酷我 getNewMuiseByRid 返回 HTML）；
-            // 未提供时回退 GetTrackAsync。两种方式都取不到也不阻塞建任务（下载阶段会再解析并暴露错误）。
+            // 元数据快照：优先用前端带入的，缺失时回退 GetTrackAsync（降级）。
             SourceSearchResult? snapshot = null;
-            if (metadata is not null && metadata.TryGetValue(providerTrackId, out var prefilled))
+            try
             {
-                snapshot = new SourceSearchResult(
-                    prefilled.Provider,
-                    prefilled.ProviderTrackId,
-                    prefilled.Title,
-                    prefilled.Artists,
-                    prefilled.AlbumTitle,
-                    prefilled.DurationMs,
-                    prefilled.Genres,
-                    prefilled.CoverUrl,
-                    prefilled.SourcePageUrl,
-                    prefilled.License,
-                    prefilled.Quality,
-                    prefilled.IsLosslessAvailable);
+                snapshot = await targetProvider.GetTrackAsync(primary.ProviderTrackId, cancellationToken);
             }
-            else
+            catch (Exception exception) when (exception is not OperationCanceledException)
             {
-                try
-                {
-                    snapshot = await provider.GetTrackAsync(providerTrackId, cancellationToken);
-                }
-                catch (Exception exception) when (exception is not OperationCanceledException)
-                {
-                    // 快照失败仅降级（任务行保留平台 Id，可后续重试）。
-                }
+                // 快照旧降级（任务行保留 providerTrackId，下载阶段再暴露错误）。
             }
+
+            var candidateProvidersJson = group.Candidates.Count > 1
+                ? JsonSerializer.Serialize(group.Candidates)
+                : null;
 
             var task = new ExternalDownloadTask
             {
-                Provider = provider.Provider,
-                ProviderTrackId = providerTrackId,
-                Title = snapshot?.Title,
-                ArtistsJson = JsonSerializer.Serialize(snapshot?.Artists ?? []),
-                AlbumTitle = snapshot?.AlbumTitle,
-                GenresJson = JsonSerializer.Serialize(snapshot?.Genres ?? []),
-                DurationMs = snapshot?.DurationMs,
-                Quality = snapshot?.Quality,
-                License = snapshot?.License,
-                SourcePageUrl = snapshot?.SourcePageUrl,
-                CoverUrl = snapshot?.CoverUrl,
+                Provider = primary.Provider,
+                ProviderTrackId = primary.ProviderTrackId,
+                Title = snapshot?.Title ?? primary.Title,
+                ArtistsJson = JsonSerializer.Serialize(snapshot?.Artists ?? primary.Artists),
+                AlbumTitle = snapshot?.AlbumTitle ?? primary.AlbumTitle,
+                GenresJson = JsonSerializer.Serialize(snapshot?.Genres ?? primary.Genres),
+                DurationMs = snapshot?.DurationMs ?? primary.DurationMs,
+                Quality = snapshot?.Quality ?? primary.Quality,
+                License = snapshot?.License ?? primary.License,
+                SourcePageUrl = snapshot?.SourcePageUrl ?? primary.SourcePageUrl,
+                CoverUrl = snapshot?.CoverUrl ?? primary.CoverUrl,
+                ReleaseYear = snapshot?.ReleaseYear ?? primary.ReleaseYear,
+                CandidateProvidersJson = candidateProvidersJson,
+                AttemptIndex = candidateProvidersJson is not null ? 0 : null,
                 Status = ExternalDownloadTaskStatuses.Queued,
                 CreatedByUserId = adminUserId
             };
@@ -144,6 +213,23 @@ public sealed class SourceDownloadService(
         foreach (var task in created)
             await messageBus.PublishAsync(QueueNames.Downloads, task.Id, cancellationToken);
         return new CreateSourceDownloadTasksResult(created, skipped);
+    }
+
+    /// <summary>
+    /// 单 provider 便捷重载（旧前端兼容入口）。
+    /// </summary>
+    public async Task<CreateSourceDownloadTasksResult> CreateTasksAsync(
+        string providerName,
+        IReadOnlyCollection<string> providerTrackIds,
+        IReadOnlyDictionary<string, SourceSearchItemDto>? metadata,
+        Guid adminUserId,
+        CancellationToken cancellationToken)
+    {
+        var request = new CreateSourceDownloadTasksRequest(
+            providerName,
+            providerTrackIds as IReadOnlyList<string>,
+            metadata);
+        return await CreateTasksAsync(request, adminUserId, cancellationToken);
     }
 }
 
@@ -282,9 +368,8 @@ public sealed class SourceDownloadJob(
                     throw new SourceDownloadTooLargeException();
                 await using var readStream = new FileStream(file.FilePath, FileMode.Open, FileAccess.Read, FileShare.Read);
                 contentHash = await HashFileAsync(readStream, downloadTimeout.Token);
-                // 任务音质快照缺失时用自下载结果补齐（最终定级仍由入库流水线 ffprobe 探测）。
-                if (string.IsNullOrWhiteSpace(task.Quality))
-                    task.Quality = file.Quality;
+                // 自下载 provider 的声明等级就是当前实际请求的档位，覆盖搜索阶段的能力快照。
+                task.Quality = file.Quality;
             }
             else
             {
@@ -295,39 +380,65 @@ public sealed class SourceDownloadJob(
                     : [download!];
 
                 SourceDownloadInfo? accepted = null;
+                Exception? lastCandidateDownloadException = null;
                 foreach (var candidate in candidates)
                 {
-                    // 每档独立超时：单文件下载覆盖「连接 + 整段流读取」全程，无损原文件体积大，默认 120s。
-                    using var attemptTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    attemptTimeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(30, options.Value.Download.TimeoutSeconds)));
-
-                    var extension = ResolveExtension(candidate);
-                    audioKey = $"sourcedl/{task.Id:N}.{extension}";
-                    if (!storagePaths.TryResolve(audioKey, out var audioPath))
-                        throw new MediaProcessingException(ErrorCodes.InternalError, "The download destination path is invalid.");
-                    Directory.CreateDirectory(Path.GetDirectoryName(audioPath)!);
-
-                    await using (var httpStream = await OpenDownloadStreamAsync(client, candidate.DownloadUrl, maxBytes, attemptTimeout.Token))
-                    await using (var fileStream = new FileStream(audioPath, FileMode.Create, FileAccess.Write, FileShare.None))
+                    try
                     {
-                        (contentHash, sizeBytes) = await CopyWithHashAsync(httpStream, fileStream, maxBytes, attemptTimeout.Token);
-                    }
+                        // 每档独立超时：单文件下载覆盖「连接 + 整段流读取」全程，无损原文件体积大，默认 120s。
+                        using var attemptTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                        attemptTimeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(30, options.Value.Download.TimeoutSeconds)));
 
-                    var (valid, rejectReason) = await EvaluateDownloadedAudioAsync(task, expectedDurationMs, audioKey, cancellationToken);
-                    if (valid)
+                        var extension = ResolveExtension(candidate);
+                        audioKey = $"sourcedl/{task.Id:N}.{extension}";
+                        if (!storagePaths.TryResolve(audioKey, out var audioPath))
+                            throw new MediaProcessingException(ErrorCodes.InternalError, "The download destination path is invalid.");
+                        Directory.CreateDirectory(Path.GetDirectoryName(audioPath)!);
+
+                        await using (var httpStream = await OpenDownloadStreamAsync(client, candidate.DownloadUrl, maxBytes, attemptTimeout.Token))
+                        await using (var fileStream = new FileStream(audioPath, FileMode.Create, FileAccess.Write, FileShare.None))
+                        {
+                            (contentHash, sizeBytes) = await CopyWithHashAsync(httpStream, fileStream, maxBytes, attemptTimeout.Token);
+                        }
+
+                        var (valid, rejectReason) = await EvaluateDownloadedAudioAsync(task, expectedDurationMs, audioKey, cancellationToken);
+                        if (valid)
+                        {
+                            accepted = candidate;
+                            break;
+                        }
+
+                        logger.LogWarning(
+                            "Source download task {TaskId}: quality {Quality} rejected ({Reason}), falling back to next candidate.",
+                            task.Id, candidate.Quality, rejectReason);
+                        TryDeleteQuarantineFile(audioKey);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                     {
-                        accepted = candidate;
-                        break;
+                        throw;
                     }
-
-                    logger.LogWarning(
-                        "Source download task {TaskId}: quality {Quality} rejected ({Reason}), falling back to next candidate.",
-                        task.Id, candidate.Quality, rejectReason);
-                    TryDeleteQuarantineFile(audioKey);
+                    catch (Exception exception) when (exception is HttpRequestException
+                        or IOException
+                        or OperationCanceledException
+                        or SourceUnavailableException
+                        or SourceDownloadTooLargeException)
+                    {
+                        lastCandidateDownloadException = exception;
+                        logger.LogWarning(exception,
+                            "Source download task {TaskId}: quality {Quality} download failed; falling back to next candidate.",
+                            task.Id, candidate.Quality);
+                        TryDeleteQuarantineFile(audioKey);
+                    }
                 }
 
                 if (accepted is null)
+                {
+                    if (lastCandidateDownloadException is not null)
+                        System.Runtime.ExceptionServices.ExceptionDispatchInfo
+                            .Capture(lastCandidateDownloadException)
+                            .Throw();
                     throw new SourceUnavailableException("所有候选音质均未通过有效性校验（音源返回了占位/试听资源）。");
+                }
 
                 // 以实际采用的档位回写音质快照（最终定级仍由入库流水线 ffprobe 探测）。
                 task.Quality = accepted.Quality;
@@ -418,6 +529,7 @@ public sealed class SourceDownloadJob(
                 AlbumTitle = task.AlbumTitle,
                 GenresJson = JsonSerializer.Serialize(MapGenresToMoods(DeserializeList(task.GenresJson))),
                 DurationMs = task.DurationMs,
+                ReleaseYear = task.ReleaseYear,
                 ArtworkStorageKey = coverKey,
                 IsUserUpload = false,
                 SourceProvider = task.Provider
@@ -463,13 +575,22 @@ public sealed class SourceDownloadJob(
                 MediaProcessingException media => (media.Code, media.Message),
                 _ => (ErrorCodes.InternalError, "The download task could not be processed.")
             };
-            // 自动重试：重复/超限属于永久失败，重试无意义直接终态；其余失败按退避定点重排，
-            // 达到上限才转 failed（保留手动重试入口）。
-            // 频控（酷狗 errcode:1002 等）走更短的 15s/30s/60s 退避——封禁是瞬时条件，快重试可尽快恢复；
-            // 其他失败走 30s/2min/10min 指数退避，给网络/平台恢复留时间。
+
+            // 多候选换源模型：尝试记录本次 provider 的错误，并决定是继续重试同 provider 还是换源。
+            var candidates = LoadCandidateList(task);
+            var currentCandidateIndex = task.AttemptIndex ?? (candidates.Count > 1 ? 0 : -1);
+            RecordAttemptError(task, currentCandidateIndex, task.Provider!, code, message);
+
+            // 自动重试策略：
+            //   - 瞬时故障（网络抖动、频控）→ 同 candidate 内指数退避重试（30s/2min/10min，频控用 15s/30s/60s）；
+            //   - 永久/不可恢复错误（资源不可用、占位文件、已下架）→ 直接换源，不浪费重试配额；
+            //   - 每个 candidate 最多 3 次 AutoRetry；所有 candidate 都耗尽才转 failed。
             var retryable = exception is not SourceDuplicateException and not SourceDownloadTooLargeException;
-            if (retryable && task.AutoRetryCount < MaxAutoRetries)
+            var isTransient = retryable && exception is HttpRequestException or TimeoutException or TaskCanceledException;
+
+            if (isTransient && task.AutoRetryCount < MaxAutoRetries)
             {
+                // 同 candidate 的瞬时故障自动重试（指数退避定点重排）。
                 var backoffs = IsRateLimited(exception) ? RateLimitBackoffs : AutoRetryBackoffs;
                 var nextRetryAt = DateTime.UtcNow + backoffs[Math.Min(task.AutoRetryCount, backoffs.Length - 1)];
                 task.AutoRetryCount++;
@@ -479,24 +600,169 @@ public sealed class SourceDownloadJob(
                 task.ErrorMessage = message;
                 task.UpdatedAtUtc = DateTime.UtcNow;
                 await db.Updateable(task).ExecuteCommandAsync(cancellationToken);
-                // 定点重试：退避时间已写入 NextRetryAtUtc，由 SourceDownloadRetrySweepService 到点重新投递。
                 logger.LogWarning(exception,
-                    "Source download task {TaskId} failed with {ErrorCode}; {Mode} auto retry {Attempt}/{Max} scheduled at {NextRetryAtUtc}.",
-                    taskId, code, IsRateLimited(exception) ? "rate-limit" : "standard", task.AutoRetryCount, MaxAutoRetries, nextRetryAt);
+                    "Source download task {TaskId} (candidate {AttemptIndex}, provider {Provider}) failed with {ErrorCode}; {Mode} auto retry {Retry}/{Max} scheduled at {NextRetryAtUtc}.",
+                    taskId, currentCandidateIndex, task.Provider, code, IsRateLimited(exception) ? "rate-limit" : "standard", task.AutoRetryCount, MaxAutoRetries, nextRetryAt);
                 return;
             }
-            logger.LogWarning(exception, "Source download task {TaskId} failed with {ErrorCode}.", taskId, code);
+
+            // 当前 candidate 彻底失败（瞬时重试耗尽 或 永久/不可恢复错误）→ 检查是否有下一个候选换源。
+            var nextCandidateIndex = currentCandidateIndex + 1;
+            if (candidates.Count > 1 && nextCandidateIndex < candidates.Count)
+            {
+                var next = candidates[nextCandidateIndex];
+                logger.LogWarning(exception,
+                    "Source download task {TaskId}: candidate {CurrIndex} ({Provider}) exhausted — switching to candidate {NextIndex} ({NextProvider}).",
+                    taskId, currentCandidateIndex, task.Provider, nextCandidateIndex, next.Provider);
+
+                // 换源：更新当前尝试的 provider 信息，重置换源内的重试计数，清除单次错误。
+                task.Provider = next.Provider;
+                task.ProviderTrackId = next.ProviderTrackId;
+                task.AttemptIndex = nextCandidateIndex;
+                task.AutoRetryCount = 0;
+                task.ErrorCode = null;
+                task.ErrorMessage = null;
+                task.NextRetryAtUtc = null;
+                task.Status = ExternalDownloadTaskStatuses.Queued;
+                task.ReleaseYear = next.ReleaseYear;
+
+                // 新 provider 元数据快照回退：详情接口取权威基准。
+                try
+                {
+                    var fallbackProvider = providers.FirstOrDefault(p =>
+                        string.Equals(p.Provider, next.Provider, StringComparison.OrdinalIgnoreCase));
+                    if (fallbackProvider is not null && fallbackProvider.IsEnabled)
+                    {
+                        var snapshot = await fallbackProvider.GetTrackAsync(next.ProviderTrackId, cancellationToken);
+                        if (snapshot is not null)
+                        {
+                            task.Title = snapshot.Title;
+                            task.ArtistsJson = JsonSerializer.Serialize(snapshot.Artists);
+                            task.AlbumTitle = snapshot.AlbumTitle;
+                            task.DurationMs = snapshot.DurationMs;
+                            task.CoverUrl = snapshot.CoverUrl;
+                            task.License = snapshot.License;
+                            task.SourcePageUrl = snapshot.SourcePageUrl;
+                            task.Quality = snapshot.Quality;
+                            task.GenresJson = JsonSerializer.Serialize(snapshot.Genres);
+                        }
+                        task.ReleaseYear = snapshot?.ReleaseYear ?? next.ReleaseYear;
+                    }
+                }
+                catch (Exception snapshotEx) when (snapshotEx is not OperationCanceledException)
+                {
+                    logger.LogWarning(snapshotEx,
+                        "Source download task {TaskId}: detail snapshot for fallback provider {Provider} failed; proceeding with current snapshot.",
+                        taskId, next.Provider);
+                }
+
+                task.UpdatedAtUtc = DateTime.UtcNow;
+                await db.Updateable(task).ExecuteCommandAsync(cancellationToken);
+                await messageBus.PublishAsync(QueueNames.Downloads, task.Id, cancellationToken);
+                return;
+            }
+
+            // 所有 candidate 都耗尽：聚合每个 provider 的尝试错误，终态 failed。
+            var finalMessage = BuildFinalFailureMessage(task, candidates);
+            logger.LogWarning(exception,
+                "Source download task {TaskId} exhausted all {Count} candidate providers. Final: {Message}",
+                taskId, candidates.Count, finalMessage);
             task.Status = ExternalDownloadTaskStatuses.Failed;
             task.NextRetryAtUtc = null;
-            task.ErrorCode = code;
-            task.ErrorMessage = message;
+            task.ErrorCode = ErrorCodes.SourceUnavailable;
+            task.ErrorMessage = finalMessage;
             task.UpdatedAtUtc = DateTime.UtcNow;
             await db.Updateable(task).ExecuteCommandAsync(cancellationToken);
         }
     }
 
     /// <summary>
-    /// 校验下载文件的有效性（三层防线，任一不过即判无效）：
+    /// 从任务的 CandidateProvidersJson 解析多候选列表。
+    /// 旧模型（单 provider 无候选）返回只含一个条目、index -1 的列表。
+    /// </summary>
+    private static List<SourceSearchItemDto> LoadCandidateList(ExternalDownloadTask task)
+    {
+        if (!string.IsNullOrWhiteSpace(task.CandidateProvidersJson))
+        {
+            try
+            {
+                var list = JsonSerializer.Deserialize<List<SourceSearchItemDto>>(task.CandidateProvidersJson);
+                if (list is { Count: > 0 }) return list;
+            }
+            catch (JsonException) { /* 损坏 JSON → 回退单条 */ }
+        }
+        return [new SourceSearchItemDto(
+            task.Provider, task.ProviderTrackId,
+            task.Title ?? string.Empty, DeserializeList(task.ArtistsJson),
+            task.AlbumTitle, task.DurationMs, DeserializeList(task.GenresJson),
+            task.CoverUrl, task.SourcePageUrl, task.License,
+            task.Quality ?? SourceQualities.Standard, false, task.ReleaseYear)];
+    }
+
+    /// <summary>
+    /// 向任务的 AttemptErrorsJson 追加一条 provider 尝试错误记录。
+    /// </summary>
+    private static void RecordAttemptError(
+        ExternalDownloadTask task, int attemptIndex, string provider, string code, string message)
+    {
+        var errors = new List<AttemptErrorEntry>();
+        if (!string.IsNullOrWhiteSpace(task.AttemptErrorsJson))
+        {
+            try { errors = JsonSerializer.Deserialize<List<AttemptErrorEntry>>(task.AttemptErrorsJson) ?? []; }
+            catch (JsonException) { errors = []; }
+        }
+        // 同一 index 可能重试多次，只保留最近一次。
+        errors.RemoveAll(e => e.AttemptIndex == attemptIndex);
+        errors.Add(new AttemptErrorEntry(provider, attemptIndex, code, message));
+        task.AttemptErrorsJson = JsonSerializer.Serialize(errors);
+    }
+
+    /// <summary>
+    /// 聚合所有 candidate 的尝试错误为一段可读最终错误消息。
+    /// 格式："所有音源均不可下载：netease(high): VIP无版权; kuwo(standard): 占位试听资源..."
+    /// </summary>
+    private static string BuildFinalFailureMessage(ExternalDownloadTask task, IReadOnlyList<SourceSearchItemDto> candidates)
+    {
+        List<AttemptErrorEntry> errors = [];
+        if (!string.IsNullOrWhiteSpace(task.AttemptErrorsJson))
+        {
+            try { errors = JsonSerializer.Deserialize<List<AttemptErrorEntry>>(task.AttemptErrorsJson) ?? []; }
+            catch (JsonException) { errors = []; }
+        }
+        if (errors.Count == 0)
+            return "所有候选音源均不可下载。";
+        var details = errors
+            .OrderBy(e => e.AttemptIndex >= 0 ? e.AttemptIndex : int.MaxValue)
+            .Select(e =>
+            {
+                var candidate = candidates.FirstOrDefault(c =>
+                    string.Equals(c.Provider, e.Provider, StringComparison.OrdinalIgnoreCase));
+                var suffix = candidate?.Quality is { } quality ? $"({quality})" : string.Empty;
+
+                // 附上候选本身的客观事实，避免只给「可能需要 VIP」这类猜测：
+                // 搜到的是几十秒试听、平台标注 VIP、或者根本没搜到——三种原因处置方式完全不同。
+                var facts = new List<string>();
+                if (candidate is null)
+                    facts.Add("未搜到候选");
+                else
+                {
+                    if (candidate.DurationMs is > 0 and < 30_000)
+                        facts.Add($"仅搜到 {candidate.DurationMs / 1000} 秒试听");
+                    if (!string.IsNullOrWhiteSpace(candidate.License)
+                        && candidate.License.Contains("VIP", StringComparison.OrdinalIgnoreCase))
+                        facts.Add($"平台标注 {candidate.License}");
+                }
+                var factText = facts.Count > 0 ? $"［{string.Join("、", facts)}］" : string.Empty;
+                return $"{e.Provider}{suffix}: {e.Message}{factText}";
+            })
+            .ToList();
+        return $"所有候选音源均不可下载：{string.Join("; ", details)}";
+    }
+
+    /// <summary>单候选尝试的错误记录（AttemptErrorsJson 的条目类型）。</summary>
+    private sealed record AttemptErrorEntry(string Provider, int AttemptIndex, string ErrorCode, string Message);
+
+    /// <summary>校验下载文件的有效性（三层防线，任一不过即判无效）：
     ///   1. 绝对下限：正常歌曲不会短于 30s，更短只可能是平台返回的试听片段/占位音频；
     ///   2. 基准偏差：ffprobe 实测时长与校验基准（详情接口优先、快照兜底）偏差 &gt; 25% 且 &gt; 15s 判占位；
     ///   3. 跨源佐证：短音频（&lt; 2min）再与其他平台同名同艺人曲目的时长交叉比对——堵住

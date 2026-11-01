@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 运营歌单：创建/编辑精选歌单，上传封面，按顺序编排曲目。
+ * 精选歌单：创建/编辑人工编排的精选内容，上传封面，按顺序编排曲目。
  */
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type UploadRequestOptions } from 'element-plus'
@@ -203,7 +203,7 @@ onMounted(load)
   <div class="page">
     <div class="page-heading">
       <div>
-        <h2>运营歌单</h2>
+        <h2>精选歌单</h2>
         <p>编排精选合集，封面、推荐语与曲目顺序均可调整</p>
       </div>
       <div class="heading-actions">
@@ -222,7 +222,7 @@ onMounted(load)
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="标题" min-width="200">
+        <el-table-column label="标题" prop="title" sortable min-width="200">
           <template #default="{ row }">
             <div class="title-cell">
               <strong>{{ row.title }}</strong>
@@ -230,12 +230,12 @@ onMounted(load)
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="推荐语" min-width="260">
+        <el-table-column label="推荐语" prop="description" sortable min-width="260">
           <template #default="{ row }">
             <span class="text-muted">{{ row.description || '—' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="曲目数" width="90" prop="trackCount" />
+        <el-table-column label="曲目数" width="90" prop="trackCount" sortable />
         <el-table-column label="操作" width="150" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" :icon="Edit" @click="openEdit(row)">编辑</el-button>
@@ -260,8 +260,9 @@ onMounted(load)
     <el-dialog
       v-model="dialogOpen"
       :title="editingId ? '编辑歌单' : '新建歌单'"
-      width="900px"
+      width="min(1120px, 90vw)"
       top="6vh"
+      append-to-body
       destroy-on-close
     >
       <div class="editor">
@@ -412,7 +413,9 @@ onMounted(load)
 
 .editor {
   display: grid;
-  grid-template-columns: 320px 1fr;
+  /* 右侧轨道用 minmax(0, 1fr)：否则默认下限是 min-content，
+     窗口变窄时两列不会均分，右侧「已选曲目」会被挤成一条并溢出弹窗。 */
+  grid-template-columns: 320px minmax(0, 1fr);
   gap: 24px;
 }
 
@@ -438,8 +441,14 @@ onMounted(load)
 
 .editor-tracks {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* 同理：minmax(0, 1fr) 才能让「添加曲目」和「已选曲目」严格均分，
+     长曲名走省略号而不是把列撑宽。 */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 16px;
+  min-width: 0;
+}
+
+.track-col {
   min-width: 0;
 }
 

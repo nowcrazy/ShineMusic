@@ -1,9 +1,9 @@
 // 职责：yt-dlp 子进程桥接（DI 单例，随主后端启动即具备音源能力，无独立 sidecar）。
 // 统一管理 yt-dlp.exe：路径定位 → 惰性自检（--version，结果缓存）→ 三类调用：
-//   1. 搜索：--flat-playlist --dump-json 逐行解析（ytmusic 用 music.youtube.com/search URL，soundcloud 用 scsearch 前缀）；
+//   1. 搜索：--flat-playlist --dump-json 逐行解析（ytmusic 用 music.youtube.com/search URL）；
 //   2. 单曲元数据：--dump-json 完整抓取（artist/album/track 等字段在 music.youtube.com 页面可用）；
 //   3. 音频下载：-f bestaudio/best -x --audio-format wav（保留原始码率不二次有损，容器统一 wav 由后端 ffprobe 定级）。
-// 二进制缺失或自检失败时 IsAvailable=false + UnavailableReason，ytmusic/soundcloud 两个 provider 优雅降级，
+// 二进制缺失或自检失败时 IsAvailable=false + UnavailableReason，ytmusic provider 优雅降级，
 // 不影响主服务与其他音源。所有子进程调用经信号量限流（默认并发 2），并对 YouTube 风控错误给出 cookies 配置提示。
 
 using System.Diagnostics;
@@ -23,7 +23,8 @@ public sealed record YtDlpEntry(
     string? WebpageUrl,
     string? ThumbnailUrl,
     string? Artist,
-    string? Album);
+    string? Album,
+    int? ReleaseYear = null);
 
 /// <summary>yt-dlp 歌单（播放列表）元数据：标题 + 条目列表（--flat-playlist --dump-single-json 输出）。</summary>
 public sealed record YtDlpPlaylist(string Title, IReadOnlyList<YtDlpEntry> Entries);
@@ -234,7 +235,7 @@ public sealed class YtDlpBridge(
     /// <summary>按配置向参数列表追加通用参数：cookies 文件（YouTube 风控）与 JS 运行时（YouTube 签名解密必需）。</summary>
     private void AppendCommonArgs(List<string> args)
     {
-        // 代理（国内访问 YouTube/SoundCloud 必需）：配置后所有 yt-dlp 调用统一走代理
+        // 代理（国内访问 YouTube 可能需要）：配置后所有 yt-dlp 调用统一走代理
         var proxy = options.Value.YtDlp.Proxy;
         if (!string.IsNullOrWhiteSpace(proxy))
             args.AddRange(["--proxy", proxy.Trim()]);
@@ -251,7 +252,7 @@ public sealed class YtDlpBridge(
         if (!string.IsNullOrWhiteSpace(options.Value.YtDlp.JsRuntimes))
             args.AddRange(["--js-runtimes", options.Value.YtDlp.JsRuntimes]);
         // YouTube CDN 直链 403 需要 PO Token：bgutil 插件 + 本地 node 脚本按需生成（无常驻服务）。
-        // 两个目录任一缺失即整体跳过（未部署时优雅降级，不影响 SoundCloud 等免 POT 平台）。
+        // 两个目录任一缺失即整体跳过（未部署时优雅降级）。
         var yt = options.Value.YtDlp;
         if (!string.IsNullOrWhiteSpace(yt.PotPluginDir) && !string.IsNullOrWhiteSpace(yt.PotServerHome))
         {
@@ -389,7 +390,8 @@ public sealed class YtDlpBridge(
                 pageUrl,
                 thumbnail,
                 Artist: GetString(root, "artist"),
-                Album: GetString(root, "album"));
+                Album: GetString(root, "album"),
+                ReleaseYear: SourceReleaseYearParser.FromJson(root, "release_year", "release_date"));
         }
         catch (JsonException)
         {
@@ -440,4 +442,3 @@ public sealed class YtDlpBridge(
         _selfCheckGate.Dispose();
     }
 }
-

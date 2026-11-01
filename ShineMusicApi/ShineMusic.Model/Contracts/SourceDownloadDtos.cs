@@ -16,26 +16,30 @@ public sealed record SourceSearchItemDto(
     string? SourcePageUrl,
     string? License,
     string Quality,
-    bool IsLosslessAvailable);
+    bool IsLosslessAvailable,
+    int? ReleaseYear = null);
 
 /// <summary>单个音源平台的错误说明（搜索聚合时单源失败不拖垮整体）。</summary>
 public sealed record SourceProviderErrorDto(string Provider, string Message);
 
-/// <summary>搜索响应：合并各平台结果 + 失败平台列表。</summary>
+/// <summary>搜索响应：合并各平台结果 + 失败平台列表 + 因不可下载被过滤的数量。</summary>
 public sealed record SourceSearchResponse(
     IReadOnlyList<SourceSearchItemDto> Results,
-    IReadOnlyList<SourceProviderErrorDto> ProviderErrors);
+    IReadOnlyList<SourceProviderErrorDto> ProviderErrors,
+    int FilteredCount = 0);
 
-/// <summary>创建下载任务请求。</summary>
-/// <param name="Provider">音源平台（audius/jamendo/kuwo/netease 等）。</param>
-/// <param name="ProviderTrackIds">平台曲目 Id 列表（一次可批量）。</param>
-/// <param name="Metadata">可选：按平台曲目 Id 预填的搜索结果元数据。
-/// 前端从搜索结果直接带入，避免后端再次调用可能已失效的详情接口（如酷我 getNewMuiseByRid 已返回 HTML）。
-/// 缺失的 Id 仍回退到 provider.GetTrackAsync 抓取快照。</param>
+/// <summary>
+/// 创建下载任务请求。
+/// 两种模式互斥：
+///   1) 单 provider 模式（旧前端兼容）：Provider + ProviderTrackIds + Metadata；
+///   2) 多候选换源模式（新前端）：Candidates —— 跨 provider 搜索结果已按音质从好到坏排序，
+///      任务创建后自动带 CandidateProvidersJson，下载阶段按顺序依次尝试换源。
+/// </summary>
 public sealed record CreateSourceDownloadTasksRequest(
-    string Provider,
-    IReadOnlyList<string> ProviderTrackIds,
-    IReadOnlyDictionary<string, SourceSearchItemDto>? Metadata = null);
+    string? Provider = null,
+    IReadOnlyList<string>? ProviderTrackIds = null,
+    IReadOnlyDictionary<string, SourceSearchItemDto>? Metadata = null,
+    IReadOnlyList<SourceSearchItemDto>? Candidates = null);
 
 /// <summary>创建下载任务响应：新建/重置入队的任务与因重复被跳过的平台曲目 Id。</summary>
 public sealed record CreateSourceDownloadTasksResultDto(
@@ -65,7 +69,8 @@ public sealed record ExternalDownloadTaskDto(
     Guid? ImportItemId,
     DateTime CreatedAtUtc,
     DateTime UpdatedAtUtc,
-    bool? HasLyrics);
+    bool? HasLyrics,
+    int? ReleaseYear = null);
 
 /// <summary>任务分页响应。</summary>
 public sealed record ExternalDownloadTaskListDto(
@@ -73,3 +78,32 @@ public sealed record ExternalDownloadTaskListDto(
     int Total,
     int Page,
     int PageSize);
+
+/// <summary>
+/// 换源重试请求：对已失败任务换一个音源平台重新创建下载任务。
+/// </summary>
+/// <param name="Provider">可选：指定目标音源平台。留空则自动在除当前 provider 外的所有已启用平台上搜索匹配。</param>
+public sealed record SwitchSourceRequest(string? Provider = null);
+
+/// <summary>
+/// 换源重试响应：新创建的任务 + 换源来源信息。
+/// </summary>
+public sealed record SwitchSourceResponse(
+    Guid NewTaskId,
+    string NewProvider,
+    string NewProviderTrackId,
+    string? Title,
+    IReadOnlyList<string> Artists,
+    bool AutoMatched,
+    string? Message);
+
+/// <summary>换源失败原因（service 层返回给 controller 映射为具体 HTTP 状态码）。</summary>
+public enum SwitchSourceFailureKind
+{
+    TaskNotFound,
+    NotFailed,
+    InsufficientMetadata,
+    ProviderUnavailable,
+    NoMatchFound,
+    DuplicateTask
+}

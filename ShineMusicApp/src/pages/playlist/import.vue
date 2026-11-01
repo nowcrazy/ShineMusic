@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 歌单解析导入页：粘贴外部平台（网易云/QQ 音乐/酷我/YouTube Music）歌单链接，
+ * 歌单解析导入页：粘贴外部平台（网易云/QQ 音乐/酷我/酷狗/汽水/YouTube Music）分享链接，
  * 解析预览（标记已匹配曲库的曲目）→ 一键导入生成新歌单，未匹配曲目后台静默下载补齐。
  * 对应后端接口：services/playlist-import 的 parsePlaylistImport / importPlaylist。
  */
