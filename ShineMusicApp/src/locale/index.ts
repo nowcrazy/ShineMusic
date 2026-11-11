@@ -3,7 +3,7 @@
 // uni-app 3.x + Vue3 场景下，vue-i18n@9 的 legacy: false 模式可用组合式 API useI18n()。
 // 支持语言、默认语言等全局配置见 locale/config.ts（唯一定义处）。
 import { createI18n, type Composer, type DefineLocaleMessage, type I18n } from 'vue-i18n'
-import { allMessages } from './messages'
+import { allMessages, navTitleKeyByRoute } from './messages'
 import { componentsMessages } from './messages/components'
 import { homeMessages } from './messages/home'
 import { browseMessages } from './messages/browse'
@@ -146,6 +146,26 @@ export function createAppI18n(): I18n {
   return _i18n
 }
 
+/**
+ * 立即按当前语言重设当前页面导航栏标题。
+ *
+ * pages.json 的 navigationBarTitleText 是静态中文，不会随 i18n 切换刷新；
+ * main.ts 的全局 onShow mixin 只能覆盖「下一次显示」的页面，因此语言切换的
+ * 瞬间停留在当前页时，必须由 setLocale 主动调用一次，避免标题停留在旧语言。
+ */
+export function refreshNavigationBarTitle(): void {
+  if (typeof getCurrentPages !== 'function') return
+  try {
+    const pages = getCurrentPages()
+    const current = pages[pages.length - 1] as unknown as { route?: string } | undefined
+    const key = current?.route ? navTitleKeyByRoute[current.route] : undefined
+    // 无原生标题栏的平台（如部分 H5 容器）可能不支持该 API，忽略即可。
+    if (key) uni.setNavigationBarTitle({ title: t(key) })
+  } catch {
+    // no-op：标题栏不可用时不影响语言切换主流程
+  }
+}
+
 /** 运行时切换语言。持久化存储，下次启动自动恢复。 */
 export function setLocale(locale: string): void {
   if (!_i18n) {
@@ -157,6 +177,7 @@ export function setLocale(locale: string): void {
   if (global.locale.value === locale) return
   global.locale.value = locale
   saveLocale(locale)
+  refreshNavigationBarTitle()
 }
 
 /** 当前语言 getter。 */

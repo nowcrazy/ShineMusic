@@ -9,12 +9,13 @@ const HOSTS_FILE = path.resolve(CONFIG_DIR, '../config/hosts.json')
 
 interface HostsConfig {
   local?: {
-    lanIp?: string
     webPort?: number
     apiPort?: number
-    apiHost?: 'localhost' | 'lan'
   }
   server?: {
+    /** 唯一服务器地址：换成自己的服务器时只改这一处，所有程序跟随 */
+    origin?: string
+    /** 旧版字段，仅作兼容回退，新配置不需要填写 */
     webOrigin?: string
     apiOrigin?: string
     appApiOrigin?: string
@@ -100,11 +101,15 @@ export default defineConfig(({ command, mode }) => {
   const local = hosts.local ?? {}
   const server = hosts.server ?? {}
   const apiPort = local.apiPort ?? 5180
-  const apiHost = local.apiHost === 'lan' && local.lanIp ? local.lanIp : 'localhost'
+
+  // server.origin 是唯一真源：换服务器时只改这一处，App / H5 / Web / 后端全部跟随。
+  // 兼容旧配置：origin 缺失时依次回退旧字段，最后才是本机回环（无服务器、纯本地开发）。
+  const serverOrigin =
+    server.origin || server.apiOrigin || server.appApiOrigin || server.webOrigin || ''
+  const apiTarget = serverOrigin || `http://127.0.0.1:${apiPort}`
 
   // 开发：走 Vite 代理，天然同源；生产：独立站点直连 API（CORS 白名单由后端放行）。
-  const apiBase =
-    mode === 'production' ? server.apiOrigin || server.appApiOrigin || '' : ''
+  const apiBase = mode === 'production' ? serverOrigin : ''
 
   return {
     base: '/',
@@ -135,8 +140,8 @@ export default defineConfig(({ command, mode }) => {
       proxy: {
         // xfwd: true 让 http-proxy 自动注入 X-Forwarded-For / X-Forwarded-Proto / X-Forwarded-Host，
         // 后端经 ForwardedHeaders 中间件即可拿到真实客户端 IP（而非 Vite 的 127.0.0.1）。
-        '/api': { target: `http://${apiHost}:${apiPort}`, changeOrigin: true, xfwd: true },
-        '/health': { target: `http://${apiHost}:${apiPort}`, changeOrigin: true, xfwd: true },
+        '/api': { target: apiTarget, changeOrigin: true, xfwd: true },
+        '/health': { target: apiTarget, changeOrigin: true, xfwd: true },
       },
     },
     build: {

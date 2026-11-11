@@ -25,12 +25,23 @@ export function promptServerBase(t: (key: string) => string, onChanged?: (base: 
       uni.request({
         url: `${base}/health`,
         method: 'GET',
+        dataType: 'json',
         timeout: 8000,
         complete: (result) => {
           uni.hideLoading()
-          const code = (result as { statusCode?: number }).statusCode
+          const res = result as { statusCode?: number; data?: unknown }
+          let payload: unknown = res.data
+          if (typeof payload === 'string') {
+            try { payload = JSON.parse(payload) } catch { /* HTML 等非 JSON 响应 */ }
+          }
+          // 只看状态码会误判：H5 未代理 /health 时 SPA fallback 返回 200 + index.html。
+          // 后端探针固定返回 { status: 'ok' }，必须校验载荷才算真正连通。
+          const isHealthPayload = typeof payload === 'object' && payload !== null &&
+            (payload as Record<string, unknown>).status === 'ok'
+          const code = res.statusCode
+          const connected = !!code && code >= 200 && code < 300 && isHealthPayload
           uni.showToast({
-            title: code && code >= 200 && code < 300 ? t('drawer.serverConnected') : t('drawer.serverNotConnected'),
+            title: connected ? t('drawer.serverConnected') : t('drawer.serverNotConnected'),
             icon: 'none',
           })
         },

@@ -488,9 +488,26 @@ public sealed class SourceDownloadJob(
                 task.UpdatedAtUtc = DateTime.UtcNow;
                 await db.Updateable(task).ExecuteCommandAsync(cancellationToken);
 
-                TryDeleteQuarantineFile(audioKey);
-                TryDeleteQuarantineFile(coverKey);
-                TryDeleteQuarantinePartials(task.Id);
+                // 去重命中的「有效导入条目」可能仍在等人工审核/发布。它引用的源文件就是
+                // sourcedl/<taskId>.<ext>（任务重跑时文件名不变，SourceStorageKey 与本次 audioKey 相同）。
+                // 若这里照常清理，该条目发布时会因暂存源文件缺失而恒返回 404，永远无法入库。
+                // 因此只清理没有被待发布条目引用的文件；本轮新下载的冗余文件仍正常删除。
+                var retainedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                if (effectiveImportItem is { Status: not LibraryImportItemStatuses.Published })
+                {
+                    if (!string.IsNullOrWhiteSpace(effectiveImportItem.SourceStorageKey))
+                        retainedKeys.Add(effectiveImportItem.SourceStorageKey);
+                    if (!string.IsNullOrWhiteSpace(effectiveImportItem.ArtworkStorageKey))
+                        retainedKeys.Add(effectiveImportItem.ArtworkStorageKey);
+                }
+                if (audioKey is null || !retainedKeys.Contains(audioKey))
+                    TryDeleteQuarantineFile(audioKey);
+                if (coverKey is null || !retainedKeys.Contains(coverKey))
+                    TryDeleteQuarantineFile(coverKey);
+                // TryDeleteQuarantinePartials 按 <taskId>.* 前缀批量删除，可能连带删掉上面要保留的源文件。
+                var retainedPartialPrefix = $"sourcedl/{task.Id:N}.";
+                if (!retainedKeys.Any(key => key.StartsWith(retainedPartialPrefix, StringComparison.OrdinalIgnoreCase)))
+                    TryDeleteQuarantinePartials(task.Id);
 
                 logger.LogInformation(
                     "Source download task {TaskId} deduplicated: content already exists (asset={HasAsset}, importItem={HasImportItem}). Marked as completed.",

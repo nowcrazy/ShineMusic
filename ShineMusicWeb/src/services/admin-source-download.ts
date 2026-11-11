@@ -15,10 +15,11 @@ import type {
   ApiSourceSearch,
   ApiSourceSearchItem,
   ApiSwitchSourceResponse,
+  ApiUnmatchedTrackList,
 } from '@/types/api.generated'
 import { API_PREFIX, http, request } from './http'
 
-export type SourceProviderName = 'audius' | 'jamendo' | 'kuwo' | 'kugou' | 'migu' | 'netease';
+export type SourceProviderName = 'audius' | 'jamendo' | 'kuwo' | 'kugou' | 'migu' | 'netease' | 'qishui' | 'qq' | 'bilibili' | 'qianqian';
 export type SourceProviderFilter = 'all' | SourceProviderName
 export type SourceSearchMode = 'title' | 'artist' | 'artist-track' | 'artist-album' | 'album'
 
@@ -31,6 +32,10 @@ export const SourceProviderLabel: Record<string, string> = {
   kugou: 'sourceDownload.providerKugou',
   migu: 'sourceDownload.providerMigu',
   netease: 'sourceDownload.providerNetease',
+  qishui: 'sourceDownload.providerQishui',
+  qq: 'sourceDownload.providerQq',
+  bilibili: 'sourceDownload.providerBilibili',
+  qianqian: 'sourceDownload.providerQianqian',
 }
 
 export type SourceSearchItem = ApiSourceSearchItem
@@ -205,4 +210,19 @@ export async function getDownloadTask(taskId: string): Promise<ExternalDownloadT
 /** 重试失败任务（仅 failed 状态可重试）。 */
 export async function retryDownloadTask(taskId: string): Promise<ExternalDownloadTask> {
   return http.post<ExternalDownloadTask>(`${API_PREFIX}/admin/source-downloads/tasks/${taskId}/retry`)
+}
+
+/**
+ * 未匹配 / 无音源曲目列表（只读）：合并「独立加入下载队列」与「导入歌单待补齐」两条链路，
+ * 仅返回 no_source / failed 两类，不会创建下载任务。
+ */
+export async function getUnmatchedTracks(
+  options: { status?: string; q?: string; page?: number; pageSize?: number } = {},
+): Promise<ApiUnmatchedTrackList> {
+  const params = new URLSearchParams()
+  if (options.status) params.set('status', options.status)
+  if (options.q) params.set('q', options.q)
+  params.set('page', String(options.page ?? 1))
+  params.set('pageSize', String(options.pageSize ?? 100))
+  return http.get<ApiUnmatchedTrackList>(`${API_PREFIX}/admin/source-downloads/unmatched?${params.toString()}`)
 }

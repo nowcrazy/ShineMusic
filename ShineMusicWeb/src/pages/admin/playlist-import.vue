@@ -73,12 +73,17 @@ const PENDING_STATUS_META: Record<string, PendingStatusMeta> = {
     active: false,
     hint: '已下载完成，不用再下载；评分低于自动入库阈值，确认后即可入库',
   },
-  no_source: { label: '无音源', type: 'danger', active: false, hint: '搜索没有匹配到任何候选曲目（多为冷门曲/翻唱/纯音乐，标题对不上）' },
+  no_source: {
+    label: '无音源',
+    type: 'danger',
+    active: false,
+    hint: '标题+艺人未与任何音源完全一致（常见于艺人别名、Live/重制版后缀、译名不同），未创建下载任务',
+  },
   failed: {
     label: '失败',
     type: 'danger',
     active: false,
-    hint: '各音源都没拿到可下载直链（VIP/版权限制或平台只给试听），可「重新补齐」重试',
+    hint: '已创建下载任务但候选音源都没拿到可下载直链；已尝试的源见下载任务明细，未进入候选的源不会被尝试',
   },
   rejected: {
     label: '已拒绝',

@@ -28,6 +28,10 @@ const providerOptions: { value: SourceProviderFilter; label: string }[] = [
   { value: 'kuwo', label: 'sourceDownload.providerKuwo' },
   { value: 'kugou', label: 'sourceDownload.providerKugou' },
   { value: 'migu', label: 'sourceDownload.providerMigu' },
+  { value: 'qishui', label: 'sourceDownload.providerQishui' },
+  { value: 'qq', label: 'sourceDownload.providerQq' },
+  { value: 'bilibili', label: 'sourceDownload.providerBilibili' },
+  { value: 'qianqian', label: 'sourceDownload.providerQianqian' },
   { value: 'audius', label: 'Audius' },
   { value: 'jamendo', label: 'Jamendo' },
 ]
@@ -470,9 +474,34 @@ onMounted(loadTasks)
             <span v-else class="text-faint">否</span>
           </template>
         </el-table-column>
-        <el-table-column label="失败原因" prop="errorMessage" sortable min-width="180">
+        <el-table-column :label="t('sourceDownload.failReason')" prop="errorMessage" sortable min-width="180">
           <template #default="{ row }">
-            <span v-if="row.errorMessage" class="text-muted">{{ row.errorCode || '' }} {{ row.errorMessage }}</span>
+            <el-popover v-if="row.status === 'failed'" placement="left" :width="420" trigger="click">
+              <template #reference>
+                <span class="fail-reason">{{ row.errorMessage || row.errorCode || '—' }}</span>
+              </template>
+              <div class="attempt-detail">
+                <div v-if="row.errorMessage" class="attempt-summary">
+                  {{ row.errorCode || '' }} {{ row.errorMessage }}
+                </div>
+                <div v-if="row.attemptErrors?.length" class="attempt-title">
+                  {{ t('sourceDownload.attemptDetailTitle') }}
+                </div>
+                <div
+                  v-for="(attempt, index) in row.attemptErrors"
+                  :key="index"
+                  class="attempt-row"
+                >
+                  <el-tag size="small" type="danger" effect="plain">{{ providerLabel(attempt.provider) }}</el-tag>
+                  <span class="text-faint">{{ t('sourceDownload.attemptRound', { index: attempt.attemptIndex }) }}</span>
+                  <span class="attempt-error">{{ attempt.errorCode || '' }} {{ attempt.message || '' }}</span>
+                </div>
+                <div v-if="!row.attemptErrors?.length" class="text-faint">
+                  {{ t('sourceDownload.singleSourceOnly') }}
+                </div>
+              </div>
+            </el-popover>
+            <span v-else-if="row.errorMessage" class="text-muted">{{ row.errorCode || '' }} {{ row.errorMessage }}</span>
             <span v-else class="text-faint">—</span>
           </template>
         </el-table-column>
@@ -528,5 +557,40 @@ onMounted(loadTasks)
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* === 失败原因浮层：逐源尝试明细 === */
+.fail-reason {
+  border-bottom: 1px dashed var(--adm-text-3);
+  color: var(--adm-text-2);
+  cursor: pointer;
+}
+
+.attempt-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.attempt-summary {
+  color: var(--adm-text-1);
+}
+
+.attempt-title {
+  color: var(--adm-text-2);
+  font-weight: 600;
+}
+
+.attempt-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.attempt-error {
+  color: var(--adm-text-2);
+  word-break: break-word;
 }
 </style>

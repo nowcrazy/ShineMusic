@@ -169,7 +169,14 @@ function sendRequest(method: HttpMethod, url: string, data: unknown, withAuth: b
     const header: Record<string, string> = {}
     if (data !== undefined && method !== 'GET') header['Content-Type'] = 'application/json'
     // 显式声明客户端类型与设备信息，后端审计日志据此区分 PC / App 并记录机型。
+    // 值需与后端 ClientInfo.Resolve 白名单（web-admin / app / web-app）对齐：
+    // H5（浏览器预览）声明为 web-app，设备描述由后端按 UA 解析浏览器与系统。
+    // #ifdef H5
+    header['X-Client-Type'] = 'web-app'
+    // #endif
+    // #ifndef H5
     header['X-Client-Type'] = 'app'
+    // #endif
     header['X-Device-Info'] = deviceInfoHeader()
     const token = getAccessToken()
     if (withAuth && token) header.Authorization = `Bearer ${token}`

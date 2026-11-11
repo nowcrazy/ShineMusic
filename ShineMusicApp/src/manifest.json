@@ -96,5 +96,11 @@
         "versionCode" : 10,
         "versionName" : "0.1.0"
     },
+    "h5" : {
+        "title" : "Shine Music",
+        "router" : {
+            "mode" : "hash"
+        }
+    },
     "locale" : "zh-Hans"
 }

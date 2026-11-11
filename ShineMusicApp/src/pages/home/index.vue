@@ -17,6 +17,7 @@ import {
   AudioLines,
   Bell,
   ChevronRight,
+  Compass,
   Download,
   Heart,
   History,
@@ -24,26 +25,23 @@ import {
   Library,
   ListMusic,
   Music2,
-  Palette,
+  Pause,
   Play,
   Plus,
   Search,
   Sparkles,
   Trash2,
   Upload,
-  User,
-  UserCog,
   UserRound,
 } from 'lucide-vue-next'
 import TrackRow from '@/components/TrackRow.vue'
 import PlayerBar from '@/components/PlayerBar.vue'
 import CoverArt from '@/components/CoverArt.vue'
 import ProfileDrawer from '@/components/ProfileDrawer.vue'
-import QuickPanel from '@/components/QuickPanel.vue'
 import { getGenres, getHomeFeed, getTracks, peekGenresCache, peekHomeFeedCache, searchTracks } from '@/services/catalog'
 import { resolveUrl } from '@/services/http'
 import { getDailyRecommendations, peekDailyCache } from '@/services/recommend'
-import { playQueue, playTrack } from '@/services/player'
+import { playQueue, playTrack, playerExpanded, usePlayer } from '@/services/player'
 import {
   createPlaylist,
   favoriteTracks,
@@ -80,16 +78,22 @@ function tabLabel(tab: string) {
   return key ? t(key) : tab
 }
 
-// —— 底部凸起按钮：未读角标（99+ 封顶）；已登录点击弹出快捷面板，未登录先引导登录 ——
+// —— 底部凸起黑胶：展示当前曲目封面，点击展开全屏播放器；顶栏铃铛：未读角标（99+ 封顶） ——
+const { state: playerState } = usePlayer()
 const unreadLabel = computed(() => (unreadCount.value > 99 ? '99+' : String(unreadCount.value)))
-const panelVisible = ref(false)
 
-function onFabTap() {
+/** 点击 tabbar 中间黑胶：展开全屏播放器（未登录也可看，播放器本身不要求登录） */
+function openNowPlaying() {
+  playerExpanded.value = true
+}
+
+/** 点击顶栏铃铛：未登录先引导登录，已登录进消息中心 */
+function onBellTap() {
   if (!isAuthenticated.value) {
     uni.navigateTo({ url: '/pages/auth/login' })
     return
   }
-  panelVisible.value = true
+  goPage('/pages/notifications/index')
 }
 
 /** 通用页内跳转（「我的」页功能入口用） */
@@ -339,13 +343,13 @@ function collectionDesc(collection: ApiCollectionSummary) {
   const keys = DEFAULT_COLLECTION_LABEL_KEYS[collection.id]
   return keys ? t(keys.descKey) : collection.description
 }
-// 精选专题：后端无合集时回退到内置兜底合集
-const displayCollections = computed<readonly ApiCollectionSummary[]>(() =>
-  collections.value.length ? collections.value : DEFAULT_COLLECTIONS,
-)
-// 编辑精选大卡：优先真实头图专题 / 精选曲目，再回退到内置兜底合集，保证始终有内容
+// 精选专题：只展示后端真实合集。早期用 4 个内置「50 首」假专题兜底，
+// 空库时会被误读为真实曲库（P3-1），改为如实显示空态。
+const displayCollections = computed<readonly ApiCollectionSummary[]>(() => collections.value)
+// 编辑精选大卡：优先真实头图专题 / 精选曲目；仅当曲库确有合集时才用内置风格入口兜底，
+// 避免空库凭空出现一个「华语流行精选」。
 const effectiveFeatured = computed<ApiCollectionSummary | Track | null>(() =>
-  heroCollection.value ?? featured.value ?? DEFAULT_COLLECTIONS[0] ?? null,
+  heroCollection.value ?? featured.value ?? (collections.value.length ? DEFAULT_COLLECTIONS[0] : null),
 )
 const featuredCollection = computed(() =>
   effectiveFeatured.value && 'trackCount' in effectiveFeatured.value
@@ -609,6 +613,11 @@ function playAllRecent() {
   if (visibleRecent.value.length) playQueue(visibleRecent.value)
 }
 
+/** 播放全部喜欢的音乐（「我的」页横幅卡播放按钮） */
+function playAllFavorites() {
+  if (favoriteTracks.value.length) playQueue(favoriteTracks.value)
+}
+
 /**
  * 进入精选专题详情
  * @param collection 专题摘要
@@ -706,13 +715,17 @@ function coverOf(collection: ApiCollectionSummary) {
     </view>
 
     <scroll-view class="page-scroll" scroll-y :show-scrollbar="false" @scrolltolower="onScrollLower">
-      <!-- 顶部品牌栏：Logo + 头像（点击滑出个人抽屉） -->
+      <!-- 顶部品牌栏：Logo + 消息铃铛（未读角标）+ 头像（点击滑出个人抽屉） -->
       <view class="topbar">
         <view class="brand-lockup">
           <view class="brand-mark"><AudioLines :size="19" :stroke-width="2.7" /></view>
           <text class="brand-name">shine.</text>
         </view>
         <view class="topbar-actions">
+          <view class="bell-wrap" @tap="onBellTap">
+            <Bell :size="19" />
+            <text v-if="unreadCount > 0" class="bell-badge">{{ unreadLabel }}</text>
+          </view>
           <view class="avatar" @tap="onAvatarTap">{{ avatarLetter }}</view>
         </view>
       </view>
@@ -784,7 +797,7 @@ function coverOf(collection: ApiCollectionSummary) {
               <text class="section-title">{{ $t('homePage.discoverForYou') }}</text>
             </view>
           </view>
-          <view class="featured-card" @tap="tapHero">
+          <view v-if="effectiveFeatured" class="featured-card" @tap="tapHero">
             <view class="featured-thumb">
               <CoverArt :src="featuredCollection ? coverOf(featuredCollection) : featuredTrack?.cover ?? ''" :rounded="16" :icon-size="34" />
             </view>
@@ -797,6 +810,10 @@ function coverOf(collection: ApiCollectionSummary) {
             <view v-if="featuredCollection" class="feature-count">
               <Music2 :size="13" /><text>{{ $t('homePage.trackCount', { count: featuredCollection.trackCount }) }}</text>
             </view>
+          </view>
+          <view v-else class="recommend-empty">
+            <text class="recommend-empty-title">{{ $t('homePage.noTracksTitle') }}</text>
+            <text class="recommend-empty-sub">{{ $t('homePage.noTracksSub') }}</text>
           </view>
         </view>
 
@@ -825,8 +842,8 @@ function coverOf(collection: ApiCollectionSummary) {
           </view>
         </view>
 
-        <!-- 精选专题横滑列表（次要区块，后端无数据时回退内置兜底合集） -->
-        <view class="collection-section">
+        <!-- 精选专题横滑列表（次要区块，空库时不展示，避免假专题误导） -->
+        <view v-if="displayCollections.length" class="collection-section">
           <view class="section-heading">
             <view><text class="section-kicker">EDITORIAL PICKS</text><text class="section-title">{{ $t('home.collections') }}</text></view>
           </view>
@@ -1077,17 +1094,18 @@ function coverOf(collection: ApiCollectionSummary) {
         </view>
       </template>
 
-      <!-- 我的（原“收藏”tab：个人中心聚合页） -->
+      <!-- 我的（内容为中心的个人页：资料 / 快捷入口 / 歌单宫格 / 喜欢的音乐横幅） -->
       <template v-else>
         <view class="library-wrap">
-          <!-- 已登录：资料卡（点击滑出个人抽屉）/ 我的歌单 / 喜欢的音乐 -->
+          <!-- 已登录：资料卡（点击进个人资料编辑页，账号设置类入口统一收进头像抽屉） -->
           <template v-if="isAuthenticated">
-            <view class="profile-card" @tap="onAvatarTap">
+            <view class="profile-card" @tap="goPage('/pages/profile/index')">
               <view class="profile-avatar">{{ avatarLetter }}</view>
               <view class="profile-copy">
                 <text class="profile-name">{{ currentUser?.displayName }}</text>
                 <text class="profile-email">{{ currentUser?.email }}</text>
               </view>
+              <text class="profile-edit">{{ $t('homePage.editProfile') }}</text>
               <ChevronRight :size="18" class="profile-chevron" />
             </view>
 
@@ -1112,34 +1130,7 @@ function coverOf(collection: ApiCollectionSummary) {
               </view>
             </view>
 
-            <!-- 分组入口：音乐库 / 设置 -->
-            <view class="entry-group">
-              <text class="entry-group-title">{{ $t('nav.musicLibrary') }}</text>
-              <view class="entry-row" @tap="goPage('/pages/library/upload')">
-                <view class="entry-icon ei-upload"><Upload :size="18" /></view>
-                <text class="entry-name">{{ $t('nav.libraryUpload') }}</text>
-                <ChevronRight :size="16" class="profile-chevron" />
-              </view>
-              <view class="entry-row" @tap="goRequests">
-                <view class="entry-icon ei-request"><Inbox :size="18" /></view>
-                <text class="entry-name">{{ $t('nav.requestsPool') }}</text>
-                <ChevronRight :size="16" class="profile-chevron" />
-              </view>
-            </view>
-            <view class="entry-group">
-              <text class="entry-group-title">{{ $t('nav.settings') }}</text>
-              <view class="entry-row" @tap="goPage('/pages/settings/theme')">
-                <view class="entry-icon ei-theme"><Palette :size="18" /></view>
-                <text class="entry-name">{{ $t('nav.theme') }}</text>
-                <ChevronRight :size="16" class="profile-chevron" />
-              </view>
-              <view class="entry-row" @tap="goPage('/pages/profile/index')">
-                <view class="entry-icon ei-profile"><UserCog :size="18" /></view>
-                <text class="entry-name">{{ $t('nav.profile') }}</text>
-                <ChevronRight :size="16" class="profile-chevron" />
-              </view>
-            </view>
-
+            <!-- 我的歌单：2 列封面宫格（宽视口 3 列） -->
             <view v-if="capabilities.capabilities.userCollections" class="library-block">
               <view class="section-heading">
                 <view><text class="section-kicker">MY PLAYLISTS</text><text class="section-title">{{ $t('homePage.myPlaylists') }}</text></view>
@@ -1149,25 +1140,25 @@ function coverOf(collection: ApiCollectionSummary) {
                 </view>
               </view>
               <view v-if="!myPlaylists.length" class="inline-error">{{ $t('homePage.noPlaylists') }}</view>
-              <view
-                v-for="playlist in myPlaylists"
-                :key="playlist.id"
-                class="playlist-row"
-                @tap="goPlaylist(playlist)"
-              >
-                <view class="playlist-icon">
-                  <image v-if="playlist.artworkUrl" class="playlist-thumbnail" :src="resolveUrl(playlist.artworkUrl)" mode="aspectFill" />
-                  <ListMusic v-else :size="19" />
+              <view v-else class="playlist-grid">
+                <view
+                  v-for="playlist in myPlaylists"
+                  :key="playlist.id"
+                  class="playlist-tile"
+                  @tap="goPlaylist(playlist)"
+                >
+                  <view class="playlist-tile-cover">
+                    <image v-if="playlist.artworkUrl" class="playlist-thumbnail" :src="resolveUrl(playlist.artworkUrl)" mode="aspectFill" />
+                    <ListMusic v-else :size="28" />
+                  </view>
+                  <text class="playlist-tile-name">{{ playlist.name }}</text>
+                  <text class="playlist-tile-meta">{{ $t('homePage.trackCount', { count: playlist.trackCount }) }}</text>
                 </view>
-                <view class="playlist-copy">
-                  <text class="playlist-name">{{ playlist.name }}</text>
-                  <text class="playlist-meta">{{ $t('homePage.trackCount', { count: playlist.trackCount }) }}</text>
-                </view>
-                <ChevronRight :size="16" class="profile-chevron" />
               </view>
             </view>
             <view v-else class="inline-error">{{ $t('homePage.collectionsUnavailable') }}</view>
 
+            <!-- 喜欢的音乐：横幅大卡（封面堆叠 + 播放全部）+ 曲目列表 -->
             <view class="library-block">
               <view class="section-heading">
                 <view><text class="section-kicker">YOUR COLLECTION</text><text class="section-title">{{ $t('homePage.favoriteMusic') }}</text></view>
@@ -1178,13 +1169,38 @@ function coverOf(collection: ApiCollectionSummary) {
                 <text class="empty-title">{{ $t('homePage.favEmptyTitle') }}</text>
                 <text class="empty-copy">{{ $t('homePage.favEmptyCopy') }}</text>
               </view>
-              <TrackRow
-                v-for="(track, index) in favoriteTracks"
-                :key="track.id"
-                :track="track"
-                :index="index"
-                :queue="favoriteTracks"
-              />
+              <template v-else>
+                <view class="favorites-banner">
+                  <view class="favorites-covers">
+                    <CoverArt
+                      v-for="(track, index) in favoriteTracks.slice(0, 3)"
+                      :key="track.id"
+                      class="favorites-cover"
+                      :class="[`fav-cover-${index}`]"
+                      :src="track.cover"
+                      :seed="track.title"
+                      :rounded="14"
+                      :icon-size="22"
+                    />
+                  </view>
+                  <view class="favorites-copy">
+                    <text class="favorites-name">{{ $t('homePage.favoriteMusic') }}</text>
+                    <text class="favorites-meta">{{ $t('homePage.trackCount', { count: favoriteTracks.length }) }}</text>
+                  </view>
+                  <view class="favorites-play" @tap.stop="playAllFavorites">
+                    <Play :size="15" fill="currentColor" /><text>{{ $t('homePage.playAllFavorites') }}</text>
+                  </view>
+                </view>
+                <view class="track-list">
+                  <TrackRow
+                    v-for="(track, index) in favoriteTracks"
+                    :key="track.id"
+                    :track="track"
+                    :index="index"
+                    :queue="favoriteTracks"
+                  />
+                </view>
+              </template>
             </view>
           </template>
 
@@ -1209,16 +1225,6 @@ function coverOf(collection: ApiCollectionSummary) {
               />
             </view>
           </template>
-
-          <!-- 歌曲需求池入口横幅：已登录用户在上方「音乐库」分组里已有入口，此处仅保留给未登录用户 -->
-          <view v-if="capabilities.capabilities.songRequests && !isAuthenticated" class="request-banner" @tap="goRequests">
-            <view class="request-icon"><Inbox :size="19" /></view>
-            <view class="upload-copy">
-              <text class="upload-title">{{ $t('homePage.requestBannerTitle') }}</text>
-              <text class="upload-subtitle">{{ $t('homePage.requestBannerSub') }}</text>
-            </view>
-            <ChevronRight :size="17" class="profile-chevron" />
-          </view>
         </view>
       </template>
 
@@ -1231,10 +1237,7 @@ function coverOf(collection: ApiCollectionSummary) {
     <!-- 头像抽屉：点击头像滑出的个人菜单（QQ 式） -->
     <ProfileDrawer v-model="drawerVisible" />
 
-    <!-- 快捷面板：点击 tabbar 中间凸起按钮弹出 -->
-    <QuickPanel v-model="panelVisible" />
-
-    <!-- 底部自定义 tabbar：为你 / 发现 / [消息凸起按钮] / 曲库 / 我的 -->
+    <!-- 底部自定义 tabbar：为你 / 发现 / [正在播放黑胶凸起] / 曲库 / 我的 -->
     <view class="tabbar">
       <view
         v-for="tab in tabs.slice(0, 2)"
@@ -1243,14 +1246,30 @@ function coverOf(collection: ApiCollectionSummary) {
         :class="{ active: activeTab === tab }"
         @tap="setTab(tab)"
       >
-        <Sparkles v-if="tab === '为你'" :size="19" />
-        <Search v-else :size="19" />
+        <view class="tab-dot"></view>
+        <Sparkles v-if="tab === '为你'" :size="20" />
+        <Compass v-else :size="20" />
         <text>{{ tabLabel(tab) }}</text>
       </view>
-      <view class="tab-fab" @tap="onFabTap">
-        <Bell :size="22" />
-        <text v-if="unreadCount > 0" class="tab-fab-badge">{{ unreadLabel }}</text>
+
+      <!-- 中间凸起黑胶：有曲目时旋转展示封面，无曲目显示音符占位；点击展开全屏播放器 -->
+      <view class="tab-disc" :class="{ idle: !playerState.currentTrack }" @tap="openNowPlaying">
+        <view class="disc-spin" :class="{ playing: playerState.isPlaying }">
+          <CoverArt
+            v-if="playerState.currentTrack?.cover"
+            :src="playerState.currentTrack.cover"
+            :seed="playerState.currentTrack.title"
+            :rounded="0"
+            :icon-size="22"
+          />
+          <view v-else class="disc-empty"><Music2 :size="20" /></view>
+        </view>
+        <view class="disc-state">
+          <Pause v-if="playerState.isPlaying" :size="10" fill="currentColor" />
+          <Play v-else :size="10" fill="currentColor" />
+        </view>
       </view>
+
       <view
         v-for="tab in tabs.slice(2)"
         :key="tab"
@@ -1258,8 +1277,9 @@ function coverOf(collection: ApiCollectionSummary) {
         :class="{ active: activeTab === tab }"
         @tap="setTab(tab)"
       >
-        <Library v-if="tab === '曲库'" :size="19" />
-        <User v-else :size="19" />
+        <view class="tab-dot"></view>
+        <Library v-if="tab === '曲库'" :size="20" />
+        <UserRound v-else :size="20" />
         <text>{{ tabLabel(tab) }}</text>
       </view>
     </view>
@@ -1298,7 +1318,10 @@ function coverOf(collection: ApiCollectionSummary) {
 .brand-mark { display: grid; place-items: center; width: 40rpx; height: 40rpx; border-radius: 13rpx; background: var(--sm-surface-3); border: 1rpx solid var(--sm-border-strong); color: var(--sm-accent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
 .brand-name { font-family: 'Manrope', sans-serif; font-size: 36rpx; line-height: 1; font-weight: 800; color: var(--sm-text); }
 .brand-name span { color: var(--sm-accent); }
-.topbar-actions { display: flex; align-items: center; gap: 14rpx; }
+.topbar-actions { display: flex; align-items: center; gap: 16rpx; }
+/* 顶栏消息铃铛：未读角标贴右上角 */
+.bell-wrap { position: relative; display: grid; place-items: center; width: 68rpx; height: 68rpx; border: 1rpx solid var(--sm-border-strong); border-radius: 50%; background: var(--sm-surface-3); color: var(--sm-text); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+.bell-badge { position: absolute; top: -6rpx; right: -8rpx; min-width: 30rpx; padding: 0 8rpx; border: 2rpx solid var(--sm-bg); border-radius: 20rpx; background: var(--sm-danger); color: #ffffff; font-size: 15rpx; font-weight: 800; line-height: 28rpx; text-align: center; box-sizing: border-box; }
 .avatar { display: grid; place-items: center; width: 68rpx; height: 68rpx; border: 1rpx solid var(--sm-border-strong); border-radius: 50%; background: var(--sm-surface-3); color: var(--sm-text); font-family: 'DM Sans', sans-serif; font-size: 25rpx; font-weight: 700; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); box-shadow: 0 4rpx 14rpx var(--sm-art-shadow); }
 .hero-row { display: block; }
 .page-heading { display: flex; align-items: end; padding: 50rpx 44rpx 0; }
@@ -1398,14 +1421,35 @@ function coverOf(collection: ApiCollectionSummary) {
 .public-sort-item.on { background: var(--sm-surface-3); color: var(--sm-text); font-weight: 700; }
 .public-more { padding: 30rpx 0 10rpx; color: var(--sm-text-3); font-size: 17rpx; text-align: center; }
 .library-block { margin-top: 44rpx; }
-.profile-card, .playlist-row, .request-banner, .login-card { display: flex; align-items: center; gap: 17rpx; margin-top: 12rpx; padding: 24rpx 26rpx; border: 1rpx solid var(--sm-border); border-radius: 20rpx; background: var(--sm-surface); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); }
+.profile-card, .login-card { display: flex; align-items: center; gap: 17rpx; margin-top: 12rpx; padding: 24rpx 26rpx; border: 1rpx solid var(--sm-border); border-radius: 20rpx; background: var(--sm-surface); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); }
 .profile-avatar { display: grid; flex: none; place-items: center; width: 80rpx; height: 80rpx; border-radius: 50%; background: var(--sm-avatar-bg); color: var(--sm-cover-ink); font-size: 28rpx; font-weight: 700; }
 .profile-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 7rpx; }
 .profile-name { color: var(--sm-text); font-size: 24rpx; font-weight: 700; }
 .profile-email { overflow: hidden; color: var(--sm-text-2); font-size: 17rpx; text-overflow: ellipsis; white-space: nowrap; }
+.profile-edit { flex: none; color: var(--sm-accent); font-size: 18rpx; font-weight: 600; }
 .profile-chevron { flex: none; color: var(--sm-text-3); }
 .create-playlist { display: flex; align-items: center; gap: 6rpx; padding-bottom: 4rpx; color: var(--sm-accent); font-size: 19rpx; font-weight: 700; }
 .playlist-heading-actions { display: flex; align-items: center; gap: 28rpx; }
+/* 我的歌单：2 列封面宫格（宽视口自动 3 列） */
+.playlist-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20rpx; margin-top: 20rpx; }
+.playlist-tile { padding: 16rpx; border: 1rpx solid var(--sm-border); border-radius: var(--sm-radius-card); background: var(--sm-surface); -webkit-backdrop-filter: blur(var(--sm-blur)); backdrop-filter: blur(var(--sm-blur)); transition: transform .15s ease; }
+.playlist-tile:active { transform: scale(.97); }
+.playlist-tile-cover { display: grid; place-items: center; width: 100%; aspect-ratio: 1; border-radius: 16rpx; overflow: hidden; background: var(--sm-accent-grad); color: var(--sm-cover-ink); }
+.playlist-tile-cover .playlist-thumbnail { width: 100%; height: 100%; }
+.playlist-tile-name { display: block; overflow: hidden; margin-top: 14rpx; color: var(--sm-text); font-size: 21rpx; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.playlist-tile-meta { display: block; margin-top: 4rpx; color: var(--sm-text-2); font-size: 16rpx; }
+/* 喜欢的音乐横幅卡：封面斜叠 + 播放全部 */
+.favorites-banner { display: flex; align-items: center; gap: 22rpx; margin-top: 20rpx; padding: 24rpx 26rpx; border: 1rpx solid var(--sm-border-strong); border-radius: var(--sm-radius-card); background: linear-gradient(135deg, var(--sm-danger-soft), var(--sm-accent-3-soft)); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); }
+.favorites-covers { position: relative; flex: none; width: 150rpx; height: 116rpx; }
+.favorites-cover { position: absolute; border: 2rpx solid var(--sm-bg); box-shadow: 0 6rpx 18rpx var(--sm-art-shadow); }
+.fav-cover-0 { top: 0; left: 0; width: 92rpx; height: 92rpx; transform: rotate(-8deg); z-index: 3; }
+.fav-cover-1 { top: 6rpx; left: 46rpx; width: 80rpx; height: 80rpx; transform: rotate(5deg); z-index: 2; opacity: .9; }
+.fav-cover-2 { top: 14rpx; left: 84rpx; width: 62rpx; height: 62rpx; transform: rotate(14deg); z-index: 1; opacity: .75; }
+.favorites-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 6rpx; }
+.favorites-name { color: var(--sm-text); font-size: 25rpx; font-weight: 800; }
+.favorites-meta { color: var(--sm-text-2); font-size: 17rpx; }
+.favorites-play { display: flex; flex: none; align-items: center; gap: 8rpx; padding: 13rpx 26rpx; border-radius: 38rpx; background: var(--sm-hero-ink-bg); color: var(--sm-hero-ink); font-size: 18rpx; font-weight: 700; box-shadow: 0 8rpx 22rpx var(--sm-accent-glow); }
+.favorites-play:active { opacity: .85; }
 /* 新建歌单受控弹层：居中 Dialog + 半透明遮罩 */
 .sheet-mask { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; padding: 40rpx; background: var(--sm-mask); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
 .sheet-dialog { width: 100%; max-width: 560rpx; padding: 40rpx 36rpx 32rpx; border-radius: 28rpx; background: var(--sm-surface-3); border: 1rpx solid var(--sm-border-strong); box-shadow: var(--sm-shadow); }
@@ -1417,11 +1461,7 @@ function coverOf(collection: ApiCollectionSummary) {
 .sheet-btn.ghost { border: 1rpx solid var(--sm-border); background: var(--sm-surface); color: var(--sm-text-2); }
 .sheet-btn.primary { background: var(--sm-accent); color: var(--sm-accent-ink); }
 .sheet-btn.disabled { opacity: .6; }
-.playlist-icon { display: grid; flex: none; place-items: center; width: 66rpx; height: 66rpx; border-radius: 16rpx; background: var(--sm-accent-soft); color: var(--sm-accent); }
-.playlist-thumbnail { width: 100%; height: 100%; border-radius: inherit; }
-.playlist-copy { display: flex; flex: 1; flex-direction: column; gap: 6rpx; }
-.playlist-name { color: var(--sm-text); font-size: 21rpx; font-weight: 700; }
-.playlist-meta { color: var(--sm-text-2); font-size: 16rpx; }
+.playlist-thumbnail { width: 100%; height: 100%; }
 .library-count { padding-bottom: 4rpx; color: var(--sm-text-2); font-size: 18rpx; }
 /* 曲库 tab：条目行（私有/已公开徽章 + 移除引用） */
 .lib-head { padding: 6rpx 0 18rpx; }
@@ -1449,20 +1489,27 @@ function coverOf(collection: ApiCollectionSummary) {
 .login-title { margin-top: 22rpx; color: var(--sm-text); font-size: 27rpx; font-weight: 800; }
 .login-copy { margin-top: 12rpx; color: var(--sm-text-2); font-size: 18rpx; line-height: 1.6; }
 .login-button { display: flex; align-items: center; justify-content: center; align-self: stretch; margin-top: 26rpx; height: 84rpx; border-radius: 42rpx; background: var(--sm-accent); color: var(--sm-accent-ink); font-size: 21rpx; font-weight: 800; }
-.request-banner { margin: 30rpx 0 0; }
-.request-icon { display: grid; flex: none; place-items: center; width: 53rpx; height: 53rpx; border-radius: 17rpx; background: var(--sm-danger-soft); color: var(--sm-danger); }
-.upload-copy { display: flex; flex: 1; flex-direction: column; gap: 6rpx; }
-.upload-title { color: var(--sm-text); font-size: 19rpx; font-weight: 700; }
-.upload-subtitle { color: var(--sm-text-2); font-size: 16rpx; }
-/* 平台适配：固定底栏用 env(safe-area-inset-bottom) 避开 iPhone 底部安全区 */
-.tabbar { position: fixed; z-index: 3; right: 0; bottom: 0; left: 0; display: flex; justify-content: space-around; padding: 17rpx 35rpx calc(env(safe-area-inset-bottom) + 20rpx); border-top: 1rpx solid var(--sm-surface-3); background: var(--sm-tabbar-bg); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); }
-.tab-item { display: flex; min-width: 105rpx; flex-direction: column; align-items: center; gap: 6rpx; padding: 10rpx 0; border-radius: 40rpx; color: var(--sm-text-3); font-size: 16rpx; transition: background .2s ease, color .2s ease; }
-.tab-item.active { color: var(--sm-text); font-weight: 700; background: var(--sm-accent-soft); }
-.tab-item :deep(svg), .tab-item :deep(.lucide-shim) { transition: transform .18s ease; }
+/* 平台适配：固定底栏用 env(safe-area-inset-bottom) 避开 iPhone 底部安全区。
+   选中态为轻量范式（accent 图标 + 顶部小圆点），不再用 pill 背景。 */
+.tabbar { position: fixed; z-index: 3; right: 0; bottom: 0; left: 0; display: flex; align-items: flex-end; justify-content: space-around; padding: 14rpx 30rpx calc(env(safe-area-inset-bottom) + 18rpx); border-top: 1rpx solid var(--sm-surface-3); background: var(--sm-tabbar-bg); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); }
+.tab-item { position: relative; display: flex; min-width: 105rpx; flex-direction: column; align-items: center; gap: 5rpx; padding: 10rpx 0 2rpx; color: var(--sm-text-3); font-size: 16rpx; transition: color .2s ease; }
+.tab-item.active { color: var(--sm-accent); }
+.tab-item.active text { color: var(--sm-text); font-weight: 700; }
+.tab-dot { position: absolute; top: -2rpx; width: 7rpx; height: 7rpx; border-radius: 50%; background: var(--sm-accent); opacity: 0; transform: scale(.4); transition: opacity .2s ease, transform .2s ease; }
+.tab-item.active .tab-dot { opacity: 1; transform: scale(1); }
+.tab-item :deep(svg), .tab-item :deep(.lucide-shim) { transition: transform .18s ease, color .18s ease; }
 .tab-item.active :deep(svg), .tab-item.active :deep(.lucide-shim) { color: var(--sm-accent); transform: translateY(-2rpx) scale(1.1); }
-/* 中间凸起「消息」按钮：上浮出底栏顶边，未读角标贴右上角（描边用底栏底色做「嵌」进去的效果） */
-.tab-fab { position: relative; align-self: flex-start; display: grid; place-items: center; width: 96rpx; height: 96rpx; margin-top: -35rpx; border: 1rpx solid var(--sm-border-strong); border-radius: 50%; background: var(--sm-accent-grad); color: var(--sm-accent-ink); box-shadow: 0 10rpx 26rpx var(--sm-accent-glow); box-sizing: border-box; }
-.tab-fab-badge { position: absolute; top: -8rpx; right: -10rpx; min-width: 32rpx; padding: 0 8rpx; border: 2rpx solid var(--sm-tabbar-bg); border-radius: 20rpx; background: var(--sm-danger); color: #ffffff; font-size: 16rpx; font-weight: 800; line-height: 30rpx; text-align: center; box-sizing: border-box; }
+/* 中间凸起「正在播放」黑胶：当前曲目封面旋转，外圈 accent 播放/暂停角标；
+   无曲目时显示音符占位不旋转。点击展开全屏播放器。 */
+.tab-disc { position: relative; flex: none; width: 104rpx; height: 104rpx; margin-top: -46rpx; border: 5rpx solid var(--sm-bg); border-radius: 50%; background: var(--sm-bg-soft); box-shadow: 0 10rpx 26rpx var(--sm-art-shadow), 0 0 0 1rpx var(--sm-border-strong), 0 0 24rpx var(--sm-accent-glow); overflow: hidden; box-sizing: border-box; transition: transform .15s ease; }
+.tab-disc:active { transform: scale(.94); }
+.disc-spin { position: absolute; inset: 0; border-radius: 50%; overflow: hidden; animation: tab-disc-spin 16s linear infinite; animation-play-state: paused; }
+.disc-spin.playing { animation-play-state: running; }
+.tab-disc.idle .disc-spin { animation: none; }
+.disc-spin :deep(image), .disc-spin :deep(img) { width: 100%; height: 100%; }
+.disc-empty { display: grid; place-items: center; width: 100%; height: 100%; background: var(--sm-surface-3); color: var(--sm-text-3); }
+.disc-state { position: absolute; right: 0; bottom: 0; z-index: 2; display: grid; place-items: center; width: 34rpx; height: 34rpx; border-radius: 50%; background: var(--sm-accent); color: var(--sm-accent-ink); box-shadow: 0 4rpx 12rpx rgba(0, 0, 0, .4); }
+@keyframes tab-disc-spin { to { transform: rotate(360deg); } }
 /* 我的页：圆形快捷入口行（消息带未读角标） */
 .quick-circles { display: flex; justify-content: space-between; margin: 4rpx 0 30rpx; padding: 26rpx 34rpx; border: 1rpx solid var(--sm-border); border-radius: var(--sm-radius-card); background: var(--sm-surface); -webkit-backdrop-filter: blur(var(--sm-blur)); backdrop-filter: blur(var(--sm-blur)); }
 .quick-circle { position: relative; display: flex; flex-direction: column; align-items: center; gap: 10rpx; }
@@ -1474,17 +1521,6 @@ function coverOf(collection: ApiCollectionSummary) {
 .qc-follow { background: var(--sm-accent-3-soft); color: var(--sm-accent-3); }
 .qc-badge { position: absolute; top: -10rpx; right: -6rpx; min-width: 30rpx; padding: 0 8rpx; border: 2rpx solid var(--sm-bg); border-radius: 20rpx; background: var(--sm-danger); color: #ffffff; font-size: 15rpx; font-weight: 800; line-height: 28rpx; text-align: center; box-sizing: border-box; }
 .qc-label { color: var(--sm-text-2); font-size: 17rpx; }
-/* 我的页：分组入口列表（音乐库 / 设置） */
-.entry-group { margin-bottom: 30rpx; border: 1rpx solid var(--sm-border); border-radius: var(--sm-radius-card); background: var(--sm-surface); -webkit-backdrop-filter: blur(var(--sm-blur)); backdrop-filter: blur(var(--sm-blur)); overflow: hidden; }
-.entry-group-title { display: block; padding: 20rpx 26rpx 4rpx; color: var(--sm-text-3); font-size: 17rpx; font-weight: 800; letter-spacing: .12em; }
-.entry-row { display: flex; align-items: center; gap: 20rpx; padding: 22rpx 26rpx; border-top: 1rpx solid var(--sm-divider); transition: background .15s ease; }
-.entry-row:active { background: var(--sm-surface-2); }
-.entry-icon { display: grid; flex: none; place-items: center; width: 62rpx; height: 62rpx; border-radius: 18rpx; }
-.ei-upload { background: var(--sm-accent-soft); color: var(--sm-accent); }
-.ei-request { background: var(--sm-info-soft); color: var(--sm-accent-2); }
-.ei-theme { background: var(--sm-accent-3-soft); color: var(--sm-accent-3); }
-.ei-profile { background: var(--sm-warn-soft); color: var(--sm-warn); }
-.entry-name { flex: 1; color: var(--sm-text); font-size: 21rpx; font-weight: 600; }
 /* 横屏：内容栏与竖屏手机同宽居中（844x390 时两侧各留 62px），固定底栏同步对齐，
    避免宽屏下卡片被横向拉伸、底栏比内容栏更宽 */
 @media (orientation: landscape) and (max-height: 820px) and (min-width: 560px),
@@ -1495,6 +1531,10 @@ function coverOf(collection: ApiCollectionSummary) {
   .hero-row { display: flex; align-items: stretch; gap: 26rpx; }
   .page-heading { flex: none; padding: 34rpx 0 0 44rpx; }
   .inspiration-card { flex: 1; min-width: 0; margin: 30rpx 40rpx 0 0; }
+  /* 宽视口下歌单宫格改 3 列，利用横向空间少留白 */
+  .playlist-grid { grid-template-columns: repeat(3, 1fr); }
+  /* 宽视口下曲目列表双列（TrackRow 自身卡片化，直接进网格） */
+  .track-list { display: grid; grid-template-columns: 1fr 1fr; gap: 14rpx 20rpx; align-items: start; }
 }
 /* #ifdef H5 */
 /* 宽屏（桌面浏览器/平板浏览器）限宽居中；App 端始终铺满，避免手机/折叠屏被限宽 */

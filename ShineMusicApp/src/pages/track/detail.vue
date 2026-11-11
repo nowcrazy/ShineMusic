@@ -42,8 +42,13 @@ function play() {
 
 onLoad((query) => {
   const id = (query as Record<string, string>).id
-  if (id) void load(id)
-  else notFound.value = true
+  if (id) {
+    void load(id)
+  } else {
+    // 无 id 时同样要结束加载态，否则模板会永久停在「加载中…」。
+    notFound.value = true
+    loading.value = false
+  }
 })
 </script>
 

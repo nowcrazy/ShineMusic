@@ -17,7 +17,7 @@
 ## 本地运行
 
 ```sh
-# 1. 配置地址（新机器首次）：复制模板并把 lanIp 改成本机局域网 IP
+# 1. 配置地址（新机器首次）：复制模板，把 server.origin 改成你的服务器地址
 Copy-Item config/hosts.example.json config/hosts.json
 
 # 2. 数据库、缓存与消息队列（Docker Desktop）：启动 PostgreSQL 16 + Redis 7 + RabbitMQ 3
@@ -43,15 +43,15 @@ yarn build:app
 
 ## 地址配置
 
-**所有地址只在 `config/hosts.json` 一处维护**（两个前端构建与后端启动都读它，读不到时有兜底，改完重启前后端生效）：
+**所有地址只在 `config/hosts.json` 的 `server.origin` 一处维护**：换成自己的服务器时，把这个值改成域名或 `http://服务器IP:端口`，App（dev 与 APK 内置地址一致）、H5 dev 代理、Web 后台 dev 代理与生产直连、后端 CORS 白名单、邀请邮件链接、Swagger 公网入口全部自动跟随。配置里**不含任何会随 DHCP / 网卡变化的本机局域网 IP**。
 
 | 字段 | 作用 |
 |---|---|
-| `local.lanIp` | 电脑局域网 IP（后端 CORS、邀请邮件链接） |
-| `local.apiPort` / `local.appApiPort` | 后端端口（本机 / 真机调试） |
+| `server.origin` | **唯一服务器地址**（域名或 `http://服务器IP:端口`）。改后重跑 `yarn build:app` 再打 APK；dev server 会自动重启 |
+| `local.apiPort` / `local.appApiPort` | 后端端口；仅在 `origin` 未配置、纯本地开发（无服务器）时作为回退使用 |
 | `local.webPort` | Web 前端 dev server 端口（后端据此放行 CORS） |
-| `server.webOrigin` | Web 前端独立站点地址（生产 CORS 白名单来源） |
-| `server.appApiOrigin` | APK 内置的公网 API 地址（改后必须重跑 `yarn build:app` 再打包） |
+
+旧版字段 `local.lanIp` / `apiHost` / `server.webOrigin` / `apiOrigin` / `appApiOrigin` 已从模板移除，代码仅作兼容回退读取；新部署不需要填写它们。若只想纯本地跑（后端就在本机、没有公网入口），把 `origin` 填成 `http://127.0.0.1:5180` 即可。
 
 ## 接口契约
 

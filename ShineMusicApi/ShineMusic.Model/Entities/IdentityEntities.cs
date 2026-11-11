@@ -266,6 +266,9 @@ public sealed class UserPlaylistPendingTrack
     /// <summary>最近更新时间（UTC）。</summary>
     [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
+    /// <summary>搜索阶段逐源诊断快照（JSON）：[{provider, outcome, resultCount, message}]；无匹配时用于解释原因。</summary>
+    [SugarColumn(ColumnDataType = "text", IsNullable = true)]
+    public string? SearchDiagnosticsJson { get; set; }
 }
 
 /// <summary>从外部歌单解析后独立加入的下载队列曲目，不创建或关联用户歌单。</summary>
@@ -302,6 +305,9 @@ public sealed class PlaylistDownloadQueueItem
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
     [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
+    /// <summary>搜索阶段逐源诊断快照（JSON）：[{provider, outcome, resultCount, message}]；无匹配时用于解释原因。</summary>
+    [SugarColumn(ColumnDataType = "text", IsNullable = true)]
+    public string? SearchDiagnosticsJson { get; set; }
 }
 
 /// <summary>点歌/求歌记录：用户提交想要上架的曲目，管理员走审核流程处理，其他用户可投票顶歌。</summary>
@@ -540,7 +546,9 @@ public sealed class AdminAuditEntry
     /// <summary>被操作资源 Id（字符串形式），最长 100 字符。</summary>
     public required string ResourceId { get; set; }
     /// <summary>操作详情（可选，JSON 序列化后的快照，如变更前后内容）。</summary>
-    [SugarColumn(IsNullable = true)]
+    /// <remarks>完整请求快照常超过 255 字符，必须用 text；早期 CodeFirst 默认建的 varchar(255)
+    /// 由 SqlSugarSchemaBootstrap 在存量库上幂等升级。</remarks>
+    [SugarColumn(ColumnDataType = "text", IsNullable = true)]
     public string? DetailsJson { get; set; }
     /// <summary>请求追踪 Id（HttpContext.TraceIdentifier），用于串联日志与审计，最长 100 字符。</summary>
     public required string TraceId { get; set; }

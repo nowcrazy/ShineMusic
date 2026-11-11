@@ -278,6 +278,7 @@ export interface ApiExternalDownloadTask {
   updatedAtUtc: string
   hasLyrics?: boolean | null
   releaseYear?: number | null
+  attemptErrors?: readonly ApiTaskAttemptError[] | null
 }
 
 /** 来源：`ShineMusicApi/ShineMusic.Model/Contracts/SourceDownloadDtos.cs` */
@@ -877,6 +878,14 @@ export interface ApiSystemCapabilities {
   minimumPasswordStrength: number
 }
 
+/** 来源：`ShineMusicApi/ShineMusic.Model/Contracts/SourceDownloadDtos.cs` */
+export interface ApiTaskAttemptError {
+  provider: string
+  attemptIndex: number
+  errorCode?: string | null
+  message?: string | null
+}
+
 /** 来源：`ShineMusicApi/ShineMusic.Model/Contracts/SocialDtos.cs` */
 export interface ApiTrackComment {
   id: string
@@ -913,6 +922,30 @@ export interface ApiTrack {
   durationMs?: number | null
   artworkUrl?: string | null
   audio?: ApiAudio | null
+}
+
+/** 来源：`ShineMusicApi/ShineMusic.Model/Contracts/SourceDownloadDtos.cs` */
+export interface ApiUnmatchedTrack {
+  id: string
+  origin: string
+  title: string
+  artists: readonly string[]
+  albumTitle?: string | null
+  sourcePlatform?: string | null
+  playlistName?: string | null
+  status: string
+  reason: string
+  createdAtUtc: string
+}
+
+/** 来源：`ShineMusicApi/ShineMusic.Model/Contracts/SourceDownloadDtos.cs` */
+export interface ApiUnmatchedTrackList {
+  items: readonly ApiUnmatchedTrack[]
+  total: number
+  page: number
+  pageSize: number
+  noSource: number
+  taskFailed: number
 }
 
 /** 来源：`ShineMusicApi/ShineMusic.Model/Contracts/NotificationDtos.cs` */

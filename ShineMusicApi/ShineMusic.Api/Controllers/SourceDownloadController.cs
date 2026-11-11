@@ -12,6 +12,7 @@ using ShineMusic.Model.Entities;
 using ShineMusic.Model.Options;
 using ShineMusic.Service;
 using ShineMusic.Service.Messaging;
+using ShineMusic.Service.PlaylistImport;
 using ShineMusic.Service.SourceDownload;
 using SqlSugar;
 
@@ -341,6 +342,24 @@ public sealed class SourceDownloadController : ControllerBase
         };
     }
 
+    /// <summary>
+    /// 未匹配/无音源曲目列表：覆盖「独立加入下载队列」与「导入歌单待补齐」两条链路，
+    /// 只读展示，不会创建任何下载任务。
+    /// </summary>
+    [HttpGet("unmatched", Name = "ListUnmatchedSourceTracks")]
+    public async Task<IResult> ListUnmatched(
+        [FromQuery] string? status,
+        [FromQuery] string? q,
+        [FromQuery] int? page,
+        [FromQuery] int? pageSize,
+        PlaylistImportService importService,
+        CancellationToken cancellationToken)
+    {
+        var result = await importService.ListUnmatchedAsync(
+            status, q, Math.Max(1, page ?? 1), Math.Clamp(pageSize ?? 100, 1, 1000), cancellationToken);
+        return Results.Ok(result);
+    }
+
     /// <summary>实体 → DTO 映射（ArtistsJson 反序列化为数组；hasLyrics 由调用方按 ImportItemId→PublishedTrackId→Lyrics 解析后传入）。</summary>
     private static ExternalDownloadTaskDto ToDto(ExternalDownloadTask task, bool? hasLyrics = null) => new(
         task.Id,
@@ -365,7 +384,16 @@ public sealed class SourceDownloadController : ControllerBase
         task.CreatedAtUtc,
         task.UpdatedAtUtc,
         hasLyrics,
-        task.ReleaseYear);
+        task.ReleaseYear,
+        DeserializeAttemptErrors(task.AttemptErrorsJson));
+
+    /// <summary>解析 AttemptErrorsJson 为逐源尝试记录；缺失或格式异常时降级为 null（不影响任务展示）。</summary>
+    private static List<TaskAttemptErrorDto>? DeserializeAttemptErrors(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try { return JsonSerializer.Deserialize<List<TaskAttemptErrorDto>>(json); }
+        catch (JsonException) { return null; }
+    }
 
     /// <summary>
     /// 批量解析任务的歌词有无：ImportItemId → LibraryImportItem.PublishedTrackId → Lyrics 存在性。

@@ -39,7 +39,7 @@ builder.Logging.AddFileLogger(options =>
 });
 
 // ===== 服务注册：全部提炼为扩展方法 =====
-builder.Services.AddShineMusicSwagger();
+builder.Services.AddShineMusicSwagger(builder.Configuration);
 builder.Services.AddShineMusicCrossCutting(builder.Configuration);
 builder.Services.AddShineMusicControllers();
 builder.Services.AddShineMusicOptions(builder.Configuration, builder.Environment);

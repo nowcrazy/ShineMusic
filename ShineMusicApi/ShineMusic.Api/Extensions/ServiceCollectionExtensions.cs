@@ -32,7 +32,7 @@ namespace ShineMusic.Api.Extensions;
 public static class ServiceCollectionExtensions
 {
     /// <summary>注册 Swagger/OpenAPI 文档（含 JWT Bearer 鉴权按钮）。</summary>
-    public static IServiceCollection AddShineMusicSwagger(this IServiceCollection services)
+    public static IServiceCollection AddShineMusicSwagger(this IServiceCollection services, IConfiguration configuration)
     {
         services.AddEndpointsApiExplorer();
         services.AddSwaggerGen(c =>
@@ -61,9 +61,13 @@ public static class ServiceCollectionExtensions
                 Contact = new OpenApiContact { Name = "ShineMusic Team" }
             });
 
-            // 公网入口：Tailscale Funnel 地址（来自 config/hosts.json 的 server.webOrigin），
+            // 公网入口：取自 config/hosts.json 的 server.origin（唯一真源），
             // 让 Swagger UI 的 "Servers" 下拉直接给出可复制的对外访问地址。
-            var funnelOrigin = Environment.GetEnvironmentVariable("SM_SWAGGER_SERVER");
+            // 旧部署若仍用 SM_SWAGGER_SERVER 环境变量注入，作为未配置 origin 时的回退。
+            var serverOrigin = configuration["server:origin"] ?? configuration["server:webOrigin"];
+            var funnelOrigin = !string.IsNullOrWhiteSpace(serverOrigin)
+                ? serverOrigin
+                : Environment.GetEnvironmentVariable("SM_SWAGGER_SERVER");
             if (!string.IsNullOrWhiteSpace(funnelOrigin))
             {
                 c.AddServer(new OpenApiServer { Url = funnelOrigin, Description = "公网入口（Tailscale Funnel）" });
@@ -217,15 +221,16 @@ public static class ServiceCollectionExtensions
             .BindConfiguration(PasswordPolicyOptions.SectionName)
             .Validate(options => options.MinimumStrength is >= 0 and <= 4, "PasswordPolicy:MinimumStrength must be between 0 and 4.")
             .ValidateOnStart();
-        // 邀请邮件里的注册链接：appsettings 未显式配置时，由 config/hosts.json 按环境推导。
+        // 邀请邮件里的注册链接：appsettings 未显式配置时，取 config/hosts.json 的 server.origin（唯一真源）。
+        // 不再使用会随 DHCP 变化的 local:lanIp；换成自己的服务器只改 origin 一处。
         services.PostConfigure<InvitationEmailOptions>(options =>
         {
             if (!string.IsNullOrWhiteSpace(options.PublicBaseUrl)) return;
-            var lanIp = configuration["local:lanIp"];
-            var webPort = configuration["local:webPort"] ?? "5173";
-            options.PublicBaseUrl = environment.IsDevelopment()
-                ? (string.IsNullOrWhiteSpace(lanIp) ? $"http://localhost:{webPort}" : $"http://{lanIp}:{webPort}")
-                : configuration["server:webOrigin"] ?? string.Empty;
+            var serverOrigin = configuration["server:origin"] ?? configuration["server:webOrigin"];
+            var webPort = configuration["local:webPort"] ?? "5174";
+            options.PublicBaseUrl = !string.IsNullOrWhiteSpace(serverOrigin)
+                ? serverOrigin
+                : $"http://localhost:{webPort}";
         });
         services
             .AddOptions<FeatureOptions>()
@@ -296,21 +301,21 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    /// <summary>注册 CORS 策略：优先 appsettings 显式配置，未配置时由 config/hosts.json 推导。</summary>
+    /// <summary>注册 CORS 策略：优先 appsettings 显式配置，未配置时由 config/hosts.json 的 server.origin 推导。</summary>
     public static IServiceCollection AddShineMusicCors(this IServiceCollection services, IConfiguration configuration, IWebHostEnvironment environment)
     {
         var allowedOrigins = configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
         if (allowedOrigins.Length == 0)
         {
-            var lanIp = configuration["local:lanIp"];
-            var webPort = configuration["local:webPort"] ?? "5173";
-            var serverWebOrigin = configuration["server:webOrigin"];
+            // server.origin 是唯一真源（兼容旧字段 webOrigin）；不再使用会变化的 local:lanIp。
+            var serverOrigin = configuration["server:origin"] ?? configuration["server:webOrigin"];
+            var webPort = configuration["local:webPort"] ?? "5174";
             allowedOrigins = environment.IsDevelopment()
-                ? (string.IsNullOrWhiteSpace(lanIp)
+                ? (string.IsNullOrWhiteSpace(serverOrigin)
                     ? [$"http://localhost:{webPort}", $"http://127.0.0.1:{webPort}"]
-                    : [$"http://localhost:{webPort}", $"http://127.0.0.1:{webPort}", $"http://{lanIp}:{webPort}"])
+                    : [$"http://localhost:{webPort}", $"http://127.0.0.1:{webPort}", serverOrigin!])
                 // "null"：5+App/HBuilderX 本地壳的页面来源是 file://，浏览器规范规定其跨域请求 Origin 头为字面量 "null"
-                : (string.IsNullOrWhiteSpace(serverWebOrigin) ? [] : [serverWebOrigin, "null"]);
+                : (string.IsNullOrWhiteSpace(serverOrigin) ? [] : [serverOrigin!, "null"]);
         }
         services.AddCors(options => options.AddPolicy("Client", policy =>
         {
@@ -410,13 +415,23 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient(AudiusSourceProvider.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(120));
         services.AddHttpClient(JamendoSourceProvider.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(120));
         services.AddHttpClient(YouTubeMusicSourceProvider.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(120));
-        services.AddHttpClient(KuwoSourceProvider.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(120));
+        services.AddHttpClient(KuwoSourceProvider.HttpClientName, (serviceProvider, client) =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(120);
+            // 可选登录态 Cookie：配置后取 VIP/320k 资源；匿名态（默认空）行为与之前完全一致。
+            var cookie = serviceProvider.GetRequiredService<IOptions<SourceDownloadOptions>>().Value.Kuwo.Cookie;
+            if (!string.IsNullOrWhiteSpace(cookie))
+                client.DefaultRequestHeaders.Add("Cookie", cookie.Trim());
+        });
         // 酷狗：plist/getSongInfo 系接口要求移动端 UA（缺省返回非 JSON），下载直链 sharefs 无特殊要求。
         // 全局频控网关 KugouRateLimitHandler：令牌桶限流（默认 2 QPS），防止触发酷狗 errcode:1002「操作太频繁」封禁。
-        services.AddHttpClient(KugouSourceProvider.HttpClientName, client =>
+        services.AddHttpClient(KugouSourceProvider.HttpClientName, (serviceProvider, client) =>
         {
             client.Timeout = TimeSpan.FromSeconds(120);
             client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1");
+            var cookie = serviceProvider.GetRequiredService<IOptions<SourceDownloadOptions>>().Value.Kugou.Cookie;
+            if (!string.IsNullOrWhiteSpace(cookie))
+                client.DefaultRequestHeaders.Add("Cookie", cookie.Trim());
         })
         // 酷狗对带 Accept-Encoding: gzip/deflate 的请求返回空 lists（total=0），
         // 故禁用 SocketsHttpHandler 的自动解压，避免其自动注入 Accept-Encoding 头。
@@ -427,11 +442,15 @@ public static class ServiceCollectionExtensions
         .AddHttpMessageHandler<KugouRateLimitHandler>();
         services.AddTransient<KugouRateLimitHandler>();
         // 咪咕：显式用 SocketsHttpHandler 限定 TLS1.2/1.3 并关闭 Expect: 100-continue。
-        services.AddHttpClient(MiguSourceProvider.HttpClientName, client =>
+        services.AddHttpClient(MiguSourceProvider.HttpClientName, (serviceProvider, client) =>
         {
             client.Timeout = TimeSpan.FromSeconds(120);
             client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36");
             client.DefaultRequestHeaders.ExpectContinue = false;
+            // 可选登录态 Cookie：配置后取 VIP 资源；匿名态（默认空）行为与之前完全一致。
+            var cookie = serviceProvider.GetRequiredService<IOptions<SourceDownloadOptions>>().Value.Migu.Cookie;
+            if (!string.IsNullOrWhiteSpace(cookie))
+                client.DefaultRequestHeaders.Add("Cookie", cookie.Trim());
         })
         .ConfigurePrimaryHttpMessageHandler(() => new System.Net.Http.SocketsHttpHandler
         {
@@ -449,15 +468,63 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IMusicSourceProvider, KugouSourceProvider>();
         services.AddSingleton<IMusicSourceProvider, MiguSourceProvider>();
         services.AddSingleton<IMusicSourceProvider, NeteaseSourceProvider>();
+        // 汽水音乐：搜索需 Android 客户端 UA、详情需浏览器 UA，因此不设默认 UA，由 provider 逐请求指定；
+        // 可选登录 Cookie 供后续解锁完整授权信息。下载直链走 task.Provider="qishui"（与歌单解析器同名客户端）。
+        services.AddHttpClient(QishuiSourceProvider.HttpClientName, (serviceProvider, client) =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(120);
+            var cookie = serviceProvider.GetRequiredService<IOptions<SourceDownloadOptions>>().Value.Qishui.Cookie;
+            if (!string.IsNullOrWhiteSpace(cookie))
+                client.DefaultRequestHeaders.Add("Cookie", cookie.Trim());
+        });
+        services.AddSingleton<IMusicSourceProvider, QishuiSourceProvider>();
+        // QQ音乐：搜索走 c.y.qq.com、vkey 取流走 u.y.qq.com，浏览器 UA；
+        // 可选登录态 Cookie：配置后取 VIP/320k/无损资源；匿名态（默认空）仅 128k m4a。
+        services.AddHttpClient(QqSourceProvider.HttpClientName, (serviceProvider, client) =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(120);
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36");
+            var cookie = serviceProvider.GetRequiredService<IOptions<SourceDownloadOptions>>().Value.Qq.Cookie;
+            if (!string.IsNullOrWhiteSpace(cookie))
+                client.DefaultRequestHeaders.Add("Cookie", cookie.Trim());
+        });
+        // 千千音乐（91q）：公开 API 免登录，需浏览器 UA + Referer + 自定义头 from:web（缺省签名接口 403/-400）；
+        // 服务端无视 Accept-Encoding 恒返回 gzip，handler 必须开自动解压。
+        services.AddHttpClient(QianqianSourceProvider.HttpClientName, client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(120);
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36");
+            client.DefaultRequestHeaders.Referrer = new Uri("https://music.91q.com/player");
+            client.DefaultRequestHeaders.Add("from", "web");
+        })
+        .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+        {
+            AutomaticDecompression = System.Net.DecompressionMethods.All
+        });
+        // Bilibili：搜索/详情 API 必须浏览器 UA + Referer（缺省返回 -412 风控）；下载走 yt-dlp 桥接（ISourceFileDownloader），不经此客户端。
+        services.AddHttpClient(BilibiliSourceProvider.HttpClientName, client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(120);
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36");
+            client.DefaultRequestHeaders.Referrer = new Uri("https://www.bilibili.com/");
+        });
+        services.AddSingleton<IMusicSourceProvider, QqSourceProvider>();
+        services.AddSingleton<IMusicSourceProvider, QianqianSourceProvider>();
+        services.AddSingleton<IMusicSourceProvider, BilibiliSourceProvider>();
         services.AddScoped<SourceDownloadService>();
         services.AddScoped<SourceDownloadFallbackService>();
 
         // ===== 外部歌单解析导入 =====
-        services.AddHttpClient(NeteasePlaylistParser.HttpClientName, client =>
+        // 注：命名客户端 "netease" 由音源 provider 与歌单解析器共享；
+        // 可选登录态 Cookie：配置后 provider 可取 VIP 曲目直链；匿名态（默认空）行为与之前完全一致。
+        services.AddHttpClient(NeteasePlaylistParser.HttpClientName, (serviceProvider, client) =>
         {
             client.Timeout = TimeSpan.FromSeconds(120);
             client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36");
             client.DefaultRequestHeaders.Referrer = new Uri("https://music.163.com/");
+            var cookie = serviceProvider.GetRequiredService<IOptions<SourceDownloadOptions>>().Value.Netease.Cookie;
+            if (!string.IsNullOrWhiteSpace(cookie))
+                client.DefaultRequestHeaders.Add("Cookie", cookie.Trim());
         });
         services.AddHttpClient(QQMusicPlaylistParser.HttpClientName, client =>
         {
@@ -465,9 +532,10 @@ public static class ServiceCollectionExtensions
             client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36");
             client.DefaultRequestHeaders.Referrer = new Uri("https://y.qq.com/");
         });
+        // 汽水：分享页/短链解析 + 下载直链（task.Provider="qishui" 复用该客户端），整曲体积大放宽到 120s。
         services.AddHttpClient(QishuiPlaylistParser.HttpClientName, client =>
         {
-            client.Timeout = TimeSpan.FromSeconds(30);
+            client.Timeout = TimeSpan.FromSeconds(120);
             client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36");
             client.DefaultRequestHeaders.Referrer = new Uri("https://music.douyin.com/qishui/");
         });

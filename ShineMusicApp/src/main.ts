@@ -10,7 +10,7 @@ import * as VueRuntime from 'vue'
 import App from './App.vue'
 import { reapplyThemeOnApp } from '@/utils/app-theme-bridge'
 import { installWebApiShim } from '@/utils/web-api-shim'
-import { createAppI18n } from '@/locale'
+import { createAppI18n, refreshNavigationBarTitle } from '@/locale'
 
 /**
  * uni-app 定制 Vue 运行时额外导出的应用工厂。
@@ -38,14 +38,18 @@ export function createApp() {
   // 注册 vue-i18n（legacy: false），使组件内 useI18n()/模板 $t 可用；
   // 必须在返回 app 前完成注册，否则 PlayerBar / LanguageSwitcher 等使用 useI18n 的组件会注入失败。
   app.use(createAppI18n())
-  // #ifdef APP-PLUS
-  // App-vue 每个页面是独立 webview：新页面显示时把当前主题重放一次，
-  // 否则切过主题后再进入的页面仍停留在默认皮肤。
+  // 全局 onShow 钩子：
+  // - 所有平台：pages.json 的 navigationBarTitleText 是静态中文，无法跟随语言切换，
+  //   这里按当前 route 取 i18n key 重设标题，覆盖 26 个业务页面；
+  // - App 端：每个页面是独立 webview，新页面显示时重放主题，否则仍是默认皮肤。
   app.mixin({
     onShow() {
+      // 语言切换瞬间由 setLocale 主动刷新；这里是页面每次显示时的兜底重设。
+      refreshNavigationBarTitle()
+      // #ifdef APP-PLUS
       reapplyThemeOnApp()
+      // #endif
     },
   })
-  // #endif
   return { app }
 }

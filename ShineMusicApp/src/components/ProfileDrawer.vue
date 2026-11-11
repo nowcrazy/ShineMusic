@@ -70,6 +70,12 @@ function goProfile() {
   uni.navigateTo({ url: '/pages/profile/index' })
 }
 
+/** 跳转歌曲需求池（原「我的」页入口收编至此） */
+function goRequests() {
+  close()
+  uni.navigateTo({ url: '/pages/requests/index' })
+}
+
 /** 跳转管理员曲库导入审核页 */
 function goImportManagement() {
   close()
@@ -221,6 +227,13 @@ function handleLogout() {
             <ChevronRight :size="16" class="drawer-item-chevron" />
           </view>
 
+          <!-- 歌曲需求池：想听的歌提交需求并投票 -->
+          <view class="drawer-item" @tap="goRequests">
+            <view class="drawer-icon request-icon"><Inbox :size="19" /></view>
+            <text class="drawer-item-title">{{ t('nav.requestsPool') }}</text>
+            <ChevronRight :size="16" class="drawer-item-chevron" />
+          </view>
+
           <template v-if="isAdmin">
             <text class="drawer-group">{{ t('drawer.admin') }}</text>
             <view class="drawer-item" @tap="goRequestManagement">
@@ -257,8 +270,8 @@ function handleLogout() {
         </view>
       </scroll-view>
 
-      <!-- 底部：退出登录 -->
-      <view class="drawer-foot">
+      <!-- 底部：退出登录（仅登录态显示，匿名抽屉不应出现退出入口） -->
+      <view v-if="currentUser" class="drawer-foot">
         <view class="drawer-logout" @tap="handleLogout"><LogOut :size="18" /><text>{{ t('drawer.logout') }}</text></view>
       </view>
     </view>
@@ -307,6 +320,7 @@ function handleLogout() {
 .drawer-item-chevron.rotated { transform: rotate(90deg); }
 .drawer-icon.server-icon { background: var(--sm-info-soft); color: var(--sm-accent-2); }
 .drawer-icon.lang-icon { background: var(--sm-accent-3-soft); color: var(--sm-accent-3); }
+.drawer-icon.request-icon { background: var(--sm-warn-soft); color: var(--sm-warn); }
 /* 内嵌语言切换：与主题色卡同款内嵌容器 */
 .lang-inline { padding: 6rpx 8rpx 20rpx; }
 /* 服务器地址行：标题 + 当前生效地址副标题双行展示 */

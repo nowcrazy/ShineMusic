@@ -11,7 +11,10 @@
  *   uni InnerAudioContext（无 EQ，UI 应据 state.eqSupported 隐藏或禁用音效入口）；
  * - 本模块不直接调用 /api/v1 接口，播放地址由 catalog.mapTrack 预先解析到 Track.audioUrl。
  */
-import { reactive, readonly } from 'vue'
+import { reactive, readonly, ref } from 'vue'
+
+/** 全屏播放器是否展开（供 App.vue 全局返回拦截使用） */
+export const playerExpanded = ref(false)
 import type { ApiLyric, Track } from '@/types/music'
 import { checkTrackExists, getTrackDefaultLyric } from './catalog'
 import { reportPlayEvent } from './feedback'

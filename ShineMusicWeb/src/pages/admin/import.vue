@@ -22,6 +22,8 @@ import {
   uploadImportFilesBatch,
   bulkPublishCandidates,
 } from '@/services/admin-import'
+import { getUnmatchedTracks } from '@/services/admin-source-download'
+import UnmatchedTracksDialog from '@/components/UnmatchedTracksDialog.vue'
 import { describeError } from '@/services/errors'
 import { formatTime } from '@/utils/format'
 import type { ApiLibraryImportItem } from '@/types/api.generated'
@@ -389,7 +391,28 @@ async function submitUpload() {
 
 const matchAlert = computed(() => current.value?.songRequestMatch ?? null)
 
-onMounted(loadItems)
+/** 未匹配 / 无音源汇总：区分「匹配不到直接结束」与「建了任务但下载失败」。 */
+const unmatchedSummary = ref({ total: 0, noSource: 0, taskFailed: 0 })
+const unmatchedDialogVisible = ref(false)
+
+async function loadUnmatchedSummary() {
+  try {
+    const result = await getUnmatchedTracks({ page: 1, pageSize: 1 })
+    unmatchedSummary.value = {
+      total: result.total,
+      noSource: result.noSource,
+      taskFailed: result.taskFailed,
+    }
+  } catch {
+    // 汇总只是提示条，失败不影响主列表（静默降级并用 0 隐藏）。
+    unmatchedSummary.value = { total: 0, noSource: 0, taskFailed: 0 }
+  }
+}
+
+onMounted(() => {
+  void loadItems()
+  void loadUnmatchedSummary()
+})
 </script>
 
 <template>
@@ -404,6 +427,17 @@ onMounted(loadItems)
         <el-button type="primary" :icon="Upload" @click="openUpload">上传音频</el-button>
       </div>
     </div>
+
+    <el-alert
+      v-if="unmatchedSummary.total > 0"
+      class="unmatched-alert"
+      type="warning"
+      show-icon
+      :closable="false"
+      :title="`有 ${unmatchedSummary.total} 首曲目未进入导入审核：${unmatchedSummary.noSource} 首无音源（未创建下载任务），${unmatchedSummary.taskFailed} 首下载失败`"
+    >
+      <el-button type="primary" link @click="unmatchedDialogVisible = true">查看未匹配曲目</el-button>
+    </el-alert>
 
     <div class="panel">
       <el-tabs v-model="activeStatus" @tab-change="changeTab">
@@ -713,6 +747,8 @@ onMounted(loadItems)
         <el-button type="primary" :loading="uploading" @click="submitUpload">开始上传</el-button>
       </template>
     </el-dialog>
+
+    <UnmatchedTracksDialog v-model="unmatchedDialogVisible" />
   </div>
 </template>
 
@@ -720,6 +756,10 @@ onMounted(loadItems)
 .heading-actions {
   display: flex;
   gap: 10px;
+}
+
+.unmatched-alert {
+  margin-bottom: 12px;
 }
 
 .file-cell {

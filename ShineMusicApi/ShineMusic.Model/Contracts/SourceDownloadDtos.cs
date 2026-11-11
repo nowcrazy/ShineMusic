@@ -70,7 +70,15 @@ public sealed record ExternalDownloadTaskDto(
     DateTime CreatedAtUtc,
     DateTime UpdatedAtUtc,
     bool? HasLyrics,
-    int? ReleaseYear = null);
+    int? ReleaseYear = null,
+    IReadOnlyList<TaskAttemptErrorDto>? AttemptErrors = null);
+
+/// <summary>下载任务单次换源尝试的失败记录（对应 AttemptErrorsJson 的单条）。</summary>
+public sealed record TaskAttemptErrorDto(
+    string Provider,
+    int AttemptIndex,
+    string? ErrorCode,
+    string? Message);
 
 /// <summary>任务分页响应。</summary>
 public sealed record ExternalDownloadTaskListDto(
@@ -107,3 +115,35 @@ public enum SwitchSourceFailureKind
     NoMatchFound,
     DuplicateTask
 }
+
+/// <summary>未匹配/无音源曲目：来自「加入下载队列」或「导入歌单」两条链路中未建任务的条目。</summary>
+/// <param name="Id">条目 Id。</param>
+/// <param name="Origin">来源链路：queue（独立加入下载队列）/ playlist（歌单待补齐）。</param>
+/// <param name="Title">曲目标题。</param>
+/// <param name="Artists">艺人列表。</param>
+/// <param name="AlbumTitle">专辑名。</param>
+/// <param name="SourcePlatform">来源平台标识（netease/qqmusic/kuwo/kugou/qishui 等）。</param>
+/// <param name="PlaylistName">所属歌单名；queue 链路为 null。</param>
+/// <param name="Status">状态：no_source（搜索无匹配）/ failed（任务失败）。</param>
+/// <param name="Reason">中文原因摘要（由逐源诊断生成）。</param>
+/// <param name="CreatedAtUtc">条目创建时间（UTC）。</param>
+public sealed record UnmatchedTrackDto(
+    Guid Id,
+    string Origin,
+    string Title,
+    IReadOnlyList<string> Artists,
+    string? AlbumTitle,
+    string? SourcePlatform,
+    string? PlaylistName,
+    string Status,
+    string Reason,
+    DateTime CreatedAtUtc);
+
+/// <summary>未匹配曲目分页响应；NoSource / TaskFailed 为不受分页影响的总数，用于标签页计数。</summary>
+public sealed record UnmatchedTrackListDto(
+    IReadOnlyList<UnmatchedTrackDto> Items,
+    int Total,
+    int Page,
+    int PageSize,
+    int NoSource,
+    int TaskFailed);

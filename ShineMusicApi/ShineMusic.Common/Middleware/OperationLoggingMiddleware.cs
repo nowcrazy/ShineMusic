@@ -45,14 +45,24 @@ public sealed class OperationLoggingMiddleware
         // 出问题顺着 TraceId 即可贯穿整条链路。请求结束还原，避免串号。
         var previousTraceId = CorrelationContext.CurrentTraceId;
         CorrelationContext.CurrentTraceId = context.TraceIdentifier;
+        // 异常可能穿透本中间件、直到更外层的全局异常处理中间件才被写成 500；
+        // 那时 finally 里的 Response.StatusCode 仍是默认 200，需按「有异常冒泡」记为 5xx。
+        Exception? unhandled = null;
         try
         {
             await _next(context);
         }
+        catch (Exception ex)
+        {
+            unhandled = ex;
+            throw;
+        }
         finally
         {
             stopwatch.Stop();
-            var status = context.Response.StatusCode;
+            var status = unhandled is not null && context.Response.StatusCode < 400
+                ? 500
+                : context.Response.StatusCode;
             // 关键：本中间件注册在认证之前，必须在 _next 执行完之后再取 User，
             // 否则永远拿不到 JWT 解析出的用户（历史日志里 User=anonymous 即此原因）。
             var userId = ResolveUserId(context.User);

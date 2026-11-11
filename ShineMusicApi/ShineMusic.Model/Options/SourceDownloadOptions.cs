@@ -31,6 +31,18 @@ public sealed class SourceDownloadOptions
     /// <summary>咪咕音乐音源配置（运营商版权曲库，含腾讯独家曲如周杰伦，支持无损）。</summary>
     public MiguSourceOptions Migu { get; set; } = new();
 
+    /// <summary>汽水音乐（抖音音乐）音源配置（免密钥搜索/元数据；VIP 曲目匿名态仅试听片段）。</summary>
+    public QishuiSourceOptions Qishui { get; set; } = new();
+
+    /// <summary>QQ音乐音源配置（腾讯系曲库，匿名 128k m4a；Cookie 登录态可至 320k/无损）。</summary>
+    public QqSourceOptions Qq { get; set; } = new();
+
+    /// <summary>千千音乐（百度音乐）音源配置（公开 API 免登录，中文老歌覆盖）。</summary>
+    public QianqianSourceOptions Qianqian { get; set; } = new();
+
+    /// <summary>Bilibili（B站音频）音源配置（live/综艺现场/翻唱；下载经 yt-dlp 桥接自下载，复用 YtDlp 节代理/cookies）。</summary>
+    public BilibiliSourceOptions Bilibili { get; set; } = new();
+
     /// <summary>下载行为限制（超时/体积/并发）。</summary>
     public SourceDownloadLimits Download { get; set; } = new();
 
@@ -85,6 +97,9 @@ public sealed class KuwoSourceOptions
 {
     /// <summary>是否启用该音源（免密钥，默认开启）。</summary>
     public bool Enabled { get; set; } = true;
+
+    /// <summary>可选 Cookie（登录态）：配置后可取 VIP/320k 资源，留空为匿名态。真实值由环境变量注入，勿提交仓库。</summary>
+    public string Cookie { get; set; } = string.Empty;
 }
 
 /// <summary>酷狗音源配置。</summary>
@@ -92,6 +107,9 @@ public sealed class KugouSourceOptions
 {
     /// <summary>是否启用该音源（免密钥，默认开启）。</summary>
     public bool Enabled { get; set; } = true;
+
+    /// <summary>可选 Cookie（登录态）：配置后可取 VIP 资源，留空为匿名态。真实值由环境变量注入，勿提交仓库。</summary>
+    public string Cookie { get; set; } = string.Empty;
 }
 
 /// <summary>网易云音乐音源配置。</summary>
@@ -99,6 +117,9 @@ public sealed class NeteaseSourceOptions
 {
     /// <summary>是否启用该音源（免密钥，默认开启）。</summary>
     public bool Enabled { get; set; } = true;
+
+    /// <summary>可选 Cookie（登录态）：配置后可取 VIP 曲目直链，留空为匿名态。真实值由环境变量注入，勿提交仓库。</summary>
+    public string Cookie { get; set; } = string.Empty;
 
     /// <summary>搜索 API 基础地址（公开接口免登录）。</summary>
     public string SearchBaseUrl { get; set; } = "https://music.163.com/api/search/get";
@@ -152,6 +173,9 @@ public static class VipFallbackEndpointTypes
 
     /// <summary>ZMusic 兼容官方格式：GET /song/url，参数 id 与 level，返回 data[0].url（部分实例仅预览）。</summary>
     public const string ZMusic = "zmusic";
+
+    /// <summary>GD Studio（music-api.gdstudio.xyz）：GET 单步，br 档位（999=无损 flac/320），响应根级 url/br/size；2026-11 实测对 VIP 曲返回完整无损文件。</summary>
+    public const string GdStudio = "gdstudio";
 }
 
 /// <summary>单个 VIP 回退端点配置。</summary>
@@ -184,6 +208,52 @@ public sealed class MiguSourceOptions
 
     /// <summary>最高下载音质：PQ=128k / HQ=320k / SQ=无损flac；资源没有该档时回退到可用的较低档。默认 HQ。</summary>
     public string ToneFlag { get; set; } = "HQ";
+
+    /// <summary>可选 Cookie（登录态）：配置后可取 VIP 资源，留空为匿名态。真实值由环境变量注入，勿提交仓库。</summary>
+    public string Cookie { get; set; } = string.Empty;
+}
+
+/// <summary>汽水音乐（Qishui / Luna）音源配置。</summary>
+public sealed class QishuiSourceOptions
+{
+    /// <summary>是否启用该音源（免密钥，默认开启）。</summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>
+    /// 可选 Cookie（登录态）：匿名接口对 VIP/付费曲目只下发 30~60 秒试听片段，
+    /// 配置登录 Cookie 后可由官方接口获得更完整的授权信息。真实值由环境变量注入，勿提交仓库。
+    /// </summary>
+    public string Cookie { get; set; } = string.Empty;
+
+    /// <summary>搜索 API 基础地址（内部拼接 /track，需 Android 客户端 UA 与完整设备参数）。</summary>
+    public string SearchBaseUrl { get; set; } = "https://api.qishui.com/luna/search";
+
+    /// <summary>曲目详情 API 基础地址（分享页 SEO 数据源，无需签名）。</summary>
+    public string SeoTrackBaseUrl { get; set; } = "https://beta-luna.douyin.com/luna/h5/seo_track";
+}
+
+/// <summary>QQ音乐音源配置。</summary>
+public sealed class QqSourceOptions
+{
+    /// <summary>是否启用该音源（免密钥，默认开启）。</summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>可选 Cookie（登录态）：配置后可取 VIP/320k/无损资源，留空为匿名态（仅 128k m4a）。真实值由环境变量注入，勿提交仓库。</summary>
+    public string Cookie { get; set; } = string.Empty;
+}
+
+/// <summary>千千音乐（百度音乐）音源配置。</summary>
+public sealed class QianqianSourceOptions
+{
+    /// <summary>是否启用该音源（公开 API 免密钥免登录，默认开启）。</summary>
+    public bool Enabled { get; set; } = true;
+}
+
+/// <summary>Bilibili（B站音频）音源配置。</summary>
+public sealed class BilibiliSourceOptions
+{
+    /// <summary>是否启用该音源（免密钥，默认开启；下载依赖 yt-dlp 桥接，yt-dlp 缺失时自动不可用）。</summary>
+    public bool Enabled { get; set; } = true;
 }
 
 /// <summary>yt-dlp 子进程桥接配置（YouTube Music 音源）。</summary>

@@ -238,7 +238,7 @@ public sealed partial class MiguSourceProvider(
         if (!listenDoc.RootElement.TryGetProperty("data", out var data)
             || !data.TryGetProperty("url", out var urlEl)
             || urlEl.ValueKind != JsonValueKind.String)
-            throw new SourceUnavailableException("咪咕未返回下载地址。");
+            throw new SourceUnavailableException("咪咕未返回下载地址（该曲目可能为运营商版权限制或平台临时限流）。");
         var pqUrl = urlEl.GetString()!;
         if (string.IsNullOrWhiteSpace(pqUrl) || !pqUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
             throw new SourceUnavailableException("咪咕下载地址无效。");
@@ -475,7 +475,7 @@ public sealed partial class MiguSourceProvider(
         if (!listenDoc.RootElement.TryGetProperty("data", out var data)
             || !data.TryGetProperty("url", out var urlEl)
             || urlEl.ValueKind != JsonValueKind.String)
-            throw new SourceUnavailableException("咪咕未返回下载地址。");
+            throw new SourceUnavailableException("咪咕未返回下载地址（该曲目可能为运营商版权限制或平台临时限流）。");
         var pqUrl = urlEl.GetString()!;
         if (string.IsNullOrWhiteSpace(pqUrl) || !pqUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
             throw new SourceUnavailableException("咪咕下载地址无效。");

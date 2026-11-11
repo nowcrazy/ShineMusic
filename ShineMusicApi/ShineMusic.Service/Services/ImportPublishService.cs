@@ -82,9 +82,14 @@ public sealed class ImportPublishService(
         if (missing.Count > 0)
             return ImportPublishResult.Failure(ImportPublishErrorKind.Conflict, $"Cannot publish: missing required fields — {string.Join(", ", missing)}.");
 
-        if (!quarantinePaths.TryResolve(item.SourceStorageKey, out var sourcePath) || !System.IO.File.Exists(sourcePath) ||
-            !quarantinePaths.TryResolve(item.TranscodedStorageKey, out var transcodedPath) || !System.IO.File.Exists(transcodedPath))
+        if (!quarantinePaths.TryResolve(item.TranscodedStorageKey, out var transcodedPath) || !System.IO.File.Exists(transcodedPath))
             return ImportPublishResult.Failure(ImportPublishErrorKind.NotFound, "The staged files are no longer available.");
+
+        // 原始下载文件可能被后台任务的重复投递/去重清理误删（同一个 taskId 复用 sourcedl/<id>.* 文件名），
+        // 但转码产物仍是完整可播放的音频。此时用转码产物兜底作为 original 资产，
+        // 避免条目永久卡在 ready_to_publish、发布恒返回 404（2026-11-10 下游链路实测修复）。
+        if (!quarantinePaths.TryResolve(item.SourceStorageKey, out var sourcePath) || !System.IO.File.Exists(sourcePath))
+            sourcePath = transcodedPath;
 
         // 审计先暂存，随发布事务一并提交；发布失败返回时丢弃（与原「仅 SaveChanges 才落库」语义一致）。
         var pendingAudits = new List<AdminAuditEntry>();

@@ -173,6 +173,16 @@ export const CloudUpload = createShimIcon('CloudUpload', [
   ["path", { d: "M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242", key: "1pljnt" }],
   ["path", { d: "m8 17 4-4 4 4", key: "1quai1" }]
 ] as LucideNode[])
+export const Compass = createShimIcon('Compass', [
+  [
+    "path",
+    {
+      d: "m16.24 7.76-1.804 5.411a2 2 0 0 1-1.265 1.265L7.76 16.24l1.804-5.411a2 2 0 0 1 1.265-1.265z",
+      key: "9ktpf1"
+    }
+  ],
+  ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }]
+] as LucideNode[])
 export const CornerDownRight = createShimIcon('CornerDownRight', [
   ["polyline", { points: "15 10 20 15 15 20", key: "1q7qjw" }],
   ["path", { d: "M4 4v7a4 4 0 0 0 4 4h12", key: "z08zvw" }]
@@ -468,10 +478,6 @@ export const Upload = createShimIcon('Upload', [
   ["path", { d: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4", key: "ih7n3h" }],
   ["polyline", { points: "17 8 12 3 7 8", key: "t8dd8p" }],
   ["line", { x1: "12", x2: "12", y1: "3", y2: "15", key: "widbto" }]
-] as LucideNode[])
-export const User = createShimIcon('User', [
-  ["path", { d: "M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2", key: "975kel" }],
-  ["circle", { cx: "12", cy: "7", r: "4", key: "17ys0d" }]
 ] as LucideNode[])
 export const UserCog = createShimIcon('UserCog', [
   ["circle", { cx: "18", cy: "15", r: "3", key: "gjjjvw" }],

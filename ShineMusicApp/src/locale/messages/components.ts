@@ -32,15 +32,6 @@ export const componentsMessages = {
       addToPlaylist: '加歌单',
       queueTitle: '播放队列（{count}）',
     },
-    quickPanel: {
-      title: '快捷功能',
-      messages: '消息',
-      history: '播放历史',
-      favorites: '我的收藏',
-      follow: '关注与粉丝',
-      upload: '上传音频',
-      theme: '主题外观',
-    },
     comments: {
       title: '评论 {count} 条',
       justNow: '刚刚',
@@ -108,15 +99,6 @@ export const componentsMessages = {
       addToPlaylist: 'Add to Playlist',
       queueTitle: 'Play Queue ({count})',
     },
-    quickPanel: {
-      title: 'Quick Actions',
-      messages: 'Messages',
-      history: 'Play History',
-      favorites: 'My Favorites',
-      follow: 'Following & Followers',
-      upload: 'Upload Audio',
-      theme: 'Theme',
-    },
     comments: {
       title: '{count} Comments',
       justNow: 'Just now',
@@ -183,15 +165,6 @@ export const componentsMessages = {
       queue: '再生キュー',
       addToPlaylist: 'プレイリストに追加',
       queueTitle: '再生キュー（{count}）',
-    },
-    quickPanel: {
-      title: 'クイック機能',
-      messages: 'メッセージ',
-      history: '再生履歴',
-      favorites: 'お気に入り',
-      follow: 'フォロー・フォロワー',
-      upload: 'オーディオをアップロード',
-      theme: 'テーマ',
     },
     comments: {
       title: 'コメント {count}件',

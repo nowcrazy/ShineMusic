@@ -19,7 +19,7 @@ import { loadCapabilities } from '@/services/capabilities'
 import { loadFavorites } from '@/services/library'
 import { loadFeedback } from '@/services/feedback'
 import { initTheme } from '@/services/theme'
-import { flushPlayerState, syncFromBackgroundAudio } from '@/services/player'
+import { flushPlayerState, playerExpanded, syncFromBackgroundAudio } from '@/services/player'
 
 // 应用启动：先应用主题（避免首屏闪烁），再恢复登录态与能力开关
 onLaunch(() => {
@@ -32,6 +32,26 @@ onLaunch(() => {
     }
     loadCapabilities()
   })()
+
+  // App 端：全局拦截返回键，永远不按返回键退出应用
+  // #ifdef APP-PLUS
+  plus.key.addEventListener('backbutton', () => {
+    // 1) 若全屏播放器展开，先关闭播放器
+    if (playerExpanded.value) {
+      playerExpanded.value = false
+      return
+    }
+    // 2) 若页面栈深度 > 1，正常返回上一页
+    const pages = getCurrentPages()
+    if (pages.length > 1) {
+      uni.navigateBack({ delta: 1 })
+      return
+    }
+    // 3) 已在最底层页面：回到桌面，不退出 App
+    // moveTaskToBack 存在于部分安卓运行时，@dcloudio/types 未收录，故做受控断言
+    ;(plus.runtime as unknown as { moveTaskToBack?: () => void }).moveTaskToBack?.()
+  })
+  // #endif
 })
 
 // 从后台切回前台：同步 BackgroundAudioManager 的真实播放状态

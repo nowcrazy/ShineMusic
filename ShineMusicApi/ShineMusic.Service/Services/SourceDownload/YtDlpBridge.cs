@@ -211,6 +211,11 @@ public sealed class YtDlpBridge(
         {
             using var doc = JsonDocument.Parse(firstLine);
             var root = doc.RootElement;
+            // yt-dlp 访问失败（网络/风控/超时）时 --dump-single-json 可能只输出字面量 null，
+            // 对 Null 元素调用 TryGetProperty 会抛 InvalidOperationException → 500（2026-11-10 实测修复）。
+            if (root.ValueKind != JsonValueKind.Object)
+                throw new SourceUnavailableException(
+                    "yt-dlp returned no playlist metadata; check network/proxy access to YouTube Music.");
             var title = GetString(root, "title") ?? "YouTube Music 歌单";
             var entries = new List<YtDlpEntry>();
             if (root.TryGetProperty("entries", out var array) && array.ValueKind == JsonValueKind.Array)
@@ -226,8 +231,9 @@ public sealed class YtDlpBridge(
                 throw new SourceUnavailableException("The playlist is empty or could not be parsed.");
             return new YtDlpPlaylist(title.Trim(), entries);
         }
-        catch (JsonException)
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException)
         {
+            // 平台返回的 JSON 形态不可预期时，统一降级为「音源不可用」而非 500。
             throw new SourceUnavailableException("The playlist metadata returned by yt-dlp could not be parsed.");
         }
     }
@@ -369,6 +375,8 @@ public sealed class YtDlpBridge(
         {
             using var doc = JsonDocument.Parse(line);
             var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return null;
             var id = GetString(root, "id");
             var title = GetString(root, "title");
             if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(title))
@@ -402,7 +410,9 @@ public sealed class YtDlpBridge(
     /// <summary>从 thumbnails 数组取最后一个 URL（yt-dlp 按分辨率升序排列）。</summary>
     private static string? GetLastThumbnail(JsonElement root)
     {
-        if (!root.TryGetProperty("thumbnails", out var thumbnails) || thumbnails.ValueKind != JsonValueKind.Array)
+        if (root.ValueKind != JsonValueKind.Object
+            || !root.TryGetProperty("thumbnails", out var thumbnails)
+            || thumbnails.ValueKind != JsonValueKind.Array)
             return null;
         string? last = null;
         foreach (var item in thumbnails.EnumerateArray())
@@ -430,7 +440,11 @@ public sealed class YtDlpBridge(
     }
 
     private static string? GetString(JsonElement element, string name)
-        => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+        => element.ValueKind == JsonValueKind.Object
+            && element.TryGetProperty(name, out var value)
+            && value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
 
     /// <summary>子进程运行结果快照。</summary>
     private sealed record YtDlpProcessResult(int ExitCode, string StdOut, string StdErr);

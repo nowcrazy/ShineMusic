@@ -46,6 +46,41 @@ async function handleLike() {
   catch { uni.showToast({ title: t('trackRow.operationFailed'), icon: 'none' }) }
 }
 
+// —— 手动长按检测（3 秒），替代默认 longpress，避免滑动列表时误触 ——
+let lpTimer: ReturnType<typeof setTimeout> | undefined
+let lpStartX = 0
+let lpStartY = 0
+let lpFired = false
+
+function onRowTouchStart(e: TouchEvent) {
+  const t = e.touches[0]
+  if (!t) return
+  lpStartX = t.clientX
+  lpStartY = t.clientY
+  lpFired = false
+  lpTimer = setTimeout(() => {
+    lpFired = true
+    lpTimer = undefined
+    handleLongPress()
+  }, 3000)
+}
+
+function onRowTouchMove(e: TouchEvent) {
+  const t = e.touches[0]
+  if (!t || !lpTimer) return
+  if (Math.abs(t.clientX - lpStartX) > 12 || Math.abs(t.clientY - lpStartY) > 12) {
+    clearTimeout(lpTimer)
+    lpTimer = undefined
+  }
+}
+
+function onRowTouchEnd() {
+  if (lpTimer) {
+    clearTimeout(lpTimer)
+    lpTimer = undefined
+  }
+}
+
 function handleLongPress() {
   if (!requireLogin()) return
   const marked = notInterested.value
@@ -68,7 +103,7 @@ function handleLongPress() {
 </script>
 
 <template>
-  <view class="tr-row" :class="{ muted: notInterested }" @tap="handlePlay" @longpress="handleLongPress">
+  <view class="tr-row" :class="{ muted: notInterested }" @tap="handlePlay" @touchstart="onRowTouchStart" @touchmove="onRowTouchMove" @touchend="onRowTouchEnd">
     <text v-if="index !== undefined" class="tr-index">{{ String(index + 1).padStart(2, '0') }}</text>
     <view class="tr-cover"><CoverArt :src="track.cover" :seed="track.title" :rounded="16" :icon-size="20" /></view>
     <view class="tr-copy">

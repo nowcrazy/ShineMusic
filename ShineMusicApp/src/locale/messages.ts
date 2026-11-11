@@ -17,9 +17,14 @@ export const navKey = {
   tracks: 'nav.tracks',
   recommendDaily: 'nav.recommendDaily',
   playlistDetail: 'nav.playlistDetail',
+  playlistImport: 'nav.playlistImport',
   playlistPickTrack: 'nav.playlistPickTrack',
   requests: 'nav.requests',
   notifications: 'nav.notifications',
+  trackDetail: 'nav.trackDetail',
+  history: 'nav.history',
+  favorites: 'nav.favorites',
+  follow: 'nav.follow',
   libraryUpload: 'nav.libraryUpload',
   theme: 'nav.theme',
   profile: 'nav.profile',
@@ -28,9 +33,45 @@ export const navKey = {
   adminImport: 'nav.adminImport',
   adminRequests: 'nav.adminRequests',
   adminInvitation: 'nav.adminInvitation',
+  adminSourceDownload: 'nav.adminSourceDownload',
   login: 'nav.login',
   register: 'nav.register',
 } as const
+
+/**
+ * 页面 route → 导航栏标题 i18n key。
+ * pages.json 的 navigationBarTitleText 是静态中文，无法跟随语言切换；
+ * main.ts 的全局 onShow mixin 按本表调用 uni.setNavigationBarTitle 重设标题，
+ * 覆盖全部业务页面，避免「标题中文、正文英文」的半吊子国际化。
+ */
+export const navTitleKeyByRoute: Record<string, string> = {
+  'pages/home/index': navKey.home,
+  'pages/catalog/collection': navKey.collection,
+  'pages/catalog/album': navKey.album,
+  'pages/catalog/artist': navKey.artist,
+  'pages/catalog/tracks': navKey.tracks,
+  'pages/recommend/daily': navKey.recommendDaily,
+  'pages/playlist/detail': navKey.playlistDetail,
+  'pages/playlist/import': navKey.playlistImport,
+  'pages/playlist/pick-track': navKey.playlistPickTrack,
+  'pages/requests/index': navKey.requests,
+  'pages/notifications/index': navKey.notifications,
+  'pages/track/detail': navKey.trackDetail,
+  'pages/history/index': navKey.history,
+  'pages/library/favorites': navKey.favorites,
+  'pages/social/follow': navKey.follow,
+  'pages/library/upload': navKey.libraryUpload,
+  'pages/settings/theme': navKey.theme,
+  'pages/profile/index': navKey.profile,
+  'pages/admin/collections': navKey.adminCollections,
+  'pages/admin/catalog': navKey.adminCatalog,
+  'pages/admin/import': navKey.adminImport,
+  'pages/admin/requests': navKey.adminRequests,
+  'pages/admin/invitation': navKey.adminInvitation,
+  'pages/admin/source-download': navKey.adminSourceDownload,
+  'pages/auth/login': navKey.login,
+  'pages/auth/register': navKey.register,
+}
 
 export const zhCN: LocaleMessages = {
   app: {
@@ -68,6 +109,12 @@ export const zhCN: LocaleMessages = {
     adminInvitation: '邀请管理',
     login: '登录',
     register: '邀请注册',
+    playlistImport: '歌单导入',
+    trackDetail: '曲目详情',
+    history: '播放历史',
+    favorites: '我的收藏',
+    follow: '关注与粉丝',
+    adminSourceDownload: '音源抓歌',
   },
   home: {
     todayPick: '今日精选',
@@ -824,6 +871,12 @@ export const en: LocaleMessages = {
     adminInvitation: 'Invitation Admin',
     login: 'Sign In',
     register: 'Register',
+    playlistImport: 'Import Playlist',
+    trackDetail: 'Track Details',
+    history: 'Play History',
+    favorites: 'My Favorites',
+    follow: 'Following & Followers',
+    adminSourceDownload: 'Source Download',
   },
   home: {
     todayPick: "Today's Pick",
@@ -1578,6 +1631,12 @@ export const ja: LocaleMessages = {
     adminInvitation: '招待管理',
     login: 'ログイン',
     register: '登録',
+    playlistImport: 'プレイリスト読み込み',
+    trackDetail: '曲の詳細',
+    history: '再生履歴',
+    favorites: 'お気に入り',
+    follow: 'フォローとフォロワー',
+    adminSourceDownload: '音源取得',
   },
   home: {
     todayPick: '今日のおすすめ',

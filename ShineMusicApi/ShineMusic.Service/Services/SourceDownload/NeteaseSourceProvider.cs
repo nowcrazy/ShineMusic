@@ -16,7 +16,7 @@ namespace ShineMusic.Service.SourceDownload;
 public sealed class NeteaseSourceProvider(
     IHttpClientFactory httpClientFactory,
     IOptions<SourceDownloadOptions> options,
-    ILogger<NeteaseSourceProvider> logger) : IMusicSourceProvider
+    ILogger<NeteaseSourceProvider> logger) : IMusicSourceProvider, IQualityLadderProvider
 {
     /// <summary>命名 HttpClient（Program.cs 注册，统一超时与 Referer/UA 头）。</summary>
     public const string HttpClientName = "netease";
@@ -64,6 +64,20 @@ public sealed class NeteaseSourceProvider(
     /// <inheritdoc />
     public async Task<SourceDownloadInfo> ResolveDownloadAsync(string providerTrackId, CancellationToken cancellationToken)
     {
+        var candidates = await ResolveDownloadCandidatesAsync(providerTrackId, cancellationToken);
+        return candidates[0];
+    }
+
+    /// <summary>
+    /// 按「官方直链 → 各 VIP 回退端点 × 各音质档」顺序返回全部可用下载地址。
+    /// 官方接口无直链时收集回退链里的**所有**成功结果（不再首个即返回）：
+    /// haitangw 等端点可能返回 60s 试听，下载阶段时长校验会判无效并自动落到下一档/下一端点，
+    /// 而不是把这唯一候选直接判死。
+    /// </summary>
+    public async Task<IReadOnlyList<SourceDownloadInfo>> ResolveDownloadCandidatesAsync(
+        string providerTrackId, CancellationToken cancellationToken)
+    {
+        var candidates = new List<SourceDownloadInfo>();
         var ids = JsonSerializer.Serialize(new[] { long.Parse(providerTrackId) });
         var url = $"{PlayerUrlBase()}?ids={Uri.EscapeDataString(ids)}&br={options.Value.Netease.Bitrate}";
         using var doc = await GetJsonAsync(url, cancellationToken);
@@ -73,23 +87,27 @@ public sealed class NeteaseSourceProvider(
 
         var item = data[0];
         var downloadUrl = GetString(item, "url");
-        // VIP 曲或无版权时 url 为 null → 尝试第三方解锁端点回退；仍失败才判定不可下载。
-        if (string.IsNullOrWhiteSpace(downloadUrl))
+        if (!string.IsNullOrWhiteSpace(downloadUrl))
         {
-            var fallback = await TryVipFallbackAsync(providerTrackId, cancellationToken);
-            if (fallback is not null) return fallback;
-            throw new SourceUnavailableException("该曲目为网易云 VIP 专属或无版权，无法下载。");
+            var br = GetInt(item, "br") ?? options.Value.Netease.Bitrate;
+            var type = GetString(item, "type") ?? "mp3";
+            var isLossless = br >= 800000;
+            candidates.Add(new SourceDownloadInfo(
+                downloadUrl,
+                type,
+                IsLossless: isLossless,
+                BitrateKbps: br / 1000,
+                Quality: isLossless ? SourceQualities.Lossless : SourceQualities.High));
+        }
+        else
+        {
+            // VIP 曲或无版权：官方 url 为空 → 收集第三方回退链的全部成功直链。
+            candidates.AddRange(await CollectVipFallbackCandidatesAsync(providerTrackId, cancellationToken));
         }
 
-        var br = GetInt(item, "br") ?? options.Value.Netease.Bitrate;
-        var type = GetString(item, "type") ?? "mp3";
-        var isLossless = br >= 800000;
-        return new SourceDownloadInfo(
-            downloadUrl,
-            type,
-            IsLossless: isLossless,
-            BitrateKbps: br / 1000,
-            Quality: isLossless ? SourceQualities.Lossless : SourceQualities.High);
+        if (candidates.Count == 0)
+            throw new SourceUnavailableException("该曲目为网易云 VIP 专属或无版权，无法下载。");
+        return candidates;
     }
 
     /// <summary>
@@ -109,11 +127,10 @@ public sealed class NeteaseSourceProvider(
                 || data.ValueKind != JsonValueKind.Array || data.GetArrayLength() == 0)
                 return true; // 响应异常，保守放行
             var downloadUrl = GetString(data[0], "url");
-            // VIP 回退开启时，官方返回空 url 不代表真的不可下载——第三方端点可能解锁。
+            // VIP 回退开启时，官方返回空 url 不代表真的不可下载——第三方端点可能解锁，保守放行；
+            // 回退关闭时官方空 url 即判定不可下载。
             if (string.IsNullOrWhiteSpace(downloadUrl))
-                return !options.Value.Netease.VipFallback.Enabled
-                    && (options.Value.Netease.VipFallback.Endpoints is null
-                        || options.Value.Netease.VipFallback.Endpoints.Count == 0);
+                return options.Value.Netease.VipFallback.Enabled;
             return true;
         }
         catch
@@ -125,38 +142,41 @@ public sealed class NeteaseSourceProvider(
     /// <summary>
     /// VIP 曲目回退解析：按配置的端点链依次尝试第三方「解锁」服务获取下载直链。
     /// 端点类型：
+    ///   - gdstudio：GET 单步，根级 url（2026-11 实测对 VIP 曲返回完整 320k/无损 flac，当前主力）。
     ///   - nextmusic：共享 VIP 账号，POST 两步（/api/ip 取 IP → /api/getSongUrl 取 url），返回完整歌曲（320k/无损）。
     ///   - haitangw：GET 单步，返回 data.url（实测仅 60s 预览，作兜底）。
     ///   - zmusic：兼容官方格式 GET，返回 data[0].url。
-    /// 每个端点内按 Levels 顺序尝试，首个返回有效 http(s) 直链的为准。
+    /// 收集所有端点 × 档位的成功直链（按配置顺序），交由下载阶段的时长校验逐档淘汰，
+    /// 避免「首个返回的 60s 预览被直接采纳」导致整源被判死。
     /// </summary>
-    private async Task<SourceDownloadInfo?> TryVipFallbackAsync(string providerTrackId, CancellationToken cancellationToken)
+    private async Task<List<SourceDownloadInfo>> CollectVipFallbackCandidatesAsync(
+        string providerTrackId, CancellationToken cancellationToken)
     {
         var fb = options.Value.Netease.VipFallback;
-        if (!fb.Enabled || fb.Endpoints is null || fb.Endpoints.Count == 0) return null;
+        var candidates = new List<SourceDownloadInfo>();
+        if (!fb.Enabled || fb.Endpoints is null || fb.Endpoints.Count == 0) return candidates;
 
         var client = httpClientFactory.CreateClient(HttpClientName);
+        var seenUrls = new HashSet<string>(StringComparer.Ordinal);
         foreach (var endpoint in fb.Endpoints)
         {
             foreach (var level in endpoint.Levels ?? [])
             {
                 var url = await ResolveViaEndpointAsync(client, endpoint, providerTrackId, level, fb.TimeoutSeconds, cancellationToken);
-                if (url is not null)
-                {
-                    var (bitrate, isLossless, container) = InferQuality(level, endpoint.Type);
-                    logger.LogInformation(
-                        "Netease VIP fallback succeeded for track {Id} via {Type} (level={Level}, {Bitrate}kbps)",
-                        providerTrackId, endpoint.Type, level, bitrate / 1000);
-                    return new SourceDownloadInfo(
-                        url,
-                        container,
-                        IsLossless: isLossless,
-                        BitrateKbps: bitrate / 1000,
-                        Quality: isLossless ? SourceQualities.Lossless : SourceQualities.High);
-                }
+                if (url is null || !seenUrls.Add(url)) continue;
+                var (bitrate, isLossless, container) = InferQuality(level, endpoint.Type);
+                logger.LogInformation(
+                    "Netease VIP fallback candidate for track {Id} via {Type} (level={Level}, {Bitrate}kbps)",
+                    providerTrackId, endpoint.Type, level, bitrate / 1000);
+                candidates.Add(new SourceDownloadInfo(
+                    url,
+                    container,
+                    IsLossless: isLossless,
+                    BitrateKbps: bitrate / 1000,
+                    Quality: isLossless ? SourceQualities.Lossless : SourceQualities.High));
             }
         }
-        return null;
+        return candidates;
     }
 
     /// <summary>按端点类型分发请求，返回下载直链或 null。</summary>
@@ -171,6 +191,7 @@ public sealed class NeteaseSourceProvider(
                 VipFallbackEndpointTypes.NextMusic => await ResolveViaNextMusicAsync(client, endpoint.BaseUrl!, trackId, level, timeoutSeconds, cancellationToken),
                 VipFallbackEndpointTypes.HaiTangW => await ResolveViaGetDataUrlAsync(client, endpoint.Url!, trackId, level, timeoutSeconds, cancellationToken),
                 VipFallbackEndpointTypes.ZMusic => await ResolveViaZMusicAsync(client, endpoint.Url!, trackId, level, timeoutSeconds, cancellationToken),
+                VipFallbackEndpointTypes.GdStudio => await ResolveViaGdStudioAsync(client, endpoint.Url!, trackId, level, timeoutSeconds, cancellationToken),
                 _ => null,
             };
         }
@@ -242,6 +263,25 @@ public sealed class NeteaseSourceProvider(
             ? fallbackUrl : null;
     }
 
+    /// <summary>GD Studio GET 型端点：URL 含 {id}/{level}（br）占位符，响应根级 url（br=999 返回无损 flac）。</summary>
+    private static async Task<string?> ResolveViaGdStudioAsync(
+        HttpClient client, string urlTemplate, string trackId, string level,
+        int timeoutSeconds, CancellationToken cancellationToken)
+    {
+        var url = urlTemplate
+            .Replace("{id}", Uri.EscapeDataString(trackId))
+            .Replace("{level}", Uri.EscapeDataString(level));
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        cts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+        using var response = await client.GetAsync(url, cts.Token);
+        if (!response.IsSuccessStatusCode) return null;
+        var json = await response.Content.ReadAsStringAsync(cts.Token);
+        using var doc = JsonDocument.Parse(json);
+        var fallbackUrl = GetString(doc.RootElement, "url");
+        return !string.IsNullOrWhiteSpace(fallbackUrl) && fallbackUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+            ? fallbackUrl : null;
+    }
+
     /// <summary>ZMusic 兼容官方格式：GET /song/url，参数 id 与 level，响应 data[0].url。</summary>
     private static async Task<string?> ResolveViaZMusicAsync(
         HttpClient client, string urlTemplate, string trackId, string level,
@@ -286,8 +326,8 @@ public sealed class NeteaseSourceProvider(
     {
         return level.ToLowerInvariant() switch
         {
-            "lossless" or "flac" => (900000, true, "flac"),
-            "exhigh" or "320" => (320000, false, "mp3"),
+            "lossless" or "flac" or "999" => (900000, true, "flac"),
+            "exhigh" or "320" or "740" => (320000, false, "mp3"),
             "standard" or "192" => (192000, false, "mp3"),
             _ => (128000, false, "mp3"),
         };

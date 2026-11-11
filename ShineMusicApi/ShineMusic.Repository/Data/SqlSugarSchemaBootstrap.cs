@@ -93,6 +93,34 @@ public static class SqlSugarSchemaBootstrap
         EnsureColumn(db, logger, "AdminAuditEntries", nameof(ShineMusic.Model.Entities.AdminAuditEntry.DeviceInfo));
         EnsureColumn(db, logger, "AspNetUsers", nameof(ShineMusic.Model.Entities.ApplicationUser.TempAdminUntilUtc), "timestamptz");
         EnsureColumn(db, logger, "ExternalDownloadTasks", nameof(ShineMusic.Model.Entities.ExternalDownloadTask.ReleaseYear), "integer");
+        EnsureColumn(db, logger, "UserPlaylistPendingTracks", "SearchDiagnosticsJson", "text");
+        EnsureColumn(db, logger, "PlaylistDownloadQueueItems", "SearchDiagnosticsJson", "text");
+
+        // 存量库：DetailsJson 早期由 CodeFirst 默认建为 varchar(255)，写入完整请求快照会触发
+        // PG 22001（推荐策略保存 500 的根因）。varchar→text 在 PG 中二进制兼容、不重写表，幂等升级一次。
+        EnsureTextColumn(db, logger, "AdminAuditEntries", nameof(ShineMusic.Model.Entities.AdminAuditEntry.DetailsJson));
+    }
+
+    /// <summary>
+    /// 把指定字符列无损升级为 text（PG 下 varchar→text 幂等且不需要重写表）。
+    /// 列不存在、已是 text、或非字符类型时直接跳过，绝不触碰其他表结构。
+    /// </summary>
+    private static void EnsureTextColumn(ISqlSugarClient db, ILogger logger, string tableName, string columnName)
+    {
+        if (!db.DbMaintenance.IsAnyTable(tableName, false)) return;
+
+        var dataType = db.Ado.GetScalar(
+            $"SELECT data_type FROM information_schema.columns " +
+            $"WHERE table_schema = current_schema() AND table_name = '{tableName}' AND column_name = '{columnName}'")
+            ?.ToString();
+        if (string.IsNullOrWhiteSpace(dataType) ||
+            string.Equals(dataType, "text", StringComparison.OrdinalIgnoreCase)) return;
+        if (!dataType.Contains("char", StringComparison.OrdinalIgnoreCase) &&
+            !dataType.Contains("varchar", StringComparison.OrdinalIgnoreCase)) return;
+
+        logger.LogInformation("SqlSugar schema patch: widening {Table}.{Column} from {Type} to text.",
+            tableName, columnName, dataType);
+        db.Ado.ExecuteCommand($"ALTER TABLE \"{tableName}\" ALTER COLUMN \"{columnName}\" TYPE text");
     }
 
     /// <summary>列不存在时直接 AddColumn 补可空列（默认 varchar(255)）；绝不走 CodeFirst 表同步（会误改既有列为 NOT NULL）。</summary>
@@ -138,7 +166,8 @@ public static class SqlSugarSchemaBootstrap
                 "Status" character varying NOT NULL,
                 "DownloadTaskId" uuid NULL,
                 "CreatedAtUtc" timestamp with time zone NOT NULL,
-                "UpdatedAtUtc" timestamp with time zone NOT NULL
+                "UpdatedAtUtc" timestamp with time zone NOT NULL,
+                "SearchDiagnosticsJson" text NULL
             );
             """;
         db.Ado.ExecuteCommand(ddl);
@@ -163,7 +192,8 @@ public static class SqlSugarSchemaBootstrap
                 "Status" character varying NOT NULL,
                 "DownloadTaskId" uuid NULL,
                 "CreatedAtUtc" timestamp with time zone NOT NULL,
-                "UpdatedAtUtc" timestamp with time zone NOT NULL
+                "UpdatedAtUtc" timestamp with time zone NOT NULL,
+                "SearchDiagnosticsJson" text NULL
             );
             CREATE INDEX "IX_PlaylistDownloadQueueItems_Status_CreatedAtUtc"
                 ON "PlaylistDownloadQueueItems" ("Status", "CreatedAtUtc");

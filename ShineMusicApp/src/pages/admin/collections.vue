@@ -57,10 +57,8 @@ const addResults = ref<readonly ApiTrack[]>([])
 const addSearching = ref(false)
 const addMessage = ref('')
 
-// 非管理员直接提示（服务端同样独立鉴权，此处仅前端防御）
-if (!isAdmin.value) {
-  uni.showToast({ title: t('collectionsAdmin.requireAdmin'), icon: 'none' })
-}
+// 非管理员的拦截统一放在 onShow：与其它管理页一致 redirectTo 首页（不可返回），
+// 服务端另有独立鉴权，此处仅为前端体验一致性。
 
 /** 歌单封面地址解析（后端返回相对路径 artworkUrl） */
 function coverUrl(collection: ApiCollectionSummary): string {
@@ -91,7 +89,11 @@ async function loadCollections() {
 }
 
 onShow(() => {
-  if (isAdmin.value) void loadCollections()
+  if (!isAdmin.value) {
+    uni.redirectTo({ url: '/pages/home/index' })
+    return
+  }
+  void loadCollections()
 })
 
 /** 打开新建歌单编辑器 */

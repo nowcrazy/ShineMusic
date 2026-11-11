@@ -30,7 +30,7 @@ import {
   SkipForward,
   X,
 } from 'lucide-vue-next'
-import { cyclePlayMode, nextTrack, playFromQueue, previousTrack, seek, togglePlayback, usePlayer } from '@/services/player'
+import { cyclePlayMode, nextTrack, playFromQueue, playerExpanded, previousTrack, seek, togglePlayback, usePlayer } from '@/services/player'
 import { EQ_PRESETS } from '@/services/eq-presets'
 import { addPlaylistTrack, favoriteIds, getPlaylists, toggleFavorite } from '@/services/library'
 import { setFeedback } from '@/services/feedback'
@@ -40,7 +40,7 @@ import CoverArt from './CoverArt.vue'
 
 const { state, setEqPreset } = usePlayer() // 全局播放器单例状态
 const { t } = useI18n()
-const expanded = ref(false) // 全屏播放器是否展开
+const expanded = playerExpanded // 全屏播放器是否展开（全局 ref，供 App.vue 返回拦截）
 const lyricMode = ref(false) // 是否处于沉浸歌词模式（隐藏封面、歌词铺满）
 const eqPanelVisible = ref(false) // 音效预设选择弹层是否可见
 const queuePanelVisible = ref(false) // 播放队列面板是否可见
@@ -337,18 +337,144 @@ watch(lyricMode, () => {
 
 // 旋转屏幕/窗口尺寸变化后重新测量（横竖屏切换会改变歌词区高度）
 function onWindowResize() {
+  syncLandscape()
   void nextTick(() => centerActiveLyric())
 }
 
 // 屏幕方向交给系统与 manifest 的 screenOrientation 统一管理（portrait + landscape 双向），
 // 这里不再在运行时锁定竖屏，否则全应用横屏无法生效。
 
+// ===== 横屏 / 宽视口双栏检测与左右分栏拖拽 =====
+// 与样式层媒体查询保持同一组条件：横屏且 ≥560px，或触屏宽视口（折叠屏展开竖持 / 平板竖屏）。
+// 双栏下左栏（封面+控制）与右栏（歌词浮层卡）比例可拖拽调整，双击分隔条复位。
+const LANDSCAPE_QUERY = '(orientation: landscape) and (min-width: 560px)'
+const WIDE_TOUCH_QUERY = '(hover: none) and (pointer: coarse) and (min-width: 560px) and (min-aspect-ratio: 2/3)'
+const isLandscape = ref(false)
+const SPLIT_STORAGE_KEY = 'sm-player-split'
+const SPLIT_MIN = 0.3
+const SPLIT_MAX = 0.7
+const SPLIT_DEFAULT = 0.55
+const splitRatio = ref(SPLIT_DEFAULT)
+// 全屏播放器根节点（App 端为组件实例需取 $el；H5 / 浏览器直接是 DOM）
+const overlayElRef = ref<HTMLElement | { $el?: HTMLElement } | null>(null)
+
+/** 把比例收敛到合法区间 */
+function clampRatio(value: number): number {
+  return Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, value))
+}
+
+/** 读取持久化的分栏比例（异常值回退默认） */
+function loadSplitRatio() {
+  const raw = uni.getStorageSync(SPLIT_STORAGE_KEY)
+  const value = typeof raw === 'number' ? raw : Number(raw)
+  if (Number.isFinite(value) && value >= SPLIT_MIN && value <= SPLIT_MAX) splitRatio.value = value
+}
+
+/** 重新计算横屏双栏态：优先 matchMedia（H5 / App 端 WebView 均可用），异常回退系统信息 */
+function syncLandscape() {
+  try {
+    const w = globalThis as unknown as { matchMedia?: (q: string) => MediaQueryList }
+    if (typeof w.matchMedia === 'function') {
+      isLandscape.value = w.matchMedia(LANDSCAPE_QUERY).matches || w.matchMedia(WIDE_TOUCH_QUERY).matches
+      return
+    }
+  } catch {
+    // 忽略：走兜底
+  }
+  try {
+    const info = uni.getSystemInfoSync()
+    const { windowWidth = 0, windowHeight = 0 } = info
+    isLandscape.value =
+      windowWidth >= 560 &&
+      (windowWidth > windowHeight || windowWidth / Math.max(windowHeight, 1) >= 2 / 3)
+  } catch {
+    isLandscape.value = false
+  }
+}
+
+/** 全屏播放器根节点 DOM（供拖拽换算宽度） */
+function overlayElement(): HTMLElement | null {
+  const ref = overlayElRef.value
+  if (!ref) return null
+  if (ref instanceof HTMLElement) return ref
+  return ref.$el ?? null
+}
+
+// —— 分隔条拖拽：拖动期间实时更新比例（左右栏宽度跟手），松手才落盘一次 ——
+let resizing = false
+let resizeStartX = 0
+let resizeStartRatio = SPLIT_DEFAULT
+
+function onResizerStart(event: TouchEvent) {
+  const touch = event.touches[0]
+  if (!touch) return
+  resizing = true
+  resizeStartX = touch.clientX
+  resizeStartRatio = splitRatio.value
+}
+
+function onResizerMove(event: TouchEvent) {
+  if (!resizing) return
+  const touch = event.touches[0]
+  if (!touch) return
+  const el = overlayElement()
+  const width = el?.clientWidth ?? 0
+  if (!(width > 0)) return
+  splitRatio.value = clampRatio(resizeStartRatio + (touch.clientX - resizeStartX) / width)
+}
+
+function onResizerEnd(event?: TouchEvent) {
+  if (!resizing) return
+  resizing = false
+  // 位移 <8px 视为轻点（参与双击检测），否则是真实拖拽、落盘比例
+  const touch = event?.changedTouches?.[0]
+  const moved = touch ? Math.abs(touch.clientX - resizeStartX) : 0
+  if (moved < 8) handleResizerDoubleTap()
+  else uni.setStorageSync(SPLIT_STORAGE_KEY, splitRatio.value)
+}
+
+// —— 双击分隔条：两次轻点间隔 <320ms 视为双击，恢复默认比例并落盘 ——
+let resizerTapTimer: ReturnType<typeof setTimeout> | undefined
+function handleResizerDoubleTap() {
+  if (resizerTapTimer) {
+    clearTimeout(resizerTapTimer)
+    resizerTapTimer = undefined
+    splitRatio.value = SPLIT_DEFAULT
+    uni.setStorageSync(SPLIT_STORAGE_KEY, SPLIT_DEFAULT)
+    return
+  }
+  resizerTapTimer = setTimeout(() => {
+    resizerTapTimer = undefined
+  }, 320)
+}
+
+/** 全屏播放器容器样式：动态封面取色背景 + 横屏双栏时按拖拽比例内联覆盖网格列宽 */
+const overlayStyleWithRatio = computed<Record<string, string>>(() => {
+  const base = overlayStyle.value as Record<string, string>
+  if (!isLandscape.value || lyricMode.value) return base ?? {}
+  const left = splitRatio.value * 100
+  return {
+    ...base,
+    gridTemplateColumns: `minmax(0, ${left}fr) minmax(0, ${100 - left}fr)`,
+  }
+})
+
+// 分栏比例变化后歌词区宽度改变，重新居中当前行（拖动中逐帧触发，nextTick 合并足够轻）
+watch(splitRatio, () => {
+  void nextTick(() => centerActiveLyric())
+})
+
+// 恢复持久化比例
+loadSplitRatio()
+
 onMounted(() => {
+  syncLandscape()
   uni.onWindowResize?.(onWindowResize)
 })
 onUnmounted(() => {
   uni.offWindowResize?.(onWindowResize)
   if (previewTimer) clearTimeout(previewTimer)
+  if (resizerTapTimer) clearTimeout(resizerTapTimer)
 })
 
 // ===== 律动频谱条（视觉动效，非真实频谱；播放时律动、暂停时静置） =====
@@ -584,8 +710,9 @@ function onSeekEnd() {
       <view class="now-next" @tap.stop="nextTrack"><SkipForward :size="19" /></view>
     </view>
 
-    <!-- 全屏播放器弹层：动态背景 + 黑胶封面 / 沉浸歌词 + 频谱 + 控制区；immersive 类供横屏布局切换歌词栏形态 -->
-    <view v-if="expanded" class="player-overlay" :class="{ immersive: lyricMode }" :style="overlayStyle">
+    <!-- 全屏播放器弹层：动态背景 + 黑胶封面 / 沉浸歌词 + 频谱 + 控制区。
+         immersive 类供竖屏沉浸歌词模式切换；横屏（isLandscape）下由 CSS grid 拆成左栏（全部内容）+ 右栏（歌词），中间拖拽条调比例 -->
+    <view v-if="expanded" ref="overlayElRef" class="player-overlay" :class="{ immersive: lyricMode }" :style="overlayStyleWithRatio">
       <!-- 顶栏：收起 / 歌词模式切换 / 关闭 -->
       <view class="player-topbar">
         <view class="player-icon-button" @tap="expanded = false"><ChevronDown :size="23" /></view>
@@ -596,10 +723,10 @@ function onSeekEnd() {
         <view class="player-icon-button" :class="{ active: lyricMode }" @tap="toggleLyricMode"><AlignLeft :size="20" /></view>
       </view>
 
-      <!-- 舞台：封面（可手势）或沉浸歌词 -->
+      <!-- 舞台：封面（可手势）+ 曲名信息 + 歌词（竖屏在内，横屏经 display:contents 变为右栏） -->
       <view class="player-stage" :class="{ immersive: lyricMode }">
-        <!-- 黑胶封面：播放时旋转；支持左右滑切歌、下滑关闭、单击切歌词、双击收藏 -->
-        <view v-if="!lyricMode" class="player-art-block">
+        <!-- 黑胶封面：播放时旋转；支持左右滑切歌、下滑关闭、单击切歌词、双击收藏。横屏左栏常驻 -->
+        <view v-if="!lyricMode || isLandscape" class="player-art-block">
           <view
             class="player-art-wrap"
             @touchstart="onArtTouchStart"
@@ -615,8 +742,8 @@ function onSeekEnd() {
           <view class="art-hint">{{ t('playback.gestureHint') }}</view>
         </view>
 
-        <!-- 曲名/艺人 + 收藏（封面模式下显示） -->
-        <view v-if="!lyricMode" class="player-info">
+        <!-- 曲名/艺人 + 收藏（封面模式下显示；横屏左栏常驻） -->
+        <view v-if="!lyricMode || isLandscape" class="player-info">
           <view class="player-info-copy">
             <text class="player-song-title">{{ state.currentTrack.title }}</text>
             <text class="player-song-artist">{{ artistAlbumLabel }}</text>
@@ -626,7 +753,7 @@ function onSeekEnd() {
           </view>
         </view>
 
-        <!-- 歌词区：LRC 逐行高亮，沉浸模式下铺满并放大；点击行跳转 -->
+        <!-- 歌词区：LRC 逐行高亮，沉浸模式下铺满放大；点击行跳转。竖屏在舞台内，横屏经 grid 变成右栏常驻 -->
         <scroll-view
           v-if="state.currentLyric"
           class="lyric-view"
@@ -673,7 +800,7 @@ function onSeekEnd() {
         <view class="seek-times"><text>{{ elapsedLabel }}</text><text>{{ durationLabel }}</text></view>
       </view>
 
-      <!-- 播放控制：播放模式（单按钮三态）/ 上一首 / 播放暂停 / 下一首 / 收藏（播放列表入口在下方 extra 行） -->
+      <!-- 播放控制：播放模式（单按钮三态）/ 上一首 / 播放暂停 / 下一首 / 收藏 -->
       <view class="player-controls">
         <view class="control-secondary" :class="{ active: state.playMode !== 'order' }" @tap="cyclePlayMode">
           <ListOrdered v-if="state.playMode === 'order'" :size="22" />
@@ -703,6 +830,19 @@ function onSeekEnd() {
       </view>
 
       <view v-if="state.audioError" class="audio-notice">{{ t('playback.audioUnavailable') }}</view>
+
+      <!-- 横屏拖拽条：调整左右分栏比例（左栏占 splitRatio，竖屏/沉浸歌词不显示）；双击复位 55/45 -->
+      <view
+        v-if="isLandscape && !lyricMode"
+        class="player-resizer"
+        :style="{ left: `${splitRatio * 100}%` }"
+        @touchstart="onResizerStart"
+        @touchmove="onResizerMove"
+        @touchend="onResizerEnd"
+        @touchcancel="onResizerEnd"
+      >
+        <view class="resizer-handle"></view>
+      </view>
     </view>
 
     <!-- 播放队列面板（底部抽屉） -->
@@ -784,7 +924,7 @@ function onSeekEnd() {
 .player-disc { position: relative; width: 100%; height: 100%; border-radius: 50%; overflow: hidden; background: var(--sm-surface-3); box-shadow: 0 24rpx 60rpx var(--sm-art-shadow), inset 0 0 0 10rpx var(--sm-border-strong), inset 0 0 0 22rpx var(--sm-bg-soft); animation: spin 22s linear infinite; animation-play-state: paused; }
 .player-disc.playing { animation-play-state: running; }
 .player-disc :deep(image), .player-disc :deep(img) { width: 100%; height: 100%; }
-.disc-hole { position: absolute; top: 50%; left: 50%; width: 20%; height: 20%; border: 6rpx solid var(--sm-bg-soft); border-radius: 50%; background: var(--sm-bg); transform: translate(-50%, -50%); }
+.disc-hole { position: absolute; top: 50%; left: 50%; width: 12%; height: 12%; border: 3rpx solid var(--sm-border-strong); border-radius: 50%; background: var(--sm-surface-3); transform: translate(-50%, -50%); box-shadow: inset 0 2rpx 6rpx rgba(0,0,0,0.12), 0 0 0 2rpx var(--sm-bg-soft); }
 .art-sticker { position: absolute; right: 8rpx; bottom: 8rpx; display: flex; align-items: center; gap: 7rpx; padding: 9rpx 13rpx; border-radius: 30rpx; background: var(--sm-overlay-ink); color: var(--sm-text); font-family: 'DM Sans', sans-serif; font-size: 12rpx; font-weight: 700; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
 .art-hint { margin-top: 16rpx; color: var(--sm-text-3); font-size: 14rpx; text-align: center; }
 
@@ -1018,6 +1158,50 @@ function onSeekEnd() {
   .player-overlay.immersive .lyric-line { text-align: center; }
   .player-overlay.immersive .lyric-line.active::before { display: none; } /* 居中态不需要左光条 */
   .player-overlay.immersive .player-controls { max-width: 560px; }
+
+  /* —— 横屏分栏拖拽条：定位于左右栏交界（left 由 splitRatio 内联驱动），竖屏/沉浸态由 v-if 隐藏 —— */
+  .player-resizer {
+    position: absolute;
+    top: 56px;
+    bottom: 12px;
+    z-index: 6;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    transform: translateX(-50%);
+    touch-action: none;
+  }
+  .resizer-handle {
+    position: relative;
+    width: 4px;
+    height: 64px;
+    border-radius: 3px;
+    background: var(--sm-border-strong);
+    transition: background .18s ease, box-shadow .18s ease, height .18s ease;
+  }
+  /* 把手上下端点小圆帽，暗示可拖拽 */
+  .resizer-handle::before,
+  .resizer-handle::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--sm-border-strong);
+    transform: translateX(-50%);
+    transition: background .18s ease;
+  }
+  .resizer-handle::before { top: -12px; }
+  .resizer-handle::after { bottom: -12px; }
+  .player-resizer:active .resizer-handle {
+    height: 88px;
+    background: var(--sm-accent);
+    box-shadow: 0 0 14px var(--sm-accent-glow);
+  }
+  .player-resizer:active .resizer-handle::before,
+  .player-resizer:active .resizer-handle::after { background: var(--sm-accent); }
 
   /* —— 横屏队列/音效抽屉：底部弹层 → 右侧滑入面板 —— */
   .eq-sheet-mask { align-items: stretch; justify-content: flex-end; }

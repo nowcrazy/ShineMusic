@@ -51,10 +51,16 @@ public sealed partial class KugouPlaylistParser(IHttpClientFactory httpClientFac
         // 歌单元数据（名称/封面/简介）：plist/list 首页
         var metaRaw = await PlaylistHttpText.GetStringAsync(
             client, $"{ListBase}/{id}/?json=true", cancellationToken);
-        using (var metaDoc = JsonDocument.Parse(metaRaw))
+        using (var metaDoc = ParseJson(metaRaw, "无法读取酷狗公开歌单页面，请稍后重试。"))
         {
-            if (metaDoc.RootElement.TryGetProperty("info", out var metaInfo)
-                && metaInfo.TryGetProperty("list", out var listInfo))
+            // 失效链接 / 新版 collection_ 精选集会返回 info:false；对非 Object 元素调用
+            // TryGetProperty 会抛 InvalidOperationException 并冒泡成 500（2026-11-10 实测修复）。
+            // 统一降级为可读的 400 提示，不让外部数据形态变成服务端内部错误。
+            if (metaDoc.RootElement.ValueKind == JsonValueKind.Object
+                && metaDoc.RootElement.TryGetProperty("info", out var metaInfo)
+                && metaInfo.ValueKind == JsonValueKind.Object
+                && metaInfo.TryGetProperty("list", out var listInfo)
+                && listInfo.ValueKind == JsonValueKind.Object)
             {
                 name = GetString(listInfo, "specialname");
                 cover = GetString(listInfo, "imgurl")?.Replace("{size}", "150", StringComparison.Ordinal);
@@ -65,7 +71,8 @@ public sealed partial class KugouPlaylistParser(IHttpClientFactory httpClientFac
         }
         canonicalId ??= id.All(char.IsDigit) ? id : null;
         if (canonicalId is null)
-            throw new PlaylistParseException("无法从酷狗歌单页面中读取歌单编号。");
+            throw new PlaylistParseException(
+                "无法读取该酷狗歌单，请确认链接为有效的公开精选集（新版 collection_/gcid 分享形态暂不支持）。");
 
         // 全量曲目：special/song 分页（plist/list 的 page/pagesize 参数被平台忽略，不可用）
         int? total = null;
@@ -73,7 +80,7 @@ public sealed partial class KugouPlaylistParser(IHttpClientFactory httpClientFac
         {
             var raw = await PlaylistHttpText.GetStringAsync(
                 client, $"{SongsBase}?specialid={Uri.EscapeDataString(canonicalId)}&page={page}&pagesize={PageSize}&version=9150", cancellationToken);
-            using var doc = JsonDocument.Parse(raw);
+            using var doc = ParseJson(raw, "酷狗歌单曲目数据格式无效，请稍后重试。");
             var root = doc.RootElement;
             if (!root.TryGetProperty("data", out var data)
                 || !data.TryGetProperty("total", out var totalElement)
@@ -157,6 +164,19 @@ public sealed partial class KugouPlaylistParser(IHttpClientFactory httpClientFac
         if (index <= 0)
             return (null, fileName.Trim());
         return (fileName[..index].Trim(), fileName[(index + 3)..].Trim());
+    }
+
+    /// <summary>平台返回非 JSON（风控页 / HTML / 空体）时统一降级为 400，避免 JsonException 冒泡成 500。</summary>
+    private static JsonDocument ParseJson(string raw, string errorMessage)
+    {
+        try
+        {
+            return JsonDocument.Parse(raw);
+        }
+        catch (JsonException)
+        {
+            throw new PlaylistParseException(errorMessage);
+        }
     }
 
     private static string? GetString(JsonElement element, string property) =>
