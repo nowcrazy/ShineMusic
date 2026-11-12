@@ -44,7 +44,12 @@ builder.Services.AddShineMusicCrossCutting(builder.Configuration);
 builder.Services.AddShineMusicControllers();
 builder.Services.AddShineMusicOptions(builder.Configuration, builder.Environment);
 builder.Services.AddShineMusicCors(builder.Configuration, builder.Environment);
-builder.Services.AddShineMusicInfrastructure(builder.Configuration);
+// P5：Worker:Mode 决定本进程承载哪一组后台任务。
+//   all（默认）  —— 单体：Web + 全部 7 个后台任务
+//   web          —— Web 进程：只跑 3 个非媒体任务，媒体任务交给独立 Media Worker
+//   media / none —— 诊断或单进程专用
+var hostedServiceMode = HostedServiceModeParser.Parse(builder.Configuration["Worker:Mode"]);
+builder.Services.AddShineMusicInfrastructure(builder.Configuration, hostedServiceMode);
 builder.Services.AddShineMusicApplicationServices();
 builder.Services.AddShineMusicAuthentication(builder.Configuration);
 

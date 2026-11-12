@@ -5,4 +5,6 @@
   <Project Path="ShineMusic.Repository/ShineMusic.Repository.csproj" />
   <Project Path="ShineMusic.Service/ShineMusic.Service.csproj" />
   <Project Path="ShineMusic.Tasks/ShineMusic.Tasks.csproj" />
+  <Project Path="ShineMusic.Tests/ShineMusic.Tests.csproj" />
+  <Project Path="ShineMusic.Worker/ShineMusic.Worker.csproj" />
 </Solution>

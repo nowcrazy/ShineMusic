@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>ShineMusic.Worker</RootNamespace>
+  </PropertyGroup>
+
+  <!-- 复用 Web 主机的组合根（选项/基础设施/模块 DI），因此引用 AspNetCore 共享框架。 -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ShineMusic.Api\ShineMusic.Api.csproj" />
+    <ProjectReference Include="..\ShineMusic.Tasks\ShineMusic.Tasks.csproj" />
+  </ItemGroup>
+
+</Project>

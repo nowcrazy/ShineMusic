@@ -1,7 +1,7 @@
 // Program.cs 的中间件管道扩展：把异常处理、兜底错误体、响应压缩、路由、CORS、
 // 操作日志、认证、授权、限流、端点映射等管道配置收敛为 WebApplication 扩展方法。
-// 管道顺序敏感，务必保持：ForwardedHeaders → ExceptionHandler → 兜底错误体 →
-// ResponseCompression → Routing → CORS → OperationLogging → Authentication →
+// 管道顺序敏感，务必保持：ForwardedHeaders → DualStackApiFaces → ExceptionHandler →
+// 兜底错误体 → ResponseCompression → Routing → CORS → OperationLogging → Authentication →
 // Authorization → RateLimiter → MapControllers。
 
 using Microsoft.AspNetCore.Diagnostics;
@@ -17,6 +17,10 @@ public static class ApplicationBuilderExtensions
     {
         // 反向代理头必须放在管道最前面：先把 X-Forwarded-For/Proto 回填到 HttpContext。
         app.UseForwardedHeaders();
+
+        // 双栈 API 面：/admin/v1、/app/v1 在进入路由前重写回历史 /api/v1 路径。
+        // 位置必须在 UseRouting 之前，否则端点匹配不到；旧 /api/v1 不受影响。
+        app.UseDualStackApiFaces();
 
         // 未处理异常统一收敛为 500 JSON。
         app.UseExceptionHandler(exceptionHandler => exceptionHandler.Run(async context =>

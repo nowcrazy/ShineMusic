@@ -6,9 +6,13 @@
 // - 通过反射扫描 ShineMusic.Model 程序集中所有带 [SugarTable] 的实体类型，
 //   新实体只要加了特性就自动纳入，无需维护手工清单；
 // - XML 注释→列备注特性已在 SqlSugarFactory 经 IsNoReadXmlDescription 关闭
-//   （其 PG 备注 SQL 会把列名转小写，与带引号 PascalCase 列名冲突导致崩溃）。
+//   （其 PG 备注 SQL 会把列名转小写，与 snake_case 列名冲突导致崩溃）。
+// - 表名/列名统一 snake_case：SqlSugarFactory 的 EntityNameService/EntityService 钩子
+//   会把 PascalCase 实体名/属性名自动转为 snake_case，DB 侧标识符均为小写下划线风格。
+//   本文件中所有硬编码的表名/列名也使用 snake_case 与之一致。
 
 using System.Reflection;
+using System.Text;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using SqlSugar;
@@ -53,7 +57,7 @@ public static class SqlSugarSchemaBootstrap
         return true;
     }
 
-    /// <summary>库为空（核心表 AspNetUsers 不存在）时对所有 [SugarTable] 实体执行 CodeFirst 建表；否则仅补建缺失的新表与新列。</summary>
+    /// <summary>库为空（核心表 users 不存在）时对所有 [SugarTable] 实体执行 CodeFirst 建表；否则仅补建缺失的新表与新列。</summary>
     public static void Initialize(ISqlSugarClient db, ILogger logger)
     {
         var entityTypes = typeof(ShineMusic.Model.Entities.ApplicationUser).Assembly
@@ -62,7 +66,7 @@ public static class SqlSugarSchemaBootstrap
                            type.GetCustomAttribute<SugarTable>() is not null)
             .ToArray();
 
-        if (!db.DbMaintenance.IsAnyTable("AspNetUsers", false))
+        if (!db.DbMaintenance.IsAnyTable("users", false))
         {
             logger.LogInformation("SqlSugar CodeFirst initializing {Count} entity tables (fresh database).", entityTypes.Length);
             db.CodeFirst.InitTables(entityTypes);
@@ -71,34 +75,39 @@ public static class SqlSugarSchemaBootstrap
 
         logger.LogInformation("SqlSugar CodeFirst skipped: database schema already exists.");
 
-        // UserPlaylistPendingTracks：SqlSugar CodeFirst 在 PG 下建表会把标识符强制转小写，
-        // 而运行时用带引号的 PascalCase 标识符，两者不兼容。统一走手写 DDL 建表，
-        // 并清掉历史残留的全小写表。无条件调用（内部幂等）。
+        // user_playlist_pending_tracks / playlist_download_queue_items：SqlSugar CodeFirst 在 PG 下
+        // 建表会把标识符强制转小写，而早期运行时用带引号的 PascalCase 标识符，两者不兼容。
+        // 统一走手写 DDL 建表（snake_case），并清掉历史残留表。无条件调用（内部幂等）。
         EnsurePendingTracksTable(db, logger);
         EnsurePlaylistDownloadQueueTable(db, logger);
 
-        // 存量库：只对“尚不存在的表”执行建表（新实体的安全落地通道），绝不触碰已有表结构。
+        // 存量库：只对"尚不存在的表"执行建表（新实体的安全落地通道），绝不触碰已有表结构。
+        // 注意：SugarTable 特性里的表名已被钩子转成 snake_case，这里取到的是原始特性值，
+        // 需要手动转 snake_case 后再查 DB。
         foreach (var type in entityTypes)
         {
             var tableName = type.GetCustomAttribute<SugarTable>()!.TableName;
-            if (tableName == "UserPlaylistPendingTracks") continue; // 已由上面的 Ensure 方法处理
-            if (db.DbMaintenance.IsAnyTable(tableName, false)) continue;
-            logger.LogInformation("SqlSugar CodeFirst creating missing table {Table} ({Entity}).", tableName, type.Name);
+            var snakeTableName = ToSnakeCase(tableName);
+            if (snakeTableName == "user_playlist_pending_tracks") continue; // 已由上面的 Ensure 方法处理
+            if (snakeTableName == "playlist_download_queue_items") continue;
+            if (db.DbMaintenance.IsAnyTable(snakeTableName, false)) continue;
+            logger.LogInformation("SqlSugar CodeFirst creating missing table {Table} ({Entity}).", snakeTableName, type.Name);
             db.CodeFirst.InitTables(type);
         }
 
-        // 存量库：对既有表补“缺失的新列”（只增不改；列级 AddColumn 不影响既有列类型与数据）。
-        EnsureColumn(db, logger, "AdminAuditEntries", nameof(ShineMusic.Model.Entities.AdminAuditEntry.Ip));
-        EnsureColumn(db, logger, "AdminAuditEntries", nameof(ShineMusic.Model.Entities.AdminAuditEntry.ClientType));
-        EnsureColumn(db, logger, "AdminAuditEntries", nameof(ShineMusic.Model.Entities.AdminAuditEntry.DeviceInfo));
-        EnsureColumn(db, logger, "AspNetUsers", nameof(ShineMusic.Model.Entities.ApplicationUser.TempAdminUntilUtc), "timestamptz");
-        EnsureColumn(db, logger, "ExternalDownloadTasks", nameof(ShineMusic.Model.Entities.ExternalDownloadTask.ReleaseYear), "integer");
-        EnsureColumn(db, logger, "UserPlaylistPendingTracks", "SearchDiagnosticsJson", "text");
-        EnsureColumn(db, logger, "PlaylistDownloadQueueItems", "SearchDiagnosticsJson", "text");
+        // 存量库：对既有表补"缺失的新列"（只增不改；列级 AddColumn 不影响既有列类型与数据）。
+        // 列名使用 nameof 获取属性名后转 snake_case，与 Factory 钩子的转换结果一致。
+        EnsureColumn(db, logger, "admin_audit_entries", ToSnakeCase(nameof(ShineMusic.Model.Entities.AdminAuditEntry.ClientIp)));
+        EnsureColumn(db, logger, "admin_audit_entries", ToSnakeCase(nameof(ShineMusic.Model.Entities.AdminAuditEntry.ClientType)));
+        EnsureColumn(db, logger, "admin_audit_entries", ToSnakeCase(nameof(ShineMusic.Model.Entities.AdminAuditEntry.DeviceInfo)));
+        EnsureColumn(db, logger, "users", ToSnakeCase(nameof(ShineMusic.Model.Entities.ApplicationUser.TempAdminUntilUtc)), "timestamptz");
+        EnsureColumn(db, logger, "external_download_tasks", ToSnakeCase(nameof(ShineMusic.Model.Entities.ExternalDownloadTask.ReleaseYear)), "integer");
+        EnsureColumn(db, logger, "user_playlist_pending_tracks", "search_diagnostics_json", "text");
+        EnsureColumn(db, logger, "playlist_download_queue_items", "search_diagnostics_json", "text");
 
-        // 存量库：DetailsJson 早期由 CodeFirst 默认建为 varchar(255)，写入完整请求快照会触发
+        // 存量库：details_json 早期由 CodeFirst 默认建为 varchar(255)，写入完整请求快照会触发
         // PG 22001（推荐策略保存 500 的根因）。varchar→text 在 PG 中二进制兼容、不重写表，幂等升级一次。
-        EnsureTextColumn(db, logger, "AdminAuditEntries", nameof(ShineMusic.Model.Entities.AdminAuditEntry.DetailsJson));
+        EnsureTextColumn(db, logger, "admin_audit_entries", ToSnakeCase(nameof(ShineMusic.Model.Entities.AdminAuditEntry.DetailsJson)));
     }
 
     /// <summary>
@@ -139,35 +148,36 @@ public static class SqlSugarSchemaBootstrap
     }
 
     /// <summary>
-    /// 手动建 UserPlaylistPendingTracks（PascalCase 带引号），规避 SqlSugar CodeFirst 在 PG 下
-    /// 强制小写标识符的问题。先清掉历史残留的全小写表，再按实体定义精确建表。
+    /// 手动建 user_playlist_pending_tracks（snake_case），规避 SqlSugar CodeFirst 在 PG 下
+    /// 强制小写标识符与 PascalCase 不兼容的问题。先清掉历史残留表，再按实体定义精确建表。
     /// </summary>
     private static void EnsurePendingTracksTable(ISqlSugarClient db, ILogger logger)
     {
-        // 清掉 CodeFirst 误建的全小写表（无数据，安全删除）。
+        // 清掉 CodeFirst 误建的历史残留表（无数据，安全删除）。
+        db.Ado.ExecuteCommand("DROP TABLE IF EXISTS \"UserPlaylistPendingTracks\"");
         db.Ado.ExecuteCommand("DROP TABLE IF EXISTS userplaylistpendingtracks");
 
-        if (db.DbMaintenance.IsAnyTable("UserPlaylistPendingTracks", false)) return;
+        if (db.DbMaintenance.IsAnyTable("user_playlist_pending_tracks", false)) return;
 
-        logger.LogInformation("SqlSugar schema patch: creating table UserPlaylistPendingTracks.");
+        logger.LogInformation("SqlSugar schema patch: creating table user_playlist_pending_tracks.");
         const string ddl = """
-            CREATE TABLE "UserPlaylistPendingTracks" (
-                "Id" uuid NOT NULL PRIMARY KEY,
-                "PlaylistId" uuid NOT NULL,
-                "Title" character varying NOT NULL,
-                "ArtistsJson" text NOT NULL,
-                "AlbumTitle" character varying NULL,
-                "DurationMs" integer NULL,
-                "CoverUrl" character varying NULL,
-                "SourcePlatform" character varying NOT NULL,
-                "SourceTrackId" character varying NULL,
-                "SourceUrl" character varying NULL,
-                "SortOrder" integer NOT NULL,
-                "Status" character varying NOT NULL,
-                "DownloadTaskId" uuid NULL,
-                "CreatedAtUtc" timestamp with time zone NOT NULL,
-                "UpdatedAtUtc" timestamp with time zone NOT NULL,
-                "SearchDiagnosticsJson" text NULL
+            CREATE TABLE "user_playlist_pending_tracks" (
+                "id" uuid NOT NULL PRIMARY KEY,
+                "playlist_id" uuid NOT NULL,
+                "title" character varying NOT NULL,
+                "artists_json" text NOT NULL,
+                "album_title" character varying NULL,
+                "duration_ms" integer NULL,
+                "cover_url" character varying NULL,
+                "source_platform" character varying NOT NULL,
+                "source_track_id" character varying NULL,
+                "source_url" character varying NULL,
+                "sort_order" integer NOT NULL,
+                "status" character varying NOT NULL,
+                "download_task_id" uuid NULL,
+                "created_at_utc" timestamp with time zone NOT NULL,
+                "updated_at_utc" timestamp with time zone NOT NULL,
+                "search_diagnostics_json" text NULL
             );
             """;
         db.Ado.ExecuteCommand(ddl);
@@ -175,29 +185,69 @@ public static class SqlSugarSchemaBootstrap
 
     private static void EnsurePlaylistDownloadQueueTable(ISqlSugarClient db, ILogger logger)
     {
-        if (db.DbMaintenance.IsAnyTable("PlaylistDownloadQueueItems", false)) return;
+        db.Ado.ExecuteCommand("DROP TABLE IF EXISTS \"PlaylistDownloadQueueItems\"");
 
-        logger.LogInformation("SqlSugar schema patch: creating table PlaylistDownloadQueueItems.");
+        if (db.DbMaintenance.IsAnyTable("playlist_download_queue_items", false)) return;
+
+        logger.LogInformation("SqlSugar schema patch: creating table playlist_download_queue_items.");
         const string ddl = """
-            CREATE TABLE "PlaylistDownloadQueueItems" (
-                "Id" uuid NOT NULL PRIMARY KEY,
-                "UserId" uuid NOT NULL,
-                "Title" character varying NOT NULL,
-                "ArtistsJson" text NOT NULL,
-                "AlbumTitle" character varying NULL,
-                "DurationMs" integer NULL,
-                "SourcePlatform" character varying NOT NULL,
-                "SourceTrackId" character varying NULL,
-                "SourceUrl" character varying NULL,
-                "Status" character varying NOT NULL,
-                "DownloadTaskId" uuid NULL,
-                "CreatedAtUtc" timestamp with time zone NOT NULL,
-                "UpdatedAtUtc" timestamp with time zone NOT NULL,
-                "SearchDiagnosticsJson" text NULL
+            CREATE TABLE "playlist_download_queue_items" (
+                "id" uuid NOT NULL PRIMARY KEY,
+                "user_id" uuid NOT NULL,
+                "title" character varying NOT NULL,
+                "artists_json" text NOT NULL,
+                "album_title" character varying NULL,
+                "duration_ms" integer NULL,
+                "source_platform" character varying NOT NULL,
+                "source_track_id" character varying NULL,
+                "source_url" character varying NULL,
+                "status" character varying NOT NULL,
+                "download_task_id" uuid NULL,
+                "created_at_utc" timestamp with time zone NOT NULL,
+                "updated_at_utc" timestamp with time zone NOT NULL,
+                "search_diagnostics_json" text NULL
             );
-            CREATE INDEX "IX_PlaylistDownloadQueueItems_Status_CreatedAtUtc"
-                ON "PlaylistDownloadQueueItems" ("Status", "CreatedAtUtc");
+            CREATE INDEX "ix_playlist_download_queue_items_status_created_at_utc"
+                ON "playlist_download_queue_items" ("status", "created_at_utc");
             """;
         db.Ado.ExecuteCommand(ddl);
+    }
+
+    /// <summary>
+    /// PascalCase / 驼峰命名转 snake_case（小写、单词间下划线分隔）。
+    /// 与 SqlSugarFactory.ToSnakeCase 逻辑完全一致，此处复制一份用于 SchemaBootstrap 中
+    /// 把 nameof(属性名) 转换为 DB 列名（两处保持同步即可）。
+    /// </summary>
+    private static string ToSnakeCase(string name)
+    {
+        if (string.IsNullOrEmpty(name))
+            return name;
+
+        var builder = new StringBuilder(name.Length + 8);
+        for (var i = 0; i < name.Length; i++)
+        {
+            var current = name[i];
+            if (char.IsUpper(current))
+            {
+                var previous = i > 0 ? name[i - 1] : '\0';
+                var next = i + 1 < name.Length ? name[i + 1] : '\0';
+
+                if (i > 0 && previous != '_')
+                {
+                    var isWordBoundary = !char.IsUpper(previous);
+                    var isAbbreviationEnd = char.IsUpper(previous) && !char.IsUpper(next) && next != '\0';
+                    if (isWordBoundary || isAbbreviationEnd)
+                        builder.Append('_');
+                }
+
+                builder.Append(char.ToLowerInvariant(current));
+            }
+            else
+            {
+                builder.Append(current);
+            }
+        }
+
+        return builder.ToString();
     }
 }

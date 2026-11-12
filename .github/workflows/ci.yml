@@ -38,6 +38,11 @@ jobs:
       - name: 构建（警告即错误）
         run: dotnet build ShineMusic.slnx --configuration Release --no-restore
 
+      # 架构改造安全网：领域规则 / 状态机 / 路径穿越 / 契约分层约束的自动化回归。
+      # 改了纯规则却没同步测试时，这一步直接失败。
+      - name: 运行后端单元与架构测试
+        run: dotnet test ShineMusic.slnx --configuration Release --no-build --nologo
+
   app:
     name: App 前端（契约漂移 + i18n 残留 + 类型检查 + App 构建）
     runs-on: ubuntu-latest

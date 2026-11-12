@@ -46,7 +46,7 @@ public sealed partial class LyricsBackfillJob(
         var tracks = await db.Queryable<Track>()
             .Where(track => track.PublishedAt != null &&
                 !SqlFunc.Subqueryable<Lyric>().Where(lyric => lyric.TrackId == track.Id).Any())
-            .OrderBy(track => track.AddedAt)
+            .OrderBy(track => track.AddedAtUtc)
             .Take(BatchSize)
             .ToListAsync(cancellationToken);
         if (tracks.Count == 0)

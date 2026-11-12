@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ShineMusic.Model\ShineMusic.Model.csproj" />
+    <ProjectReference Include="..\ShineMusic.Repository\ShineMusic.Repository.csproj" />
+    <ProjectReference Include="..\ShineMusic.Service\ShineMusic.Service.csproj" />
+    <ProjectReference Include="..\ShineMusic.Common\ShineMusic.Common.csproj" />
+    <!-- P6 架构测试需要反射接口层程序集（Controller 不得直连基础设施等约束）。 -->
+    <ProjectReference Include="..\ShineMusic.Api\ShineMusic.Api.csproj" />
+  </ItemGroup>
+
+</Project>

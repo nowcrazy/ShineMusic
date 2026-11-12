@@ -116,7 +116,7 @@ export interface ApiAudio {
   bitrateKbps?: number | null
 }
 
-/** 来源：`ShineMusicApi/ShineMusic.Service/Services/TokenService.cs` */
+/** 来源：`ShineMusicApi/ShineMusic.Service/TokenService.cs` */
 export interface ApiAuthToken {
   accessToken: string
   refreshToken: string

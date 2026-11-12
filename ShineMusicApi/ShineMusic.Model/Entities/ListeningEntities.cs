@@ -44,7 +44,7 @@ public sealed class ListeningEvent
     public Guid TrackId { get; set; }
 
     /// <summary>事件类型，取值见 <see cref="ListeningEventTypes"/>。</summary>
-    public string EventType { get; set; } = ListeningEventTypes.Play;
+    public string ListeningEventType { get; set; } = ListeningEventTypes.Play;
 
     /// <summary>事件发生时的播放进度（毫秒）；用于判断“是否完整收听”等，可空。</summary>
     [SugarColumn(IsNullable = true)]
@@ -90,7 +90,7 @@ public sealed class UserTrackFeedback
     public Guid TrackId { get; set; }
 
     /// <summary>反馈类型，取值见 <see cref="UserFeedbackKinds"/>。</summary>
-    public string Kind { get; set; } = UserFeedbackKinds.Like;
+    public string FeedbackKind { get; set; } = UserFeedbackKinds.Like;
 
     /// <summary>首次反馈时间（UTC）。</summary>
     [SugarColumn(ColumnDataType = "timestamptz")]

@@ -34,17 +34,26 @@ OUTPUTS = [
 
 SKIP_DIRS = {"obj", "bin", "Migrations"}
 
-# 分层后的扫描来源（2026-10 后端按 ZRAdmin 分层拆分）：
+# 分层后的扫描来源（2026-11 按业务模块重组后更新）：
 #   ShineMusic.Model/Contracts/    —— 全部对外契约（权威来源）
-#   ShineMusic.Api/Controllers/   —— 少数就近定义的请求/响应体
-#   ShineMusic.Service/Services/   —— 仅白名单文件（TokenService.cs 的 AuthTokenResponse）；
-#                                    其余 record 是内部实现细节（如 ItunesMetadataResult、
-#                                    DailyRecommendationResult），不该出现在前端契约里。
+#   ShineMusic.Api/Controllers/   —— 少数就近定义的请求/响应体（含 Admin/ App/ Shared/ 子目录）
+#   ShineMusic.Service/           —— 全项目扫描但只取白名单文件（TokenService.cs 的
+#                                    AuthTokenResponse）；其余 record 是内部实现细节
+#                                    （ItunesMetadataResult、DailyRecommendationResult 等），
+#                                    不该出现在前端契约里。
+# 说明：Service 侧按「文件名白名单」而非目录过滤，这样按业务模块搬迁文件不会漏掉契约。
+# scan_dirs 为 None 表示扫描整个项目（obj/bin 仍由 SKIP_DIRS 排除）。
+# 说明：按业务模块重组（Controllers/Admin、Service/Identity 等）属于物理搬迁，不是契约
+#       变更；若把完整物理路径写进生成产物，纯搬迁会制造大片假漂移，掩盖真正的字段变化。
+#       因此「来源」注释只保留稳定的契约根目录（见 STABLE_DIRS），丢弃模块中间目录。
 SCAN_SOURCES = [
     ("ShineMusic.Model", {"Contracts"}, None),
     ("ShineMusic.Api", {"Controllers"}, None),
-    ("ShineMusic.Service", {"Services"}, {"TokenService.cs"}),
+    ("ShineMusic.Service", None, {"TokenService.cs"}),
 ]
+
+# 契约根目录：这些目录名不会因为按业务模块重组而改变，可安全写进生成产物。
+STABLE_DIRS = {"Contracts", "Controllers"}
 
 # C# 基元类型 → TS
 PRIMITIVES = {
@@ -89,6 +98,18 @@ HEADER = r'''/**
 '''
 
 
+def stable_source(path: pathlib.Path) -> str:
+    """生成与物理目录无关的「来源」标识：ShineMusicApi/<项目>/<稳定目录>/<文件名>。
+
+    带业务模块名的中间目录（Admin/ App/ Shared/ Identity/ Media/ ...）会被丢弃，
+    这样重组目录不会产生契约漂移；真正的字段或文档变化仍会照常暴露。
+    """
+    parts = list(path.relative_to(API_ROOT).parts)
+    project, filename = parts[0], parts[-1]
+    stable = [part for part in parts[1:-1] if part in STABLE_DIRS]
+    return "/".join(["ShineMusicApi", project, *stable, filename])
+
+
 def iter_cs_files():
     for project, scan_dirs, file_whitelist in SCAN_SOURCES:
         base = API_ROOT / project
@@ -96,7 +117,7 @@ def iter_cs_files():
             rel = p.relative_to(base)
             if any(part in SKIP_DIRS for part in rel.parts):
                 continue
-            if rel.parts[0] not in scan_dirs:
+            if scan_dirs is not None and rel.parts[0] not in scan_dirs:
                 continue
             # 带白名单的目录（Service/Services）只取白名单文件，其余是实现细节
             if file_whitelist is not None and rel.name not in file_whitelist:
@@ -263,7 +284,8 @@ def main() -> int:
                 "params": params,
                 "summary": doc_summary(doc),
                 "docs": doc_params(doc),
-                "file": str(path.relative_to(ROOT)).replace("\\", "/"),
+                # 只有契约本身（类型、字段、文档）变化才会让 App/Web 的 TS 漂移。
+                "file": stable_source(path),
             }
 
     # 第一遍：收集全部类型名，供 alias 推断；仅在去后缀后发生重名时保留 C# record 后缀。

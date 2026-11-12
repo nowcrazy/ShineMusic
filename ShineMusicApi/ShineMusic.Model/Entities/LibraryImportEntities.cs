@@ -154,10 +154,10 @@ public sealed class LibraryImportItem
     public string? ItunesCountry { get; set; }
     /// <summary>地区分类（如 华语/欧美/日韩），由流派/艺人名文字推导，缺失时为 null。</summary>
     [SugarColumn(IsNullable = true)]
-    public string? Region { get; set; }
+    public string? RegionCategory { get; set; }
     /// <summary>成人内容标记（来自 iTunes trackExplicitness 解析）。</summary>
     [SugarColumn(IsNullable = true)]
-    public bool? Explicit { get; set; }
+    public bool? IsExplicit { get; set; }
     /// <summary>流派列表，以 JSON 数组字符串存储（JSON 列，应用层负责序列化）。</summary>
     [SugarColumn(ColumnDataType = "text")]
     public string GenresJson { get; set; } = "[]";
@@ -188,7 +188,7 @@ public sealed class LibraryImportItem
     [SugarColumn(IsNullable = true)]
     public Guid? SongRequestId { get; set; }
     /// <summary>元数据是否已经管理员人工审核确认（审核流程标记，防止未核对的标签直接发布）。</summary>
-    public bool MetadataReviewed { get; set; }
+    public bool IsMetadataReviewed { get; set; }
     /// <summary>是否为用户上传（区别于管理员导入）：用户上传的条目处理完成后自动私有入库（立即可听），而非进入人工审核发布队列。</summary>
     public bool IsUserUpload { get; set; }
     /// <summary>外部音源标识（audius/jamendo）：仅音源抓歌条目有值，null 表示手动上传/用户上传；

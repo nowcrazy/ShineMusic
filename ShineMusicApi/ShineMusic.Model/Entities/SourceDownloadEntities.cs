@@ -35,7 +35,7 @@ public sealed class ExternalDownloadTask
 {
     /// <summary>无参构造：满足 SqlSugar Insertable/Updateable 的 new() 约束（required 成员由调用方填充）。</summary>
     [SetsRequiredMembers]
-    public ExternalDownloadTask() { Provider = null!; ProviderTrackId = null!; }
+    public ExternalDownloadTask() { SourceProvider = null!; ProviderTrackId = null!; }
 
     /// <summary>任务唯一标识，Guid 主键（同时用作隔离区下载文件名主干）。</summary>
     [SugarColumn(IsPrimaryKey = true)]
@@ -45,7 +45,7 @@ public sealed class ExternalDownloadTask
     /// 当前正在尝试的音源平台标识。与 ProviderTrackId 构成唯一索引防重复抓取。
     /// 换源时会被更新为 CandidateProvidersJson 中下一个候选的 provider。
     /// </summary>
-    public required string Provider { get; set; }
+    public required string SourceProvider { get; set; }
 
     /// <summary>当前正在尝试的平台曲目 Id。换源时同步更新。</summary>
     public required string ProviderTrackId { get; set; }
@@ -91,7 +91,7 @@ public sealed class ExternalDownloadTask
 
     /// <summary>音质等级快照：lossless（有无损原文件）/ high（≥256k）/ standard。</summary>
     [SugarColumn(IsNullable = true)]
-    public string? Quality { get; set; }
+    public string? AudioQualityTier { get; set; }
 
     /// <summary>曲目许可信息（如 CC-BY、CC0 等，来自平台）。</summary>
     [SugarColumn(IsNullable = true)]
@@ -113,7 +113,7 @@ public sealed class ExternalDownloadTask
     public int? AutoScore { get; set; }
 
     /// <summary>是否因评分达标被自动直通入库（false 表示转人工审核或未处理完）。</summary>
-    public bool AutoPublished { get; set; }
+    public bool IsAutoPublished { get; set; }
 
     /// <summary>失败错误码（机器可读）。</summary>
     [SugarColumn(IsNullable = true)]

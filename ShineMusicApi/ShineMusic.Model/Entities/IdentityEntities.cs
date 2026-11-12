@@ -12,7 +12,7 @@ using SqlSugar;
 namespace ShineMusic.Model.Entities;
 
 /// <summary>应用用户，继承 IdentityUser 并以 Guid 作为主键类型。</summary>
-[SugarTable("AspNetUsers")]
+[SugarTable("users")]
 public sealed class ApplicationUser : IdentityUser<Guid>
 {
     // SetsRequiredMembers：SqlSugar 的 Insertable/Updateable 泛型带 new() 约束；
@@ -153,7 +153,7 @@ public static class InvitationStatuses
 }
 
 /// <summary>用户收藏（喜欢的曲目）；以 (UserId, TrackId) 复合主键保证同一用户不重复收藏。</summary>
-[SugarTable("Favorites")]
+[SugarTable("user_favorites")]
 public sealed class Favorite
 {
     /// <summary>收藏用户 Id（复合主键的一部分）。</summary>
@@ -391,7 +391,7 @@ public sealed class SongRequestEventRecord
     /// <summary>所属点歌需求 Id；(RequestId, CreatedAtUtc) 复合索引支撑按时间线正序读取。</summary>
     public Guid RequestId { get; set; }
     /// <summary>事件类型，取值见 <see cref="SongRequestEventKinds"/>（最长 32 字符）。</summary>
-    public string Kind { get; set; } = SongRequestEventKinds.Submitted;
+    public string EventKind { get; set; } = SongRequestEventKinds.Submitted;
     /// <summary>变更前状态；提交事件为 null。</summary>
     [SugarColumn(IsNullable = true)]
     public string? FromStatus { get; set; }
@@ -455,7 +455,7 @@ public sealed class UserNotification
     /// <summary>接收用户 Id；(UserId, CreatedAtUtc) 复合索引支撑按时间倒序拉取列表。</summary>
     public Guid UserId { get; set; }
     /// <summary>通知类型，取值见 <see cref="NotificationKinds"/>（最长 64 字符）。</summary>
-    public string Kind { get; set; } = NotificationKinds.System;
+    public string NotificationKind { get; set; } = NotificationKinds.System;
     /// <summary>标题（最长 200 字符）。</summary>
     public required string Title { get; set; }
     /// <summary>正文说明（最长 1000 字符）。</summary>
@@ -520,7 +520,7 @@ public sealed class UserThemeProfile
     /// <summary>壁纸上的暗色遮罩不透明度（0-0.85），控制壁纸上的文字可读性。</summary>
     public float MaskOpacity { get; set; } = 0.45f;
     /// <summary>是否启用自定义主题；关闭后回退预设主题但保留配置（多端同步的开关事实源）。</summary>
-    public bool Enabled { get; set; }
+    public bool IsEnabled { get; set; }
     /// <summary>最近更新时间（UTC）。</summary>
     [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
@@ -554,7 +554,7 @@ public sealed class AdminAuditEntry
     public required string TraceId { get; set; }
     /// <summary>客户端 IP 地址（最长 64）。</summary>
     [SugarColumn(IsNullable = true)]
-    public string? Ip { get; set; }
+    public string? ClientIp { get; set; }
     /// <summary>客户端类型：web-admin / app / unknown（最长 32）。</summary>
     [SugarColumn(IsNullable = true)]
     public string? ClientType { get; set; }
@@ -572,7 +572,7 @@ public sealed class LoginAuditEntry
 {
     /// <summary>无参构造：满足 SqlSugar 的 new() 约束（required 成员由调用方填充）。</summary>
     [SetsRequiredMembers]
-    public LoginAuditEntry() { Login = null!; Result = null!; Reason = null!; Ip = null!; }
+    public LoginAuditEntry() { Login = null!; Result = null!; Reason = null!; ClientIp = null!; }
 
     /// <summary>条目唯一标识，Guid 主键。</summary>
     [SugarColumn(IsPrimaryKey = true)]
@@ -587,7 +587,7 @@ public sealed class LoginAuditEntry
     /// <summary>原因：ok / account_not_found / bad_password / account_locked / missing_credentials（最长 32）。</summary>
     public required string Reason { get; set; }
     /// <summary>客户端 IP 地址（最长 64）。</summary>
-    public required string Ip { get; set; }
+    public required string ClientIp { get; set; }
     /// <summary>客户端类型：web-admin / app / web-app / unknown（最长 32）。</summary>
     [SugarColumn(IsNullable = true)]
     public string? ClientType { get; set; }
@@ -622,8 +622,8 @@ public static class SongRequestStatuses
     public static readonly HashSet<string> All = [Open, Planned, InProgress, Fulfilled, Declined, Withdrawn];
 }
 
-/// <summary>应用角色：映射 Identity 标准表 AspNetRoles（当前仅有 admin 一个角色）。</summary>
-[SugarTable("AspNetRoles")]
+/// <summary>应用角色：映射 Identity 标准表（当前仅有 admin 一个角色）。</summary>
+[SugarTable("roles")]
 public sealed class ApplicationRole : IdentityRole<Guid>
 {
     /// <summary>主键（覆盖基类属性以挂 SqlSugar 主键标注）。</summary>
@@ -645,8 +645,8 @@ public static class RoleNames
     public const string TempAdmin = "tempadmin";
 }
 
-/// <summary>用户-角色关联：映射 Identity 标准表 AspNetUserRoles（复合主键 UserId+RoleId）。</summary>
-[SugarTable("AspNetUserRoles")]
+/// <summary>用户-角色关联：映射 Identity 标准表（复合主键 UserId+RoleId）。</summary>
+[SugarTable("user_roles")]
 public sealed class ApplicationUserRole : IdentityUserRole<Guid>
 {
     /// <summary>用户 Id（复合主键的一部分）。</summary>

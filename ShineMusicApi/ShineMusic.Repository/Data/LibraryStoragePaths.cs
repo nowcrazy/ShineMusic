@@ -1,9 +1,9 @@
-// 职责：提供曲库存储目录的路径解析与安全校验。
+﻿// 职责：提供曲库存储目录的路径解析与安全校验。
 // LibraryStoragePaths 面向正式曲库目录，QuarantineStoragePaths 面向上传隔离目录；
 // 两者都把外部传入的“存储键（storageKey）”拼接到受信任的根目录下，
 // 并通过前缀校验阻止路径穿越（path traversal，如 “../”）逃逸出根目录。
 
-using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using ShineMusic.Model.Entities;
 using ShineMusic.Model.Options;
@@ -19,8 +19,9 @@ public sealed class LibraryStoragePaths
 
     /// <summary>
     /// 从存储配置解析曲库根目录：相对路径基于应用 ContentRootPath 转绝对路径，并去除结尾分隔符以便后续前缀判断。
+    /// 依赖 IHostEnvironment 而非 IWebHostEnvironment：Media Worker 是通用主机，也必须能解析同一份曲库路径。
     /// </summary>
-    public LibraryStoragePaths(IOptions<StorageOptions> storageOptions, IWebHostEnvironment environment)
+    public LibraryStoragePaths(IOptions<StorageOptions> storageOptions, IHostEnvironment environment)
     {
         _libraryRoot = Path.GetFullPath(storageOptions.Value.LibraryRoot, environment.ContentRootPath)
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
@@ -71,7 +72,7 @@ public sealed class QuarantineStoragePaths
     /// <summary>
     /// 从存储配置解析隔离区根目录（相对路径基于 ContentRootPath 绝对化，并去除结尾分隔符）。
     /// </summary>
-    public QuarantineStoragePaths(IOptions<StorageOptions> storageOptions, IWebHostEnvironment environment)
+    public QuarantineStoragePaths(IOptions<StorageOptions> storageOptions, IHostEnvironment environment)
     {
         _quarantineRoot = Path.GetFullPath(storageOptions.Value.QuarantineRoot, environment.ContentRootPath)
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);

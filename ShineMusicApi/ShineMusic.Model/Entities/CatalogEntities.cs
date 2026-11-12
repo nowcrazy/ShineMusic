@@ -101,7 +101,7 @@ public sealed class Track
     [SugarColumn(IsIgnore = true)]
     public Artwork? Artwork { get; set; }
     /// <summary>入库时间（UTC），新曲目入库即写入。</summary>
-    public DateTimeOffset AddedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset AddedAtUtc { get; set; } = DateTimeOffset.UtcNow;
     /// <summary>发布时间（UTC）；为空表示尚未发布/上架，前台不可见。该列建有索引供“已发布”列表查询。
     /// 用户上传的曲目在转公开前处于此状态（私有，仅上传者本人可见）。</summary>
     [SugarColumn(IsNullable = true)]
@@ -320,7 +320,7 @@ public sealed class EditorialCollection
 }
 
 /// <summary>曲目-艺术家多对多关联表（复合主键 TrackId+ArtistId，与 EF 既有表结构一致）。</summary>
-[SugarTable("TrackArtist")]
+[SugarTable("track_artists")]
 public sealed class TrackArtist
 {
     /// <summary>曲目 Id（复合主键的一部分）。</summary>
@@ -338,7 +338,7 @@ public sealed class TrackArtist
 }
 
 /// <summary>曲目-流派多对多关联表（复合主键 TrackId+GenreId，与 EF 既有表结构一致）。</summary>
-[SugarTable("TrackGenre")]
+[SugarTable("track_genres")]
 public sealed class TrackGenre
 {
     /// <summary>曲目 Id（复合主键的一部分）。</summary>
@@ -356,7 +356,7 @@ public sealed class TrackGenre
 }
 
 /// <summary>专辑-艺术家多对多关联表（复合主键 AlbumId+ArtistId，与 EF 既有表结构一致）。</summary>
-[SugarTable("AlbumArtist")]
+[SugarTable("album_artists")]
 public sealed class AlbumArtist
 {
     /// <summary>专辑 Id（复合主键的一部分）。</summary>
@@ -374,7 +374,7 @@ public sealed class AlbumArtist
 }
 
 /// <summary>精选集合-曲目关联表（复合主键 CollectionId+TrackId），SortOrder 决定集合内播放顺序。</summary>
-[SugarTable("CollectionTrack")]
+[SugarTable("collection_tracks")]
 public sealed class CollectionTrack
 {
     /// <summary>精选集合 Id（复合主键的一部分）。</summary>
