@@ -31,8 +31,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="../../docs/verification/playlist-900025217/playlist.json" Link="Fixtures/playlist-900025217.json" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="../../docs/verification/playlist-900025217/lyrics-independent-check.json" Link="Fixtures/lyrics-before.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- 回归样本随测试项目入库，确保干净检出后测试可运行。 -->
+    <None Update="Fixtures/playlist-900025217.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Fixtures/lyrics-before.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

@@ -65,3 +65,6 @@ ShineMusicApp/package-lock.json
 
 # ---------- docs 目录不纳入版本管理 ----------
 docs/
+
+# ---------- PI-Desktop 本地工作记录，不提交 ----------
+/.pi/
