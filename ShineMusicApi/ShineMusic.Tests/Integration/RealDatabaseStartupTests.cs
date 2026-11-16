@@ -3,10 +3,10 @@
 // L3a（StreamDeliveryReadbackTests）刻意用 Noop 启动引导 + fake 端口做到零连库，
 // 那一层抓的是「发布后 /stream 回读」的跨层断言，不能替代真机验证。
 // 本类反过来：**不替换 IStartupBootstrap**，让生产实现真的连 PostgreSQL
-// 跑 CodeFirst / 角色播种 / 队列恢复，并连 RabbitMQ；再用真实 HTTP 管道打业务端点。
+// 跑 CodeFirst / 角色播种 / 队列恢复，再用真实 HTTP 管道打业务端点。
 //
-// 前置：本机 PostgreSQL(5432) 与 RabbitMQ(5672) 可用，且库已由 CodeFirst 建好。
-// 凭据不落盘：连接串由 Api 项目自己的 appsettings / User Secrets 提供，测试代码不读取。
+// 前置：PostgreSQL 可用；支持空数据库，不要求已有业务表或管理员账号。
+// 连接串可通过 Database__ConnectionString 覆盖，未指定时使用 Api 项目配置。
 // 与 L3a 共用禁并行集合，避免进程级环境变量与工作目录互相污染。
 
 using System.Net;
@@ -50,11 +50,12 @@ public sealed class RealDatabaseStartupTests : IClassFixture<RealApiFactory>
             "SELECT count(*) FROM information_schema.tables WHERE table_schema = current_schema()");
         Assert.True(tableCount >= 40, $"真库中业务表不足 40 张，实际 {tableCount}");
 
-        var roleCount = await db.Queryable<ApplicationRole>().CountAsync();
-        Assert.True(roleCount >= 3, $"角色播种缺失，实际 {roleCount}");
+        var roleNames = await db.Queryable<ApplicationRole>()
+            .Select(role => role.NormalizedName).ToListAsync();
+        foreach (var expectedRole in new[] { "USER", "ADMIN", "TEMPADMIN" })
+            Assert.Contains(expectedRole, roleNames);
 
-        var userCount = await db.Queryable<ApplicationUser>().CountAsync();
-        Assert.True(userCount >= 1, $"管理员账号缺失，实际 {userCount}");
+        // 启动只播种角色；管理员由 --create-admin 显式创建，空库允许没有用户。
     }
 
     [Fact]
