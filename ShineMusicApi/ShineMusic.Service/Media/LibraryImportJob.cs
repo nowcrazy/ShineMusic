@@ -41,6 +41,7 @@ public sealed class LibraryImportJob(
     QuarantineStoragePaths storagePaths,
     LibraryStoragePaths libraryPaths,
     ImportPublishService publishService,
+    ImportMetadataEnricher metadataEnricher,
     ILogger<LibraryImportJob> logger)
 {
     /// <summary>把两份配置收敛为领域策略的输入，直通与周期扫描共用同一口径。</summary>
@@ -55,10 +56,15 @@ public sealed class LibraryImportJob(
     /// </summary>
     public async Task ProcessAsync(Guid itemId, CancellationToken cancellationToken)
     {
-        var item = await db.Queryable<LibraryImportItem>().FirstAsync(candidate => candidate.Id == itemId, cancellationToken);
-        // 条目不存在或已被其他 worker 处理（状态非 Uploaded）则跳过。
-        if (item is null || item.Status != LibraryImportItemStatuses.Uploaded)
+        var claimedAt = DateTime.UtcNow;
+        var claimed = await db.Updateable<LibraryImportItem>()
+            .SetColumns(candidate => candidate.Status == LibraryImportItemStatuses.Validating)
+            .SetColumns(candidate => candidate.UpdatedAtUtc == claimedAt)
+            .Where(candidate => candidate.Id == itemId && candidate.Status == LibraryImportItemStatuses.Uploaded)
+            .ExecuteCommandAsync(cancellationToken);
+        if (claimed == 0)
             return;
+        var item = await db.Queryable<LibraryImportItem>().FirstAsync(candidate => candidate.Id == itemId, cancellationToken);
 
         // 将所属批次状态推进为 Processing，并清空完成时间。
         await db.Updateable<LibraryImportBatch>()
@@ -93,6 +99,9 @@ public sealed class LibraryImportJob(
             item.Container = probe.Container;
             item.Codec = probe.Codec;
             item.BitrateKbps = probe.BitrateKbps;
+            MetadataMerge.RecordExisting(item, "durationMs", probe.DurationMs, "ffprobe");
+            MetadataMerge.RecordExisting(item, "codec", probe.Codec, "ffprobe");
+            MetadataMerge.RecordExisting(item, "bitrateKbps", probe.BitrateKbps, "ffprobe");
             item.DurationMs = probe.DurationMs;
             item.UpdatedAtUtc = DateTime.UtcNow;
             await db.Updateable(item).ExecuteCommandAsync(cancellationToken);
@@ -101,44 +110,42 @@ public sealed class LibraryImportJob(
             // 空值回退：外部音源下载的文件常无 ID3 标签，解析结果为空时保留音源 API 预填的元数据
             // （手动上传原本就无预填值，?? 回退无副作用）。
             var metadata = metadataParser.Parse(sourcePath, item.Id);
-            item.Title = metadata.Title ?? item.Title;
-            if (metadata.Artists.Count > 0)
-                item.ArtistsJson = JsonSerializer.Serialize(metadata.Artists);
-            item.AlbumTitle = metadata.AlbumTitle ?? item.AlbumTitle;
-            item.Lyrics = metadata.Lyrics;
-            item.TrackNumber = metadata.TrackNumber ?? item.TrackNumber;
-            item.DiscNumber = metadata.DiscNumber ?? item.DiscNumber;
-            item.ReleaseYear = metadata.ReleaseYear ?? item.ReleaseYear;
-            if (metadata.Genres.Count > 0)
-                item.GenresJson = JsonSerializer.Serialize(metadata.Genres);
-            // 时长优先采用元数据解析结果，回退到 ffprobe 探测值。
-            item.DurationMs = metadata.DurationMs ?? item.DurationMs;
-            item.ArtworkStorageKey = metadata.ArtworkStorageKey ?? item.ArtworkStorageKey;
+            MetadataMerge.ApplyTags(item, metadata);
+            if (item.LyricsSource is null && !string.IsNullOrWhiteSpace(item.Lyrics)
+                && MetadataMerge.Audit(item.MetadataAuditJson).Any(row => row.Field == "lyrics" && row.Source == "embedded"))
+            {
+                item.LyricsSource = LyricsSources.Embedded;
+                item.LyricsConfidence = 1;
+            }
 
-            // 歌词自动补全：内嵌标签 → 同名旁挂 .lrc → 外部歌词源（LRCLIB）。
-            // 歌词属于可选内容，解析失败只记告警，不影响转码与后续发布。
+            // 原平台ID仅在关联任务与当前条目身份一致时用于歌词查询。
             var warnings = metadata.Warnings.ToList();
-            var lyricsMatch = await lyricsResolver.ResolveAsync(
-                new LyricsQuery(
-                    item.Title,
-                    metadata.Artists.Count > 0 ? metadata.Artists : DeserializeList(item.ArtistsJson),
-                    item.AlbumTitle,
-                    item.DurationMs,
-                    metadata.Lyrics,
-                    sourcePath),
-                cancellationToken);
-            if (lyricsMatch is not null)
+            var sourceTask = item.SourceProvider is null ? null : await db.Queryable<ExternalDownloadTask>()
+                .FirstAsync(task => task.ImportItemId == item.Id, cancellationToken);
+            var lyricsQuery = CreateLyricsQuery(item, metadata.Lyrics, sourcePath, sourceTask);
+            var lyricsMatch = MetadataMerge.Locked(item, "lyrics") || !string.IsNullOrWhiteSpace(item.Lyrics)
+                ? null : await lyricsResolver.ResolveAsync(lyricsQuery, cancellationToken);
+            if (lyricsMatch is not null && !MetadataMerge.Locked(item, "lyrics") && string.IsNullOrWhiteSpace(item.Lyrics))
             {
                 item.Lyrics = lyricsMatch.Content;
                 item.LyricsSource = lyricsMatch.Source;
                 item.LyricsConfidence = lyricsMatch.Confidence;
                 item.LyricsProviderId = lyricsMatch.ProviderId;
             }
-            else
+            if (lyricsQuery.Diagnostics.Count > 0)
+            {
+                var audit = MetadataMerge.Audit(item.MetadataAuditJson);
+                audit.RemoveAll(row => row.Field == "lyricsDiagnostics");
+                audit.Add(new("lyricsDiagnostics", JsonSerializer.Serialize(lyricsQuery.Diagnostics), "lyrics-resolver",
+                    lyricsQuery.SourceTrackId, DateTime.UtcNow, false));
+                item.MetadataAuditJson = JsonSerializer.Serialize(audit);
+            }
+            if (string.IsNullOrWhiteSpace(item.Lyrics))
             {
                 warnings.Add("lyrics_missing");
             }
             item.WarningsJson = JsonSerializer.Serialize(warnings);
+            await metadataEnricher.EnrichAsync(item, cancellationToken);
             // 阶段 3：转码 —— 状态置为 Transcoding，转码子状态置为 processing。
             item.Status = LibraryImportItemStatuses.Transcoding;
             item.TranscodeStatus = "processing";
@@ -193,7 +200,8 @@ public sealed class LibraryImportJob(
                 // 未达标/开关关闭/直通失败一律转人工审核（不自动丢弃）。
                 if (item.SourceProvider is not null)
                 {
-                    var score = SourceDownload.SourceScoreCalculator.Calculate(item);
+                    var identityDecision = await ResolveIdentityDecisionAsync(item, cancellationToken);
+                    var score = SourceDownload.SourceScoreCalculator.Calculate(item, identityDecision, sourceDownloadOptions.Value.ScoreWeights);
                     item.AutoScore = score.Total;
                     item.AutoScoreBreakdownJson = score.ToBreakdownJson();
 
@@ -236,7 +244,8 @@ public sealed class LibraryImportJob(
                 else
                 {
                     // 管理员手动导入：与音源抓歌相同，转码完成后评分；达标直通发布，未达标转人工审核。
-                    var score = SourceDownload.SourceScoreCalculator.Calculate(item);
+                    var identityDecision = await ResolveIdentityDecisionAsync(item, cancellationToken);
+                    var score = SourceDownload.SourceScoreCalculator.Calculate(item, identityDecision, sourceDownloadOptions.Value.ScoreWeights);
                     item.AutoScore = score.Total;
                     item.AutoScoreBreakdownJson = score.ToBreakdownJson();
 
@@ -295,6 +304,7 @@ public sealed class LibraryImportJob(
             item.ErrorMessage = SafeErrorMessage(exception.Code);
             item.UpdatedAtUtc = DateTime.UtcNow;
             await db.Updateable(item).ExecuteCommandAsync(cancellationToken);
+            await RecordExternalProcessingErrorAsync(item, cancellationToken);
             await UpdateBatchStatusAsync(item.BatchId, cancellationToken);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -307,6 +317,7 @@ public sealed class LibraryImportJob(
             item.ErrorMessage = SafeErrorMessage(ErrorCodes.InternalError);
             item.UpdatedAtUtc = DateTime.UtcNow;
             await db.Updateable(item).ExecuteCommandAsync(CancellationToken.None);
+            await RecordExternalProcessingErrorAsync(item, CancellationToken.None);
             await UpdateBatchStatusAsync(item.BatchId, CancellationToken.None);
         }
     }
@@ -352,6 +363,11 @@ public sealed class LibraryImportJob(
             TrackNumber = item.TrackNumber,
             DiscNumber = item.DiscNumber,
             ReleaseYear = item.ReleaseYear,
+            ReleaseDate = item.ReleaseDate,
+            Isrc = item.Isrc,
+            AlbumArtistsJson = item.AlbumArtistsJson,
+            OriginalGenresJson = item.OriginalGenresJson,
+            MetadataAuditJson = item.MetadataAuditJson,
             DurationMs = item.DurationMs,
             AddedAtUtc = DateTimeOffset.UtcNow,
             // 私有：PublishedAt 为空，前台查询天然不可见，仅上传者本人可播放。
@@ -542,21 +558,90 @@ public sealed class LibraryImportJob(
         return (track.Id, false);
     }
 
+    private async Task RecordExternalProcessingErrorAsync(LibraryImportItem item, CancellationToken cancellationToken)
+    {
+        var code = item.ErrorCode;
+        var message = item.ErrorMessage;
+        await db.Updateable<ExternalDownloadTask>()
+            .SetColumns(task => task.ErrorCode == code)
+            .SetColumns(task => task.ErrorMessage == message)
+            .SetColumns(task => task.UpdatedAtUtc == DateTime.UtcNow)
+            .Where(task => task.ImportItemId == item.Id)
+            .ExecuteCommandAsync(cancellationToken);
+    }
+
     /// <summary>
     /// 回写外部音源下载任务的终态：导入流水线处理完成后，按 ImportItemId 反查任务，
     /// 写入评分与 completed 状态（AutoPublished 区分直通入库还是转人工审核）。任务不存在时静默跳过。
     /// </summary>
     private async Task UpdateExternalTaskAsync(LibraryImportItem item, bool autoPublished, CancellationToken cancellationToken)
     {
-        // 先取到局部变量：SqlSugar 的 SetColumns 右侧按“值”解析，避免被误当成同名列。
+        // 先取到局部变量：SqlSugar 的 SetColumns 右侧按"值"解析，避免被误当成同名列。
         var autoScore = item.AutoScore;
         await db.Updateable<ExternalDownloadTask>()
             .SetColumns(task => task.Status == ExternalDownloadTaskStatuses.Completed)
             .SetColumns(task => task.AutoScore == autoScore)
             .SetColumns(task => task.IsAutoPublished == autoPublished)
+            .SetColumns(task => task.ErrorCode == (string?)null)
+            .SetColumns(task => task.ErrorMessage == (string?)null)
             .SetColumns(task => task.UpdatedAtUtc == DateTime.UtcNow)
             .Where(task => task.ImportItemId == item.Id)
             .ExecuteCommandAsync(cancellationToken);
+    }
+
+    /// <summary>仅把与当前条目身份一致的关联下载任务ID用于同源歌词查询。</summary>
+    internal static LyricsQuery CreateLyricsQuery(LibraryImportItem item, string? embedded, string? path,
+        ExternalDownloadTask? sourceTask)
+    {
+        var artists = DeserializeArtistsList(item.ArtistsJson);
+        var trusted = sourceTask is not null && !string.IsNullOrWhiteSpace(sourceTask.Title)
+            && artists.Count > 0 && DeserializeArtistsList(sourceTask.ArtistsJson).Count > 0
+            && string.Equals(sourceTask.SourceProvider, item.SourceProvider, StringComparison.OrdinalIgnoreCase)
+            && TrackIdentityMatcher.Evaluate(new(item.Title ?? "", artists, item.DurationMs, item.AlbumTitle),
+                new(sourceTask.Title, DeserializeArtistsList(sourceTask.ArtistsJson), sourceTask.DurationMs, sourceTask.AlbumTitle))
+                .Verdict == IdentityVerdict.Matched;
+        return new(item.Title, artists, item.AlbumTitle, item.DurationMs, embedded, path,
+            trusted ? sourceTask!.SourceProvider : null, trusted ? sourceTask!.ProviderTrackId : null);
+    }
+
+    /// <summary>反查原始目标身份，供导入评分与审核使用。</summary>
+    private async Task<IdentityDecision?> ResolveIdentityDecisionAsync(
+        LibraryImportItem item, CancellationToken cancellationToken)
+    {
+        var taskSnapshot = await db.Queryable<ExternalDownloadTask>()
+            .Where(task => task.ImportItemId == item.Id)
+            .Select(task => new { task.Title, task.ArtistsJson, task.DurationMs,
+                task.ExpectedTitle, task.ExpectedArtistsJson, task.ExpectedDurationMs })
+            .FirstAsync(cancellationToken);
+        if (taskSnapshot is null)
+            return null;
+        var expectedTitle = taskSnapshot.ExpectedTitle ?? taskSnapshot.Title;
+        var expectedArtistsJson = taskSnapshot.ExpectedArtistsJson ?? taskSnapshot.ArtistsJson;
+        var expectedDuration = taskSnapshot.ExpectedTitle is not null ? taskSnapshot.ExpectedDurationMs : taskSnapshot.DurationMs;
+        if (string.IsNullOrWhiteSpace(expectedTitle))
+            return null;
+
+        var expectedArtists = DeserializeArtistsList(expectedArtistsJson);
+        if (expectedArtists.Count == 0)
+            return null;
+
+        var expected = new TrackIdentity(expectedTitle, expectedArtists, expectedDuration);
+
+        var candidateArtists = PublishGate.DeserializeList(item.ArtistsJson);
+        var candidate = new TrackIdentity(
+            item.Title ?? string.Empty,
+            candidateArtists,
+            item.DurationMs);
+
+        return TrackIdentityMatcher.Evaluate(expected, candidate);
+    }
+
+    /// <summary>反序列化艺人 JSON 列表（与 PublishGate.DeserializeList 逻辑一致，但本类已有该方法）。</summary>
+    private static List<string> DeserializeArtistsList(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return [];
+        try { return JsonSerializer.Deserialize<List<string>>(json) ?? []; }
+        catch (JsonException) { return []; }
     }
 
     /// <summary>删除隔离区中的单个文件（入库后清理，失败仅忽略）。</summary>
@@ -699,6 +784,20 @@ public sealed class LibraryImportRetrySweepJob(
                 "Import item {ImportItemId} ({Status}) stuck for {Minutes}m > {Threshold}m; reset to uploaded and re-published.",
                 item.Id, previousStatus,
                 (int)(now - item.UpdatedAtUtc).TotalMinutes, IntermediateStuckMinutes);
+            totalRecovered++;
+        }
+
+        // 已落库但首次消息投递失败的条目仍处于 uploaded；重复消息由状态守卫处理。
+        var queuedThreshold = now - TimeSpan.FromMinutes(1);
+        var unstartedIds = await db.Queryable<LibraryImportItem>()
+            .Where(item => item.Status == LibraryImportItemStatuses.Uploaded && item.UpdatedAtUtc < queuedThreshold)
+            .OrderBy(item => item.UpdatedAtUtc)
+            .Take(BatchLimit)
+            .Select(item => item.Id)
+            .ToListAsync(cancellationToken);
+        foreach (var id in unstartedIds)
+        {
+            await messageBus.PublishAsync(QueueNames.Imports, id, cancellationToken);
             totalRecovered++;
         }
 

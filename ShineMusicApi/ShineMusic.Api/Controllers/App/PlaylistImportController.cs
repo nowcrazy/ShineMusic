@@ -43,7 +43,7 @@ public sealed class PlaylistImportController : ControllerBase
                 preview.Total,
                 preview.Tracks.Select(track => new PlaylistImportPreviewTrackDto(
                     track.Title, track.Artists, track.AlbumTitle, track.DurationMs,
-                    track.Matched, track.MatchedTrackId)).ToArray()));
+                    track.Matched, track.MatchedTrackId)).ToArray(), preview.SnapshotId));
         }
         catch (PlaylistParseException exception)
         {
@@ -66,7 +66,8 @@ public sealed class PlaylistImportController : ControllerBase
             return Results.Unauthorized();
         try
         {
-            var result = await importService.EnqueueDownloadsAsync(request.Url ?? string.Empty, userId, cancellationToken);
+            var result = await importService.EnqueueDownloadsAsync(request.Url ?? string.Empty, userId, cancellationToken,
+                request.SelectedIndices, request.SnapshotId);
             return Results.Accepted(value: new PlaylistDownloadQueueResponse(
                 result.Total, result.Matched, result.Queued));
         }
@@ -108,6 +109,50 @@ public sealed class PlaylistImportController : ControllerBase
             return ApiResults.ValidationError(HttpContext, "url", exception.Message);
         }
     }
+    /// <summary>查看本人歌单的原始导入快照及逐曲处理状态。</summary>
+    [HttpGet("playlists/{playlistId:guid}/progress")]
+    public async Task<IResult> Progress(Guid playlistId, ISqlSugarClient db,
+        PlaylistImportService importService, CancellationToken cancellationToken)
+    {
+        if (!HttpContext.User.TryGetUserId(out var userId)) return Results.Unauthorized();
+        var playlist = await db.Queryable<UserPlaylist>().FirstAsync(p => p.Id == playlistId, cancellationToken);
+        if (playlist is null || playlist.UserId != userId) return ApiResults.NotFound(HttpContext);
+        await importService.ResolvePendingAsync(playlistId, cancellationToken);
+        var pending = await db.Queryable<UserPlaylistPendingTrack>().Where(p => p.PlaylistId == playlistId)
+            .OrderBy(p => p.SortOrder).ToListAsync(cancellationToken);
+        var taskIds = pending.Where(p => p.DownloadTaskId.HasValue).Select(p => p.DownloadTaskId!.Value).Distinct().ToList();
+        var tasks = taskIds.Count == 0 ? new List<ExternalDownloadTask>()
+            : await db.Queryable<ExternalDownloadTask>().Where(t => taskIds.Contains(t.Id)).ToListAsync(cancellationToken);
+        var taskMap = tasks.ToDictionary(t => t.Id);
+        var importIds = tasks.Where(t => t.ImportItemId.HasValue).Select(t => t.ImportItemId!.Value).Distinct().ToList();
+        var imports = importIds.Count == 0 ? new List<LibraryImportItem>()
+            : await db.Queryable<LibraryImportItem>().Where(i => importIds.Contains(i.Id)).ToListAsync(cancellationToken);
+        var importMap = imports.ToDictionary(i => i.Id);
+        var items = new List<PlaylistImportProgressItemDto>();
+        foreach (var row in pending)
+        {
+            var task = row.DownloadTaskId is { } taskId ? taskMap.GetValueOrDefault(taskId) : null;
+            var item = task?.ImportItemId is { } itemId ? importMap.GetValueOrDefault(itemId) : null;
+            items.Add(new(row.SortOrder, row.Title, row.SourcePlatform, row.SourceTrackId, row.SourceUrl,
+                row.Status, row.DownloadTaskId, task?.Status, task?.ImportItemId, item?.Status,
+                item?.ErrorCode ?? task?.ErrorCode, item?.ErrorMessage ?? task?.ErrorMessage, row.SearchDiagnosticsJson));
+        }
+        int? originalCount = null;
+        if (playlist.ImportSnapshotJson is { } snapshot)
+        {
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(snapshot);
+                if (doc.RootElement.TryGetProperty("Tracks", out var tracks) && tracks.ValueKind == System.Text.Json.JsonValueKind.Array)
+                    originalCount = tracks.GetArrayLength();
+            }
+            catch (System.Text.Json.JsonException) { }
+        }
+        var linkedCount = await db.Queryable<UserPlaylistTrack>().Where(p => p.PlaylistId == playlistId).CountAsync(cancellationToken);
+        return Results.Ok(new PlaylistImportProgressDto(playlistId, originalCount, linkedCount,
+            pending.Count, playlist.ImportSnapshotJson, items));
+    }
+
     /// <summary>重新补齐歌单中待下载/无音源/下载任务丢失的曲目。</summary>
     /// <remarks>
     /// 对 pending / no_source / failed 以及「下载任务已丢失」的 downloading 行重跑匹配：
@@ -135,7 +180,9 @@ public sealed class PlaylistImportController : ControllerBase
 
 /// <summary>解析预览请求体。</summary>
 /// <param name="Url">外部平台歌单链接。</param>
-public sealed record PlaylistImportParseRequest(string? Url);
+/// <param name="SelectedIndices">Queue only: zero-based preview row indices; omitted means the whole playlist.</param>
+/// <param name="SnapshotId">Preview snapshot required for an explicit selection.</param>
+public sealed record PlaylistImportParseRequest(string? Url, IReadOnlyList<int>? SelectedIndices = null, string? SnapshotId = null);
 
 /// <summary>导入请求体。</summary>
 /// <param name="Url">外部平台歌单链接。</param>
@@ -161,7 +208,8 @@ public sealed record PlaylistImportParseResponse(
     string Name,
     string? CoverUrl,
     int Total,
-    IReadOnlyList<PlaylistImportPreviewTrackDto> Tracks);
+    IReadOnlyList<PlaylistImportPreviewTrackDto> Tracks,
+    string? SnapshotId = null);
 
 /// <summary>导入响应。</summary>
 /// <param name="PlaylistId">新歌单 Id。</param>

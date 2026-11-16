@@ -21,6 +21,21 @@ public sealed class NeteaseSourceProvider(
     /// <summary>命名 HttpClient（Program.cs 注册，统一超时与 Referer/UA 头）。</summary>
     public const string HttpClientName = "netease";
 
+    // Per-async-call diagnostics: fixed stages/codes only, never response text or URLs.
+    public sealed record DownloadDiagnostic(string Stage, string Code, int? HttpStatus = null, int? CandidateCount = null);
+    private static readonly AsyncLocal<Action<DownloadDiagnostic>?> DiagnosticSink = new();
+    private static void Report(string stage, string code, int? status = null, int? count = null)
+        => DiagnosticSink.Value?.Invoke(new(stage, code, status, count));
+
+    public async Task<IReadOnlyList<SourceDownloadInfo>> ResolveDownloadCandidatesWithDiagnosticsAsync(
+        string id, Action<DownloadDiagnostic> diagnostic, CancellationToken token)
+    {
+        var previous = DiagnosticSink.Value;
+        DiagnosticSink.Value = diagnostic;
+        try { return await ResolveDownloadCandidatesAsync(id, token); }
+        finally { DiagnosticSink.Value = previous; }
+    }
+
     /// <inheritdoc />
     public string Provider => "netease";
 
@@ -83,7 +98,10 @@ public sealed class NeteaseSourceProvider(
         using var doc = await GetJsonAsync(url, cancellationToken);
         if (doc is null || !doc.RootElement.TryGetProperty("data", out var data)
             || data.ValueKind != JsonValueKind.Array || data.GetArrayLength() == 0)
-            throw new SourceUnavailableException("网易云未返回播放地址。");
+        {
+            Report("official", "missing_data", count: 0);
+            throw new SourceUnavailableException("网易云未返回播放地址；原因未知。");
+        }
 
         var item = data[0];
         var downloadUrl = GetString(item, "url");
@@ -101,12 +119,13 @@ public sealed class NeteaseSourceProvider(
         }
         else
         {
-            // VIP 曲或无版权：官方 url 为空 → 收集第三方回退链的全部成功直链。
+            Report("official", "empty_url", count: 0);
             candidates.AddRange(await CollectVipFallbackCandidatesAsync(providerTrackId, cancellationToken));
         }
 
+        Report("resolution", candidates.Count == 0 ? "no_candidates_reason_unknown" : "candidates", count: candidates.Count);
         if (candidates.Count == 0)
-            throw new SourceUnavailableException("该曲目为网易云 VIP 专属或无版权，无法下载。");
+            throw new SourceUnavailableException("未取得可用下载地址；原因未知。");
         return candidates;
     }
 
@@ -163,6 +182,7 @@ public sealed class NeteaseSourceProvider(
             foreach (var level in endpoint.Levels ?? [])
             {
                 var url = await ResolveViaEndpointAsync(client, endpoint, providerTrackId, level, fb.TimeoutSeconds, cancellationToken);
+                Report($"fallback:{endpoint.Type}:{level}", url is null ? "empty_or_unavailable" : "candidate", count: url is null ? 0 : 1);
                 if (url is null || !seenUrls.Add(url)) continue;
                 var (bitrate, isLossless, container) = InferQuality(level, endpoint.Type);
                 logger.LogInformation(
@@ -201,7 +221,8 @@ public sealed class NeteaseSourceProvider(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Netease VIP fallback error via {Type} for track {Id}", endpoint.Type, trackId);
+            Report($"fallback:{endpoint.Type}:{level}", ex is OperationCanceledException ? "timeout" : ex.GetType().Name);
+            logger.LogWarning("Netease fallback error via {Type}: {ErrorType}", endpoint.Type, ex.GetType().Name);
             return null;
         }
     }
@@ -254,6 +275,7 @@ public sealed class NeteaseSourceProvider(
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         cts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
         using var response = await client.GetAsync(url, cts.Token);
+        Report("fallback_http", response.IsSuccessStatusCode ? "http_ok" : "http_error", (int)response.StatusCode);
         if (!response.IsSuccessStatusCode) return null;
         var json = await response.Content.ReadAsStringAsync(cts.Token);
         using var doc = JsonDocument.Parse(json);
@@ -274,6 +296,7 @@ public sealed class NeteaseSourceProvider(
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         cts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
         using var response = await client.GetAsync(url, cts.Token);
+        Report("fallback_http", response.IsSuccessStatusCode ? "http_ok" : "http_error", (int)response.StatusCode);
         if (!response.IsSuccessStatusCode) return null;
         var json = await response.Content.ReadAsStringAsync(cts.Token);
         using var doc = JsonDocument.Parse(json);
@@ -293,6 +316,7 @@ public sealed class NeteaseSourceProvider(
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         cts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
         using var response = await client.GetAsync(url, cts.Token);
+        Report("fallback_http", response.IsSuccessStatusCode ? "http_ok" : "http_error", (int)response.StatusCode);
         if (!response.IsSuccessStatusCode) return null;
         var json = await response.Content.ReadAsStringAsync(cts.Token);
         using var doc = JsonDocument.Parse(json);
@@ -315,6 +339,7 @@ public sealed class NeteaseSourceProvider(
             request.Headers.TryAddWithoutValidation(key, value);
         request.Content = new StringContent(JsonSerializer.Serialize(body), System.Text.Encoding.UTF8, "application/json");
         using var response = await client.SendAsync(request, cts.Token);
+        Report(url.EndsWith("/api/ip", StringComparison.Ordinal) ? "fallback_ip_http" : "fallback_song_http", response.IsSuccessStatusCode ? "http_ok" : "http_error", (int)response.StatusCode);
         if (!response.IsSuccessStatusCode) return default;
         var json = await response.Content.ReadAsStringAsync(cts.Token);
         using var doc = JsonDocument.Parse(json);
@@ -430,9 +455,10 @@ public sealed class NeteaseSourceProvider(
         {
             var client = httpClientFactory.CreateClient(HttpClientName);
             using var response = await client.GetAsync(url, cancellationToken);
+            Report("official_http", response.IsSuccessStatusCode ? "http_ok" : "http_error", (int)response.StatusCode);
             if (!response.IsSuccessStatusCode)
             {
-                logger.LogWarning("Netease request failed: {StatusCode} {Url}", (int)response.StatusCode, url);
+                logger.LogWarning("Netease request failed: {StatusCode}", (int)response.StatusCode);
                 return null;
             }
             var json = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -440,11 +466,13 @@ public sealed class NeteaseSourceProvider(
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            Report("official_http", "cancelled_or_budget_timeout");
             throw;
         }
         catch (Exception exception)
         {
-            logger.LogWarning(exception, "Netease request error: {Url}", url);
+            Report("official_http", exception is OperationCanceledException ? "timeout" : exception.GetType().Name);
+            logger.LogWarning("Netease request error: {ErrorType}", exception.GetType().Name);
             return null;
         }
     }

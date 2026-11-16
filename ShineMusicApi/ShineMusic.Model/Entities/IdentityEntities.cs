@@ -188,6 +188,9 @@ public sealed class UserPlaylist
     /// <summary>封面 Id（可空）。</summary>
     [SugarColumn(IsNullable = true)]
     public Guid? ArtworkId { get; set; }
+    /// <summary>外部导入原始曲目快照（含来源链接与顺序）；手建歌单为空。</summary>
+    [SugarColumn(ColumnDataType = "text", IsNullable = true)]
+    public string? ImportSnapshotJson { get; set; }
     /// <summary>创建时间（UTC）。</summary>
     [SugarColumn(ColumnDataType = "timestamptz")]
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;

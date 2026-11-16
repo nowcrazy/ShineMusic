@@ -26,20 +26,29 @@ namespace ShineMusic.Service;
 /// <param name="DurationMs">音频时长（毫秒），用于精确匹配与时长打分。</param>
 /// <param name="EmbeddedLyrics">音频标签中的内嵌歌词（ID3 USLT 等），可为空。</param>
 /// <param name="SourcePath">隔离区中的音频文件绝对路径，用于查找同名旁挂歌词。</param>
+/// <param name="SourceProvider">Trusted original platform, e.g. netease.</param>
+/// <param name="SourceTrackId">Trusted original platform track ID.</param>
 public sealed record LyricsQuery(
     string? Title,
     IReadOnlyList<string> Artists,
     string? AlbumTitle,
     long? DurationMs,
     string? EmbeddedLyrics,
-    string? SourcePath);
+    string? SourcePath,
+    string? SourceProvider = null,
+    string? SourceTrackId = null)
+{
+    public List<LyricsDiagnostic> Diagnostics { get; init; } = [];
+}
+
+public sealed record LyricsDiagnostic(string Source, string? CandidateId, string Reason);
 
 /// <summary>
 /// 一次歌词匹配的结果。
 /// </summary>
 /// <param name="Content">歌词正文（纯文本或带 [mm:ss] 时间轴的 LRC）。</param>
 /// <param name="Source">来源标识，取值见 <see cref="LyricsSources"/>。</param>
-/// <param name="Confidence">置信度 0~1：内嵌/旁挂为 1，外部源按相似度打分。</param>
+/// <param name="Confidence">Legacy ranking score (0~1), not a probability of correctness.</param>
 /// <param name="ProviderId">外部源记录 ID（如 LRCLIB 的 id / 酷狗歌词 id），非外部来源为 null。</param>
 public sealed record LyricsMatch(string Content, string Source, double Confidence, string? ProviderId);
 
@@ -76,6 +85,7 @@ public sealed class LyricsResolver(
     /// <inheritdoc />
     public async Task<LyricsMatch?> ResolveAsync(LyricsQuery query, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         // 第 1 层：音频内嵌歌词，可信度最高，直接采用。
         var embedded = LyricsContent.Normalize(query.EmbeddedLyrics);
         if (embedded is not null)
@@ -87,27 +97,38 @@ public sealed class LyricsResolver(
             return new LyricsMatch(sidecar, LyricsSources.Sidecar, 1.0, null);
 
         // 第 3 层：外部歌词源链。开关关闭或缺少标题时直接放弃，交由人工补充。
-        if (!_options.AutoFetchEnabled || string.IsNullOrWhiteSpace(query.Title))
+        if (!_options.AutoFetchEnabled || (string.IsNullOrWhiteSpace(query.Title) && !NeteaseLyricsProvider.CanFetch(query)))
             return null;
 
         // 按配置顺序逐源兜底；单源失败/超时只降级，不影响后续源与导入流程。
-        foreach (var provider in OrderProviders())
+        foreach (var provider in OrderProviders(query))
         {
             try
             {
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 timeout.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(_options.TimeoutSeconds, 1, 30)));
+                var diagnosticCount = query.Diagnostics.Count;
                 var match = await provider.FetchAsync(query, timeout.Token);
-                if (match is not null)
+                cancellationToken.ThrowIfCancellationRequested();
+                if (match is not null && LyricsValidation.ValidateContent(query, provider.Source, match.ProviderId, match.Content))
                     return match;
+                if (query.Diagnostics.Count == diagnosticCount)
+                    query.Diagnostics.Add(new(provider.Source, null, "no_results"));
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
                 // 单源超时：可预期的降级，继续下一源。
+                query.Diagnostics.Add(new(provider.Source, null, "source_timeout"));
                 logger.LogDebug("Lyrics provider {Source} timed out for {Title}.", provider.Source, query.Title);
             }
             catch (Exception exception)
             {
+                cancellationToken.ThrowIfCancellationRequested();
+                query.Diagnostics.Add(new(provider.Source, null, "source_unavailable"));
                 logger.LogWarning(exception, "Lyrics provider {Source} failed for {Title}.", provider.Source, query.Title);
             }
         }
@@ -115,14 +136,16 @@ public sealed class LyricsResolver(
     }
 
     /// <summary>按 ExternalSources 配置顺序排列已注册提供者；未配置时按注册顺序全量启用。</summary>
-    private IEnumerable<IExternalLyricsProvider> OrderProviders()
+    private IEnumerable<IExternalLyricsProvider> OrderProviders(LyricsQuery query)
     {
+        var registered = providers.ToArray();
+        var direct = registered.Where(p => p.Source == NeteaseLyricsProvider.SourceName && NeteaseLyricsProvider.CanFetch(query));
+        var external = registered.Where(p => p.Source != NeteaseLyricsProvider.SourceName);
         var sources = _options.ExternalSources;
-        if (sources is not { Count: > 0 })
-            return providers;
-        return providers
-            .Where(provider => sources.Contains(provider.Source, StringComparer.OrdinalIgnoreCase))
-            .OrderBy(provider => sources.FindIndex(s => string.Equals(s, provider.Source, StringComparison.OrdinalIgnoreCase)));
+        if (sources is { Count: > 0 })
+            external = external.Where(p => sources.Contains(p.Source, StringComparer.OrdinalIgnoreCase))
+                .OrderBy(p => sources.FindIndex(s => string.Equals(s, p.Source, StringComparison.OrdinalIgnoreCase)));
+        return direct.Concat(external);
     }
 
     /// <summary>

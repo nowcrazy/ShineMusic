@@ -1,0 +1,28 @@
+using Microsoft.Extensions.Hosting;
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using ShineMusic.Api.Extensions;
+using ShineMusic.Model.Entities;
+using ShineMusic.Model.Options;
+using ShineMusic.Service;
+
+var config = new ConfigurationBuilder().AddJsonFile(Path.Combine(Directory.GetCurrentDirectory(), "ShineMusicApi/ShineMusic.Api/appsettings.json")).Build();
+var builder = Host.CreateApplicationBuilder();
+var services = builder.Services;
+services.AddLogging(b => b.ClearProviders());
+services.AddSingleton<IOptions<SourceDownloadOptions>>(Options.Create(config.GetSection("SourceDownload").Get<SourceDownloadOptions>() ?? new()));
+services.AddShineMusicMetadataModule();
+services.AddShineMusicMediaModule();
+services.AddSingleton<ProviderMetadataEnricher>();
+using var host = builder.Build();
+var provider = host.Services;
+var item = new LibraryImportItem { Title = "偏爱", ArtistsJson = "[\"张芸京\"]", AlbumTitle = "破天荒", DurationMs = 212907 };
+using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(25));
+var fields = await provider.GetRequiredService<ProviderMetadataEnricher>().EnrichAsync(item, deadline.Token);
+var report = new { at = DateTimeOffset.UtcNow, item.Title, item.AlbumTitle, item.DurationMs, filled = fields, item.ReleaseYear, item.ReleaseDate, genres = MetadataMerge.List(item.OriginalGenresJson), audit = MetadataMerge.Audit(item.MetadataAuditJson) };
+var output = JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true });
+if (args.Length > 0) await File.WriteAllTextAsync(Path.GetFullPath(args[0]), output);
+Console.WriteLine(output);

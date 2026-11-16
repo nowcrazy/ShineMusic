@@ -1,160 +1,83 @@
-// ImportMetadataEnricher.cs
-// 导入期元数据补全器（唯一实现）。
-//
-// 背景：曲目入库前需要尽可能补全 歌名 → 歌手 → 专辑 → 时长 → 年份 → 地区 → 风格 → 封面，
-// 这些信息来自两条链路：
-//   1) 音频文件自身的标签（TagLib#，见 AudioMetadataParser）；
-//   2) 外部元数据源（iTunes Search API，见 ArtworkFetcher）。
-// 早期版本把 (2) 写在三个地方——导入队列（且只在“没有内嵌封面”时才跑）、
-// 管理端发布流程、批量回填接口——导致同一个文件走不同入口得到不同完整度的数据。
-// 现在统一收敛到这里：解析阶段调用一次，补不齐就留空并记告警；发布阶段不再做解析。
-//
-// 设计原则：
-//   - 只补空字段，绝不覆盖标签里已有的值（人工修正过的元数据同样不会被覆盖）；
-//   - 所有缺失字段都已具备时不发请求，避免无谓消耗 iTunes 的 20 次/分钟配额；
-//   - 地区（Region）优先本地推导，只有推不出来时才借助外部源。
-
+using System.Globalization;
 using System.Text.Json;
 using ShineMusic.Model.Entities;
 using ShineMusic.Repository.Data;
 
 namespace ShineMusic.Service;
 
-/// <summary>
-/// 导入期元数据补全：把 TagLib# 解析结果与 iTunes 元数据合并成一条完整的导入项。
-/// 注册为单例（依赖均为无状态服务/路径解析器）。
-/// </summary>
-public sealed class ImportMetadataEnricher(
-    ArtworkFetcher artworkFetcher,
-    QuarantineStoragePaths storagePaths,
-    ILogger<ImportMetadataEnricher> logger)
+/// <summary>自动导入与手动补全共用：确认同曲后只补空字段，保留来源和人工锁。</summary>
+public sealed class ImportMetadataEnricher(ArtworkFetcher artworkFetcher, QuarantineStoragePaths storagePaths,
+    ILogger<ImportMetadataEnricher> logger, ProviderMetadataEnricher providerMetadata)
 {
-    /// <summary>
-    /// 判断导入项是否还有「值得为此请求外部源」的补全空间。
-    /// 只把对用户可见的字段（封面 / 专辑 / 年份 / 地区 / 风格 / 时长 / 歌手）算作触发条件；
-    /// 曲目号、碟片号、iTunes 曲目 ID、成人标记属于“顺带字段”——
-    /// 一旦因为其它原因发起请求就一并带回，但不会单独为了它们去消耗 20 次/分钟的配额。
-    /// </summary>
-    public static bool NeedsEnrichment(LibraryImportItem item) =>
-        string.IsNullOrWhiteSpace(item.ArtworkStorageKey)
-        || string.IsNullOrWhiteSpace(item.AlbumTitle)
-        || item.ReleaseYear is null
-        || string.IsNullOrWhiteSpace(item.RegionCategory)
-        || item.DurationMs is null or <= 0
-        || DeserializeList(item.ArtistsJson).Count == 0
-        || DeserializeList(item.GenresJson).Count == 0;
-
-    /// <summary>
-    /// 为导入项补全缺失元数据（就地修改，不负责保存）。
-    /// </summary>
-    /// <param name="item">待补全的导入项（解析阶段，文件仍在隔离区）。</param>
-    /// <param name="cancellationToken">取消令牌。</param>
-    /// <returns>是否真的写入了新字段。</returns>
-    public async Task<bool> EnrichAsync(LibraryImportItem item, CancellationToken cancellationToken)
+    public static bool NeedsEnrichment(LibraryImportItem item)
     {
-        var artists = DeserializeList(item.ArtistsJson);
-
-        // 地区可以先本地推导：标签里已有流派或艺人名时不必为此请求外部源。
-        if (string.IsNullOrWhiteSpace(item.RegionCategory))
-            item.RegionCategory = ItunesMetadataHelper.DeriveRegion(null, DeserializeList(item.GenresJson).FirstOrDefault(), artists.FirstOrDefault());
-
-        if (!NeedsEnrichment(item))
-            return false;
-
-        var firstArtist = artists.FirstOrDefault();
-        // 既没有歌手也没有曲名，外部源无从检索。
-        if (string.IsNullOrWhiteSpace(firstArtist) && string.IsNullOrWhiteSpace(item.Title))
-            return false;
-
-        // 封面在发布前都放在隔离区，因此统一用隔离区目录。
-        if (!storagePaths.TryResolve("artwork/.placeholder", out var placeholder))
-            return false;
-        var artworkDirectory = Path.GetDirectoryName(placeholder)!;
-
-        var result = string.IsNullOrWhiteSpace(firstArtist)
-            ? await artworkFetcher.FetchByTitleAsync(item.Title!, "artwork", artworkDirectory, cancellationToken)
-            : await artworkFetcher.FetchAsync(firstArtist, item.AlbumTitle, item.Title, "artwork", artworkDirectory, cancellationToken);
-
-        if (result is null || !result.Success)
-        {
-            logger.LogDebug("iTunes enrichment missed for {Title}: {Reason}", item.Title, result?.Error ?? "no_match");
-            return false;
-        }
-
-        Apply(item, result, artists);
-        return true;
+        bool Missing(string field, bool empty) => empty && !MetadataMerge.Locked(item, field);
+        return Missing("cover", string.IsNullOrWhiteSpace(item.ArtworkStorageKey))
+            || Missing("album", string.IsNullOrWhiteSpace(item.AlbumTitle))
+            || (Missing("releaseDate", item.ReleaseDate is null) && !MetadataMerge.Locked(item, "releaseYear"))
+            || Missing("releaseYear", item.ReleaseYear is null)
+            || Missing("trackNumber", item.TrackNumber is null) || Missing("discNumber", item.DiscNumber is null)
+            || Missing("originalGenres", MetadataMerge.List(item.OriginalGenresJson).Length == 0);
     }
 
-    /// <summary>
-    /// 把 iTunes 结果合并进导入项：逐字段“只补空”。
-    /// </summary>
-    private static void Apply(LibraryImportItem item, ItunesMetadataResult result, IReadOnlyList<string> existingArtists)
+    public async Task<bool> EnrichAsync(LibraryImportItem item, CancellationToken cancellationToken) =>
+        (await EnrichFieldsAsync(item, cancellationToken)).Count > 0;
+
+    public async Task<IReadOnlyList<string>> EnrichFieldsAsync(LibraryImportItem item, CancellationToken cancellationToken)
     {
-        // 封面：标签没有内嵌封面时用 iTunes 的图
-        if (string.IsNullOrWhiteSpace(item.ArtworkStorageKey) && !string.IsNullOrWhiteSpace(result.StorageKey))
-            item.ArtworkStorageKey = result.StorageKey;
-
-        // 歌手：标签里完全没有歌手时，用严格同名的搜索结果兜底
-        if (existingArtists.Count == 0 && !string.IsNullOrWhiteSpace(result.ArtistName))
-            item.ArtistsJson = JsonSerializer.Serialize(new[] { result.ArtistName.Trim() });
-
-        // 专辑
-        if (string.IsNullOrWhiteSpace(item.AlbumTitle) && !string.IsNullOrWhiteSpace(result.AlbumTitle))
-            item.AlbumTitle = result.AlbumTitle.Trim();
-
-        // 年份
-        if (!item.ReleaseYear.HasValue && result.ReleaseYear is > 0)
-            item.ReleaseYear = result.ReleaseYear;
-
-        // 时长（本地 ffprobe/TagLib 都失败时兜底）
-        if (item.DurationMs is null or <= 0 && result.TrackTimeMs is > 0)
-            item.DurationMs = result.TrackTimeMs;
-
-        // 曲目号 / 碟片号
-        if (!item.TrackNumber.HasValue && result.TrackNumber is > 0)
-            item.TrackNumber = result.TrackNumber;
-        if (!item.DiscNumber.HasValue && result.DiscNumber is > 0)
-            item.DiscNumber = result.DiscNumber;
-
-        // iTunes 曲目 ID（溯源用）
-        if (!item.ItunesTrackId.HasValue && result.ItunesTrackId is > 0)
-            item.ItunesTrackId = result.ItunesTrackId;
-
-        // 风格：标签没有流派时，把 iTunes 的英文流派映射成应用内的中文 mood 标签
-        if (DeserializeList(item.GenresJson).Count == 0 && !string.IsNullOrWhiteSpace(result.Genre))
+        if (!NeedsEnrichment(item)) return [];
+        var artists = MetadataMerge.List(item.ArtistsJson);
+        if (string.IsNullOrWhiteSpace(item.Title) || artists.Length == 0) return [];
+        var providerFilled = await providerMetadata.EnrichAsync(item, cancellationToken);
+        if (!NeedsEnrichment(item)) return providerFilled;
+        if (!storagePaths.TryResolve("artwork/.placeholder", out var placeholder)) return providerFilled;
+        var result = await artworkFetcher.FetchMatchedAsync(item.Title, artists, item.AlbumTitle, item.DurationMs,
+            "artwork", Path.GetDirectoryName(placeholder)!, cancellationToken);
+        if (!result.Success)
         {
-            var mood = GenreMoodMapper.Map(result.Genre);
-            if (mood is not null)
-                item.GenresJson = JsonSerializer.Serialize(new[] { mood });
+            var warnings = MetadataMerge.List(item.WarningsJson).ToList();
+            var code = result.Error is "metadata_source_unavailable" or "metadata_ambiguous" or "identity_insufficient"
+                ? result.Error : "metadata_not_found";
+            if (!warnings.Contains(code)) warnings.Add(code);
+            item.WarningsJson = JsonSerializer.Serialize(warnings);
+            logger.LogDebug("Metadata unresolved for {Id}: {Reason}", item.Id, result.Error);
+            return providerFilled;
         }
-
-        // 上架商店代码：只作溯源，不代表艺人国籍
-        if (string.IsNullOrWhiteSpace(item.ItunesCountry) && !string.IsNullOrWhiteSpace(result.Country))
-            item.ItunesCountry = result.Country.Trim();
-
-        // 地区：流派 → 艺人名文字 → 商店代码
-        // 艺人名优先用本地（音频内嵌标签更可信，不会把「张韶涵」翻成 Angela Zhang 导致被判欧美）；
-        // iTunes 流派是原始英文 genre（如 Mandopop/Pop），本地流派可能已被映射成中文 mood 标签。
-        if (string.IsNullOrWhiteSpace(item.RegionCategory))
-        {
-            var genreForRegion = existingArtists.Count == 0
-                ? result.Genre
-                : result.Genre;
-            var artistForRegion = existingArtists.Count > 0
-                ? existingArtists[0]          // 本地艺人名优先（音频内嵌标签更可信）
-                : result.ArtistName;          // 本地完全没有时才用 iTunes 兜底
-            item.RegionCategory = ItunesMetadataHelper.DeriveRegion(result.Country, genreForRegion, artistForRegion);
-        }
-
-        // 成人内容标记
-        if (!item.IsExplicit.HasValue)
-            item.IsExplicit = ItunesMetadataHelper.ParseExplicit(result.Explicitness);
+        var filled = Apply(item, result);
+        if (result.StorageKey is { } unused && unused != item.ArtworkStorageKey && storagePaths.TryResolve(unused, out var path))
+            try { File.Delete(path); } catch (IOException) { }
+        return providerFilled.Concat(filled).Distinct().ToArray();
     }
 
-    /// <summary>把 JSON 数组字符串解析为字符串列表；解析失败返回空列表。</summary>
-    private static List<string> DeserializeList(string json)
+    /// <summary>调用者须先确认录音身份；现有值和人工空值均受保护。</summary>
+    public static IReadOnlyList<string> Apply(LibraryImportItem item, ItunesMetadataResult result)
     {
-        try { return JsonSerializer.Deserialize<List<string>>(json) ?? []; }
-        catch (JsonException) { return []; }
+        if (!result.Success) return [];
+        var filled = new List<string>();
+        var sourceId = result.ItunesTrackId?.ToString(CultureInfo.InvariantCulture);
+        void Fill<T>(string field, T current, T candidate, bool empty, Action<T> assign)
+        {
+            if (MetadataMerge.Fill(item, field, current, candidate, empty, assign, "itunes", sourceId)) filled.Add(field);
+        }
+        Fill("album", item.AlbumTitle, result.AlbumTitle, string.IsNullOrWhiteSpace(item.AlbumTitle), v => item.AlbumTitle = v);
+        // 日期与既有年份不一致时记录冲突，不让同一条目同时声称两个发行年份。
+        var date = result.ReleaseDate;
+        if (date is not null && item.ReleaseYear is { } year && !date.StartsWith(year.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal))
+            MetadataMerge.Fill(item, "releaseDate", item.ReleaseDate, date, false, v => item.ReleaseDate = v, "itunes", sourceId);
+        else if (!MetadataMerge.Locked(item, "releaseYear"))
+            Fill("releaseDate", item.ReleaseDate, date, item.ReleaseDate is null, v => item.ReleaseDate = v);
+        Fill("releaseYear", item.ReleaseYear, result.ReleaseYear, item.ReleaseYear is null, v => item.ReleaseYear = v);
+        Fill("trackNumber", item.TrackNumber, result.TrackNumber, item.TrackNumber is null, v => item.TrackNumber = v);
+        Fill("discNumber", item.DiscNumber, result.DiscNumber, item.DiscNumber is null, v => item.DiscNumber = v);
+        Fill("cover", item.ArtworkStorageKey, result.StorageKey, string.IsNullOrWhiteSpace(item.ArtworkStorageKey), v => item.ArtworkStorageKey = v);
+        var genres = string.IsNullOrWhiteSpace(result.Genre) ? Array.Empty<string>() : new[] { result.Genre.Trim() };
+        Fill("originalGenres", MetadataMerge.List(item.OriginalGenresJson), genres, MetadataMerge.List(item.OriginalGenresJson).Length == 0, v => item.OriginalGenresJson = JsonSerializer.Serialize(v));
+        if (GenreMoodMapper.Map(result.Genre) is { } mood)
+            if (MetadataMerge.Fill(item, "genres", MetadataMerge.List(item.GenresJson), new[] { mood }, MetadataMerge.List(item.GenresJson).Length == 0,
+                v => item.GenresJson = JsonSerializer.Serialize(v), "derived:genre-map", sourceId)) filled.Add("genres");
+        Fill("explicit", item.IsExplicit, ItunesMetadataHelper.ParseExplicit(result.Explicitness), item.IsExplicit is null, v => item.IsExplicit = v);
+        Fill("itunesTrackId", item.ItunesTrackId, result.ItunesTrackId, item.ItunesTrackId is null, v => item.ItunesTrackId = v);
+        Fill("itunesCountry", item.ItunesCountry, result.Country, string.IsNullOrWhiteSpace(item.ItunesCountry), v => item.ItunesCountry = v);
+        return filled;
     }
 }

@@ -14,6 +14,8 @@ using ShineMusic.Service;
 using ShineMusic.Service.Messaging;
 using ShineMusic.Service.PlaylistImport;
 using ShineMusic.Service.SourceDownload;
+using ShineMusic.Service.SourceProviders.Abstractions;
+using ShineMusic.Service.SourceProviders.Engine;
 using SqlSugar;
 
 namespace ShineMusic.Api.Controllers;
@@ -38,8 +40,9 @@ public sealed class SourceDownloadController : ControllerBase
         [FromQuery] string? provider,
         [FromQuery] int? limit,
         [FromQuery] string? mode,
-        IEnumerable<IMusicSourceProvider> providers,
+        ISearchAggregator searchAggregator,
         IOptions<SourceDownloadOptions> options,
+        ProviderAccessService providerAccess,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(query))
@@ -49,51 +52,44 @@ public sealed class SourceDownloadController : ControllerBase
         if (!SourceSearchMatcher.TryParse(query, mode ?? "title", out var criteria, out var queryError))
             return ApiResults.ValidationError(HttpContext, "query", queryError);
         var searchCriteria = criteria!;
-        if (providerFilter == "ytmusic")
-            return ApiResults.ValidationError(HttpContext, "provider", "YT Music is not available for source search.");
 
-        var candidates = providers
-            .Where(candidate => !string.Equals(candidate.Provider, "ytmusic", StringComparison.OrdinalIgnoreCase)
-                && (providerFilter == "all" || candidate.Provider == providerFilter))
-            .ToList();
-        if (providerFilter != "all" && candidates.Count == 0)
-            return ApiResults.ValidationError(HttpContext, "provider", $"Unknown source provider '{providerFilter}'.");
-
+        // Phase 2：可搜索源清单以 V2 ProviderRegistry 为准（用户裁决「四处统一收口」）。
+        // 并行扇出、单源超时、异常收敛、健康熔断全部由 ISearchAggregator / ProviderOrchestrator 承担。
         var results = new List<SourceSearchItemDto>();
         var errors = new List<SourceProviderErrorDto>();
-        var enabledCandidates = candidates.Where(candidate => candidate.IsEnabled).ToList();
-        // 未启用的源不视为错误，仅当显式指定该源时给出提示。
-        if (providerFilter != "all" && candidates.Count > 0 && enabledCandidates.Count == 0)
-            errors.Add(new SourceProviderErrorDto(providerFilter, candidates[0].DisabledReason ?? "Source is disabled."));
+        var registryProviders = searchAggregator.Providers;
+        var knownProviders = registryProviders
+            .Select(descriptor => descriptor.ProviderName)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (providerFilter != "all" && !knownProviders.Contains(providerFilter))
+            return ApiResults.ValidationError(HttpContext, "provider", $"Unknown source provider '{providerFilter}'.");
 
-        // 单源搜索预算：任一源超时即放弃该源（标注 providerErrors），其余源结果照常返回。
+        var enabledProviders = registryProviders
+            .Where(descriptor => descriptor.ConfigEnabled
+                && descriptor.SearchEnabled
+                && descriptor.Declares(ProviderCapability.Search))
+            .ToList();
+        // 未启用的源不视为错误，仅当显式指定该源时给出提示。
+        if (providerFilter != "all"
+            && enabledProviders.All(descriptor =>
+                !string.Equals(descriptor.ProviderName, providerFilter, StringComparison.OrdinalIgnoreCase)))
+        {
+            var disabled = registryProviders.First(descriptor =>
+                string.Equals(descriptor.ProviderName, providerFilter, StringComparison.OrdinalIgnoreCase));
+            errors.Add(new SourceProviderErrorDto(providerFilter, disabled.DisabledReason ?? "Source is disabled."));
+        }
+
+        // 单源 / 总预算取自 V2 ProviderFramework:Search；这里的 legacy 预算只用于 CanDownloadAsync 轻量预判。
         var budgetSeconds = Math.Clamp(options.Value.SearchBudgetSeconds, 5, 300);
         const int sourceLimit = 50;
-        // 并行搜索各启用源；单源异常收敛为 providerErrors。
-        var searchTasks = enabledCandidates.Select(async candidate =>
+        var providerNames = providerFilter == "all" ? null : new[] { providerFilter };
+        var aggregated = await searchAggregator.SearchAsync(
+            searchCriteria.ProviderQuery, providerNames, sourceLimit, cancellationToken);
+        foreach (var outcome in aggregated.Outcomes)
         {
-            using var budgetCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            budgetCts.CancelAfter(TimeSpan.FromSeconds(budgetSeconds));
-            try
-            {
-                var items = await candidate.SearchAsync(searchCriteria.ProviderQuery, sourceLimit, budgetCts.Token);
-                return (Provider: candidate.Provider, Items: items, Error: (string?)null);
-            }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-            {
-                // 预算到期（非客户端取消）：该源标注超时，不拖垮整体。
-                return (Provider: candidate.Provider, Items: Array.Empty<SourceSearchResult>(), Error: (string?)$"搜索超时（>{budgetSeconds} 秒），已跳过该源");
-            }
-            catch (Exception exception) when (exception is not OperationCanceledException)
-            {
-                return (Provider: candidate.Provider, Items: Array.Empty<SourceSearchResult>(), Error: (string?)exception.Message);
-            }
-        });
-        foreach (var outcome in await Task.WhenAll(searchTasks))
-        {
-            if (outcome.Error is not null)
-                errors.Add(new SourceProviderErrorDto(outcome.Provider, outcome.Error));
-            results.AddRange(outcome.Items.Select(item => new SourceSearchItemDto(
+            if (outcome.ErrorCode is not null)
+                errors.Add(new SourceProviderErrorDto(outcome.ProviderName, DescribeSearchError(outcome, budgetSeconds)));
+            results.AddRange(outcome.Results.Select(item => new SourceSearchItemDto(
                 item.Provider, item.ProviderTrackId, item.Title, item.Artists, item.AlbumTitle,
                 item.DurationMs, item.Genres, item.CoverUrl, item.SourcePageUrl, item.License,
                 item.Quality, item.IsLosslessAvailable, item.ReleaseYear)));
@@ -114,10 +110,14 @@ public sealed class SourceDownloadController : ControllerBase
         // 预算：复用搜索预算，避免整体响应被拖垮。
         if (results.Count > 0)
         {
-            var providerLookup = enabledCandidates.ToDictionary(c => c.Provider, StringComparer.OrdinalIgnoreCase);
             var checkTasks = results.Select(async item =>
             {
-                if (!providerLookup.TryGetValue(item.Provider, out var provider))
+                // 搜索能力独立于下载：未开启下载的源仍返回候选，不调用资源预判。
+                if (!providerAccess.IsDownloadConfigured(item.Provider))
+                    return (item, true);
+                // 纯 V2 provider（无 legacy 实例）不做预判，保守放行；不改变原有「预判失败不误删」策略。
+                var provider = searchAggregator.FindLegacyProvider(item.Provider);
+                if (provider is null)
                     return (item, true);
                 using var checkCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 checkCts.CancelAfter(TimeSpan.FromSeconds(budgetSeconds));
@@ -139,6 +139,12 @@ public sealed class SourceDownloadController : ControllerBase
         }
         return Results.Ok(new SourceSearchResponse(results, errors, 0));
     }
+
+    /// <summary>把 V2 结构化错误码翻译成管理端沿用已久的中文 providerErrors 文案。</summary>
+    private static string DescribeSearchError(ProviderSearchOutcome outcome, int budgetSeconds) =>
+        outcome.ErrorCode is ProviderOrchestrator.ErrorProviderTimeout or ProviderOrchestrator.ErrorBudgetExhausted
+            ? $"搜索超时（>{budgetSeconds} 秒），已跳过该源"
+            : "搜索失败，已跳过该源";
 
     /// <summary>创建下载任务（202 Accepted）：支持单 provider 批量 + 多候选换源两种模式。</summary>
     [HttpPost("tasks", Name = "CreateSourceDownloadTasks")]
@@ -185,7 +191,7 @@ public sealed class SourceDownloadController : ControllerBase
 
         try
         {
-            var result = await service.CreateTasksAsync(request.Provider.Trim().ToLowerInvariant(), request.ProviderTrackIds, request.Metadata, userId, cancellationToken);
+            var result = await service.CreateTasksAsync(request, userId, cancellationToken);
             AdminAudit.Add(HttpContext, db, "source_download.task_created", "source_download_task", result.Created.Count > 0 ? result.Created[0].Id : Guid.Empty,
                 new { provider = request.Provider, created = result.Created.Count, skipped = result.SkippedDuplicates.Count });
             return Results.Accepted(value: new CreateSourceDownloadTasksResultDto(

@@ -27,6 +27,17 @@ const form = reactive({ url: '', name: '' })
 const parsing = ref(false)
 const importing = ref(false)
 const preview = ref<PlaylistImportParseResult | null>(null)
+const parsedUrl = ref('')
+const selectedIndices = ref(new Set<number>())
+function selectTrack(index: number, selected: boolean) {
+  if (selected) selectedIndices.value.add(index)
+  else selectedIndices.value.delete(index)
+}
+function selectVisibleTracks() {
+  for (const row of previewTracks.value) {
+    if (!row.matched) selectedIndices.value.add(row.sourceIndex)
+  }
+}
 
 /** 最近一次导入结果（用于展示「已加入队列」回执与跳转下载任务）。 */
 const queuedResult = ref<{
@@ -198,7 +209,7 @@ const unmatchedCount = computed(() => (preview.value ? preview.value.total - mat
 /** 预览曲目关键词：本地匹配曲名 / 艺人 / 专辑（不必回源请求）。 */
 const previewKeyword = ref('')
 const previewTracks = computed(() => {
-  const tracks = preview.value?.tracks ?? []
+  const tracks = (preview.value?.tracks ?? []).map((track, sourceIndex) => ({ ...track, sourceIndex }))
   const term = previewKeyword.value.trim().toLowerCase()
   if (!term) return tracks
   return tracks.filter(
@@ -218,6 +229,7 @@ function formatDuration(durationMs: number | null): string {
 }
 
 async function handleParse() {
+  if (parsing.value || importing.value) return
   const url = form.url.trim()
   if (!url) {
     ElMessage.warning('请先粘贴歌单链接')
@@ -225,8 +237,12 @@ async function handleParse() {
   }
   parsing.value = true
   preview.value = null
+  selectedIndices.value.clear()
+  previewKeyword.value = ''
+  queuedResult.value = null
   try {
     preview.value = await parsePlaylistImport(url)
+    parsedUrl.value = url
     if (!form.name.trim()) form.name = preview.value.name
     ElMessage.success(`解析成功，共 ${preview.value.total} 首，已匹配曲库 ${matchedCount.value} 首`)
   } catch (error) {
@@ -240,10 +256,10 @@ async function handleParse() {
  * 只导入歌单，不在这个操作中下载未匹配曲目。
  */
 async function handleImport() {
-  if (!preview.value) return
+  if (!preview.value || importing.value || parsing.value) return
   importing.value = true
   try {
-    const result = await importPlaylist(form.url.trim(), form.name.trim() || undefined, false)
+    const result = await importPlaylist(parsedUrl.value, form.name.trim() || undefined, false)
     queuedResult.value = { type: 'playlist', ...result, pending: result.pending }
     ElMessage.success(`歌单已导入：${result.matched} 首已入库，${result.pending} 首未下载`)
     preview.value = null
@@ -260,11 +276,13 @@ async function handleImport() {
 }
 
 /** 仅将未匹配曲库的歌曲加入下载队列，不创建用户歌单。 */
-async function handleQueueDownloads() {
-  if (!preview.value) return
+async function handleQueueDownloads(wholePlaylist = false) {
+  if (!preview.value || importing.value || parsing.value) return
+  if (!wholePlaylist && selectedIndices.value.size === 0) return
   importing.value = true
   try {
-    const result = await queuePlaylistDownloads(form.url.trim())
+    const result = await queuePlaylistDownloads(parsedUrl.value,
+      wholePlaylist ? undefined : [...selectedIndices.value], preview.value.snapshotId)
     queuedResult.value = {
       type: 'queue',
       total: result.total,
@@ -357,6 +375,7 @@ function handlePlaylistChange() {
           v-model="form.url"
           placeholder="粘贴歌单链接，如 https://music.163.com/playlist?id=24381616"
           clearable
+          :disabled="parsing || importing"
           size="large"
           @keyup.enter="handleParse"
         >
@@ -364,7 +383,7 @@ function handlePlaylistChange() {
             <el-icon><Link /></el-icon>
           </template>
         </el-input>
-        <el-button type="primary" size="large" :loading="parsing" @click="handleParse">
+        <el-button type="primary" size="large" :disabled="importing" :loading="parsing" @click="handleParse">
           <el-icon v-if="!parsing"><Refresh /></el-icon>
           解析
         </el-button>
@@ -426,25 +445,42 @@ function handlePlaylistChange() {
             <el-button
               type="primary"
               :loading="importing"
-              title="仅将未匹配曲目加入后台下载队列，不创建歌单"
-              @click="handleQueueDownloads"
+              :disabled="selectedIndices.size === 0 || parsing"
+              title="仅下载勾选曲目；搜索不会改变已选范围"
+              @click="handleQueueDownloads(false)"
             >
               <el-icon v-if="!importing"><Download /></el-icon>
-              加入下载队列
+              下载已选 {{ selectedIndices.size }} 首
+            </el-button>
+            <el-button :disabled="importing || parsing || unmatchedCount === 0" @click="handleQueueDownloads(true)">
+              整张歌单待下载 {{ unmatchedCount }} 首加入队列
             </el-button>
             <el-button
               :disabled="importing"
               title="创建歌单并添加已匹配的曲目；未匹配曲目可之后在歌单中重新补齐"
               @click="handleImport"
             >
-              导入歌单
+              导入整张歌单
             </el-button>
           </div>
         </div>
       </template>
 
-      <el-table :data="previewTracks" stripe max-height="560">
-        <el-table-column type="index" label="#" width="60" />
+      <div class="tip">
+        已选 {{ selectedIndices.size }} 首（含搜索隐藏的选择）。搜索仅筛选显示，不改变下载范围。
+        <el-button link :disabled="importing" @click="selectVisibleTracks">选择当前显示的待下载曲目</el-button>
+        <el-button link :disabled="importing" @click="selectedIndices.clear()">清空选择</el-button>
+      </div>
+      <el-table :data="previewTracks" row-key="sourceIndex" stripe max-height="560">
+        <el-table-column label="选择" width="65">
+          <template #default="{ row }">
+            <el-checkbox :model-value="selectedIndices.has(row.sourceIndex)" :disabled="row.matched || importing"
+              :aria-label="`选择 ${row.title}`" @change="(value) => selectTrack(row.sourceIndex, !!value)" />
+          </template>
+        </el-table-column>
+        <el-table-column label="#" width="60">
+          <template #default="{ row }">{{ row.sourceIndex + 1 }}</template>
+        </el-table-column>
         <el-table-column prop="title" label="标题" sortable min-width="220" show-overflow-tooltip />
         <el-table-column prop="artists" label="艺人" sortable min-width="160" show-overflow-tooltip>
           <template #default="{ row }">{{ row.artists.join(' / ') || '-' }}</template>
@@ -667,6 +703,7 @@ function handlePlaylistChange() {
 
 .import-bar {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
 }
 

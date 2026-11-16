@@ -1,12 +1,12 @@
 // 职责：音源下载任务的「跨 provider 换源重试」——当指定音源平台下载失败后，
 // 自动（或指定目标平台）在其他启用的音源上搜索同曲匹配并创建新的下载任务。
-// 匹配逻辑与 SourceDownloadJob 的跨源佐证保持一致（归一化标题 + 艺人互含）。
+// 曲目身份匹配统一委托 TrackIdentityMatcher（唯一决策点）；本类不得再自带匹配实现。
 
 using System.Text.Json;
-using Microsoft.Extensions.Options;
 using ShineMusic.Model.Contracts;
 using ShineMusic.Model.Entities;
-using ShineMusic.Model.Options;
+using ShineMusic.Service.SourceProviders.Abstractions;
+using ShineMusic.Service.SourceProviders.Engine;
 using SqlSugar;
 
 namespace ShineMusic.Service.SourceDownload;
@@ -32,11 +32,32 @@ public sealed class SwitchSourceResult
 /// </summary>
 public sealed class SourceDownloadFallbackService(
     ISqlSugarClient db,
-    IEnumerable<IMusicSourceProvider> providers,
+    ISearchAggregator searchAggregator,
     SourceDownloadService createService,
-    IOptions<SourceDownloadOptions> options,
     ILogger<SourceDownloadFallbackService> logger)
 {
+    /// <summary>
+    /// 自动换源优先级：能稳定给 320k/无损的源排在 128k 源与开放版权 UGC 源之前。
+    /// IEnumerable&lt;IMusicSourceProvider&gt; 的顺序等于 DI 注册顺序（ModuleRegistrations 里
+    /// audius/jamendo/kuwo/kugou 都排在 migu/netease 之前），原实现「首个标题命中即创建任务」，
+    /// 于是失败重试常常落到 128k 的酷狗/酷我上。这里显式按音质能力排序。
+    /// 依据：2026-11-12 docs/音源巡检补测.json（11 源 × 3 首正常录音室歌曲实测）。
+    /// </summary>
+    private static readonly Dictionary<string, int> ProviderQualityPriority = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["migu"] = 0,       // SQ 无损 FLAC / HQ 320k，且含腾讯独家原曲
+        ["netease"] = 1,    // 官方 320k；VIP 曲走 gdstudio 回退可得 FLAC
+        ["qianqian"] = 2,   // rate=3000 可给 FLAC，但中文曲库常命中翻唱且 VIP 覆盖高
+        ["qq"] = 3,         // 配置 Cookie 后可 320k/无损；匿名态基本不可用
+        ["kuwo"] = 4,       // 匿名 128k，且多数曲目只回 11s 占位
+        ["kugou"] = 5,      // 匿名 128k，且常命中 Live/黑胶等非录音室版本
+        ["qishui"] = 6,     // 匿名 VIP 只给 30~60s 试听
+        ["audius"] = 7,     // 开放版权，中文查询基本 0 命中或返回无关曲目
+        ["jamendo"] = 8,
+        ["bilibili"] = 9,   // UGC 视频音轨，非官方母带
+        ["ytmusic"] = 10,
+    };
+
     /// <summary>
     /// 对已失败任务执行换源重试。
     /// </summary>
@@ -58,68 +79,56 @@ public sealed class SourceDownloadFallbackService(
             return SwitchSourceResult.Fail(SwitchSourceFailureKind.NotFailed, "Only failed tasks can be retried with a different source.");
 
         // 从任务快照中取搜索关键词：标题 + 主艺人；任一缺失无法搜索。
-        if (string.IsNullOrWhiteSpace(task.Title))
+        var expectedTitle = task.ExpectedTitle ?? task.Title;
+        if (string.IsNullOrWhiteSpace(expectedTitle))
             return SwitchSourceResult.Fail(SwitchSourceFailureKind.InsufficientMetadata, "The task has no title to search with.");
-        var primaryArtist = TryGetPrimaryArtist(task.ArtistsJson);
+        var primaryArtist = TryGetPrimaryArtist(task.ExpectedArtistsJson ?? task.ArtistsJson);
 
         // 构造搜索查询（标题 + 主艺人，无艺人时仅标题）。
         var query = string.IsNullOrWhiteSpace(primaryArtist)
-            ? task.Title.Trim()
-            : $"{task.Title.Trim()} {primaryArtist}";
+            ? expectedTitle.Trim()
+            : $"{expectedTitle.Trim()} {primaryArtist}";
 
-        // 决定搜索哪些 provider。
-        var candidates = providers
-            .Where(p => p.IsEnabled
-                && p.Provider != task.SourceProvider
-                && !string.Equals(p.Provider, "ytmusic", StringComparison.OrdinalIgnoreCase))
+        // 决定搜索哪些 provider：源清单以 V2 Registry 为准（Phase 2 用户裁决），
+        // 排序仍按 ProviderQualityPriority —— A 轴修复，不能让「首个标题命中」把重试落到 128k 源。
+        var candidates = searchAggregator.Providers
+            .Where(descriptor => descriptor.ConfigEnabled
+                && descriptor.SearchEnabled
+                && descriptor.DownloadEnabled
+                && descriptor.Declares(ProviderCapability.Resolve)
+                && descriptor.Declares(ProviderCapability.Search)
+                && !string.Equals(descriptor.ProviderName, task.SourceProvider, StringComparison.OrdinalIgnoreCase))
+            .Select(descriptor => descriptor.ProviderName)
+            .OrderBy(name => ProviderQualityPriority.GetValueOrDefault(name, 50))
             .ToList();
         if (!string.IsNullOrWhiteSpace(targetProvider))
         {
-            var matchedProvider = candidates.FirstOrDefault(p =>
-                string.Equals(p.Provider, targetProvider.Trim(), StringComparison.OrdinalIgnoreCase));
+            var matchedProvider = candidates.FirstOrDefault(name =>
+                string.Equals(name, targetProvider.Trim(), StringComparison.OrdinalIgnoreCase));
             if (matchedProvider is null)
                 return SwitchSourceResult.Fail(SwitchSourceFailureKind.ProviderUnavailable,
                     $"Provider '{targetProvider}' is not available or enabled.");
-            candidates = new List<IMusicSourceProvider> { matchedProvider };
+            candidates = [matchedProvider];
         }
         if (candidates.Count == 0)
             return SwitchSourceResult.Fail(SwitchSourceFailureKind.ProviderUnavailable,
                 "No other enabled source providers are available to switch to.");
 
-        // yt-dlp 源搜索较慢，使用其配置的搜索预算；其他源使用较短的独立预算。
-        foreach (var provider in candidates)
+        // 一次并发扇出，超时 / 异常 / 健康熔断由 Orchestrator 收敛为逐源 outcome；
+        // 再按音质优先级串行找首个匹配，保持「首个命中即建任务」的原有语义。
+        var aggregated = await searchAggregator.SearchAsync(query, candidates, 10, cancellationToken);
+        foreach (var outcome in aggregated.Outcomes
+                     .OrderBy(item => ProviderQualityPriority.GetValueOrDefault(item.ProviderName, 50)))
         {
-            SourceSearchResult? matched = null;
-            try
-            {
-                using var budgetCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                var budgetSeconds = string.Equals(provider.Provider, "ytmusic", StringComparison.OrdinalIgnoreCase)
-                    ? Math.Clamp(options.Value.YtDlp.SearchTimeoutSeconds, 10, 300)
-                    : 15;
-                budgetCts.CancelAfter(TimeSpan.FromSeconds(budgetSeconds));
-                var results = await provider.SearchAsync(query, 10, budgetCts.Token);
-                matched = results.FirstOrDefault(entry =>
-                    TitleMatches(task.Title!, entry.Title)
-                    && (string.IsNullOrWhiteSpace(primaryArtist) || ArtistsMatch(entry.Artists, primaryArtist)));
-            }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            if (outcome.ErrorCode is not null)
             {
                 logger.LogWarning(
-                    "Switch-source search timed out for provider {Provider} and task {TaskId}; continuing with the next provider.",
-                    provider.Provider,
-                    taskId);
-                continue;
-            }
-            catch (Exception exception) when (exception is not OperationCanceledException)
-            {
-                logger.LogWarning(
-                    exception,
-                    "Switch-source search failed for provider {Provider} and task {TaskId}; continuing with the next provider.",
-                    provider.Provider,
-                    taskId);
+                    "Switch-source search failed for provider {Provider} and task {TaskId} ({ErrorCode}: {Message}); continuing with the next provider.",
+                    outcome.ProviderName, taskId, outcome.ErrorCode, outcome.ErrorMessage);
                 continue;
             }
 
+            var matched = outcome.Results.FirstOrDefault(entry => MatchesCandidate(expectedTitle, primaryArtist, entry));
             if (matched is null)
                 continue;
 
@@ -134,8 +143,12 @@ public sealed class SourceDownloadFallbackService(
                         matched.SourcePageUrl, matched.License, matched.Quality, matched.IsLosslessAvailable,
                         matched.ReleaseYear)
                 };
-                var result = await createService.CreateTasksAsync(
-                    matched.Provider, [matched.ProviderTrackId], metadata, userId, cancellationToken);
+                var result = await createService.CreateTasksAsync(new CreateSourceDownloadTasksRequest(
+                    matched.Provider, [matched.ProviderTrackId], metadata,
+                    ExpectedTrack: new SourceExpectedTrackDto(task.ExpectedTitle ?? task.Title!,
+                        DeserializeList(task.ExpectedArtistsJson ?? task.ArtistsJson),
+                        task.ExpectedAlbumTitle ?? task.AlbumTitle,
+                        task.ExpectedTitle is not null ? task.ExpectedDurationMs : task.DurationMs)), userId, cancellationToken);
 
                 if (result.Created.Count == 1)
                 {
@@ -154,14 +167,14 @@ public sealed class SourceDownloadFallbackService(
             catch (SourceDuplicateException)
             {
                 return SwitchSourceResult.Fail(SwitchSourceFailureKind.DuplicateTask,
-                    $"A task for this track on provider '{provider.Provider}' already exists.");
+                    $"A task for this track on provider '{outcome.ProviderName}' already exists.");
             }
             catch (SourceUnavailableException exception)
             {
                 logger.LogWarning(
                     exception,
                     "Switch-source task creation failed for provider {Provider} and task {TaskId}; continuing with the next provider.",
-                    provider.Provider,
+                    outcome.ProviderName,
                     taskId);
                 continue;
             }
@@ -171,7 +184,21 @@ public sealed class SourceDownloadFallbackService(
             $"No matching track found on any alternative source provider.");
     }
 
-    // ====== 以下匹配辅助方法与 SourceDownloadJob 保持一致（归一化标题互含 + 艺人互含）。 ======
+    // ====== 以下为任务快照解析辅助；曲目身份判定统一走 TrackIdentityMatcher（唯一决策点）。 ======
+
+    /// <summary>
+    /// 换源候选是否可接受：只负责把任务快照与搜索结果组装成 <see cref="TrackIdentity"/>，
+    /// **判定逻辑全部委托** <see cref="TrackIdentityMatcher.Evaluate"/>。本类不得自带匹配实现。
+    /// 标记 internal 以便测试直接锁定换源路径的判定口径（无需 mock 数据库 / provider）。
+    /// </summary>
+    internal static bool MatchesCandidate(string taskTitle, string? primaryArtist, SourceSearchResult entry)
+    {
+        var expected = new TrackIdentity(
+            taskTitle,
+            string.IsNullOrWhiteSpace(primaryArtist) ? [] : [primaryArtist]);
+        var candidate = new TrackIdentity(entry.Title, entry.Artists, entry.DurationMs);
+        return TrackIdentityMatcher.Evaluate(expected, candidate).Verdict == IdentityVerdict.Matched;
+    }
 
     private static string? TryGetPrimaryArtist(string? artistsJson)
     {
@@ -182,42 +209,6 @@ public sealed class SourceDownloadFallbackService(
                 ?.FirstOrDefault(artist => !string.IsNullOrWhiteSpace(artist));
         }
         catch (JsonException) { return null; }
-    }
-
-    private static bool TitleMatches(string taskTitle, string? entryTitle)
-    {
-        var left = NormalizeTitle(taskTitle);
-        var right = NormalizeTitle(entryTitle);
-        if (left.Length < 2 || right.Length < 2) return false;
-        return left.Contains(right, StringComparison.OrdinalIgnoreCase)
-            || right.Contains(left, StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool ArtistsMatch(IReadOnlyList<string> artists, string primaryArtist)
-    {
-        var expected = NormalizeTitle(primaryArtist);
-        if (expected.Length < 2) return false;
-        return artists.Any(artist =>
-        {
-            var actual = NormalizeTitle(artist);
-            return actual.Length >= 2
-                && (actual.Contains(expected, StringComparison.OrdinalIgnoreCase)
-                    || expected.Contains(actual, StringComparison.OrdinalIgnoreCase));
-        });
-    }
-
-    private static string NormalizeTitle(string? title)
-    {
-        if (string.IsNullOrWhiteSpace(title)) return string.Empty;
-        var builder = new System.Text.StringBuilder(title.Length);
-        var depth = 0;
-        foreach (var ch in title)
-        {
-            if (ch is '(' or '（' or '[' or '［' or '【' or '{' or '｛') depth++;
-            else if (ch is ')' or '）' or ']' or '］' or '】' or '}' or '｝') { if (depth > 0) depth--; }
-            else if (depth == 0 && !char.IsWhiteSpace(ch) && ch != '\u00A0') builder.Append(ch);
-        }
-        return builder.ToString();
     }
 
     private static List<string> DeserializeList(string? json)

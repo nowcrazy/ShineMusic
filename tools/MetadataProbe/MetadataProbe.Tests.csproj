@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <Using Include="Microsoft.Extensions.Logging" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+    <Compile Include="../../ShineMusicApi/ShineMusic.Service/Metadata/ArtworkFetcher.cs" Link="ArtworkFetcher.cs" />
+    <Compile Include="../../ShineMusicApi/ShineMusic.Service/Media/SourceDownload/TrackIdentityMatcher.cs" Link="TrackIdentityMatcher.cs" />
+    <Compile Include="../../ShineMusicApi/ShineMusic.Tests/Metadata/ArtworkFetcherMatchingTests.cs" Link="ArtworkFetcherMatchingTests.cs" />
+  </ItemGroup>
+</Project>

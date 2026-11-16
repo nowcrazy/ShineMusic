@@ -102,6 +102,8 @@ export const ImportItemStatus = {
   PendingPublication: 'pending_publication',
   Published: 'published',
   Rejected: 'rejected',
+  /** 身份三态闸门拒绝后的终态，不进入后台自动重试扫描 */
+  IdentityRejected: 'identity_rejected',
   ProcessingFailed: 'processing_failed',
 } as const
 
@@ -116,6 +118,7 @@ export const ImportItemStatusLabel: Record<string, string> = {
   pending_publication: 'importStatus.pendingPublication',
   published: 'importStatus.published',
   rejected: 'importStatus.rejected',
+  identity_rejected: 'importStatus.identityRejected',
   processing_failed: 'importStatus.processingFailed',
 }
 
@@ -337,6 +340,44 @@ export async function unlinkImportItemSongRequest(itemId: string): Promise<Libra
  */
 export async function dismissImportItem(itemId: string): Promise<void> {
   return http.post<void>(`${API_PREFIX}/admin/library/import-items/${itemId}/dismiss`)
+}
+
+/** 批量审核动作：approve=通过 / reject=拒绝 */
+export type BulkReviewAction = 'approve' | 'reject'
+
+/** POST /import-items/bulk-review 请求体 */
+export interface BulkReviewPayload {
+  itemIds: string[]
+  action: BulkReviewAction
+  /** reject 时必填，会写入审计日志；approve 时可省略 */
+  reason?: string
+}
+
+/** 批量审核中单个条目的执行结果 */
+export interface BulkReviewItemResult {
+  itemId: string
+  displayName: string
+  success: boolean
+  error: string | null
+}
+
+/** POST /import-items/bulk-review 响应体 */
+export interface BulkReviewResult {
+  total: number
+  success: number
+  results: BulkReviewItemResult[]
+}
+
+/**
+ * 批量审核导入条目：一次请求对多个条目执行「通过」或「拒绝」。
+ * - approve：置为元数据已审核 + ready_to_publish
+ * - reject：置为新终态 identity_rejected（不进入后台自动重试扫描），reason 必填并写入审计日志
+ */
+export async function bulkReviewImportItems(payload: BulkReviewPayload): Promise<BulkReviewResult> {
+  return http.post<BulkReviewResult>(
+    `${API_PREFIX}/admin/library/import-items/bulk-review`,
+    payload,
+  )
 }
 
 /** 构造鉴权头（供 uni.uploadFile 使用） */

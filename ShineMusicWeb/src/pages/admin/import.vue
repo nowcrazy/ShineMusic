@@ -21,6 +21,8 @@ import {
   updateImportItem,
   uploadImportFilesBatch,
   bulkPublishCandidates,
+  bulkReviewImportItems,
+  type BulkReviewAction,
 } from '@/services/admin-import'
 import { getUnmatchedTracks } from '@/services/admin-source-download'
 import UnmatchedTracksDialog from '@/components/UnmatchedTracksDialog.vue'
@@ -34,6 +36,7 @@ const statusTabs = [
   { name: 'pending_publication', label: '待转公开' },
   { name: 'published', label: '已发布' },
   { name: 'rejected', label: '已拒绝' },
+  { name: 'identity_rejected', label: '身份拒绝' },
   { name: 'processing_failed', label: '处理失败' },
 ]
 
@@ -47,6 +50,7 @@ const statusText: Record<string, string> = {
   pending_publication: '待转公开',
   published: '已发布',
   rejected: '已拒绝',
+  identity_rejected: '身份拒绝',
   processing_failed: '处理失败',
 }
 
@@ -56,6 +60,7 @@ const statusTone: Record<string, string> = {
   pending_publication: 'warning',
   published: 'success',
   rejected: 'info',
+  identity_rejected: 'danger',
   processing_failed: 'danger',
 }
 
@@ -77,6 +82,9 @@ const saving = ref(false)
 const enriching = ref(false)
 const publishing = ref(false)
 const bulkPublishing = ref(false)
+const bulkReviewing = ref(false)
+/** 表格多选：选中的导入条目。 */
+const selectedItems = ref<ApiLibraryImportItem[]>([])
 const forceFulfill = ref(false)
 const overrideReason = ref('')
 const form = reactive({
@@ -86,6 +94,10 @@ const form = reactive({
   trackNumber: '' as string | number,
   discNumber: '' as string | number,
   releaseYear: '' as string | number,
+  releaseDate: '',
+  isrc: '',
+  albumArtists: '',
+  originalGenres: '',
   genres: '',
   lyrics: '',
 })
@@ -98,14 +110,14 @@ const uploadRequestId = ref('')
 const previewUrl = computed(() => (current.value ? getPreviewUrl(current.value.id) : ''))
 const canReview = (item: ApiLibraryImportItem) =>
   ['pending_review', 'ready_to_publish', 'pending_publication'].includes(item.status)
-const canReject = (item: ApiLibraryImportItem) => !['published', 'rejected'].includes(item.status)
+const canReject = (item: ApiLibraryImportItem) => !['published', 'rejected', 'identity_rejected'].includes(item.status)
 const canDismiss = (item: ApiLibraryImportItem) =>
-  ['published', 'rejected', 'processing_failed'].includes(item.status)
+  ['published', 'rejected', 'identity_rejected', 'processing_failed'].includes(item.status)
 
-/** AutoScore 分段颜色：≥85 绿（优质）、75-84 黄（达自动发布线）、<75 红（需人工）、null 灰（未评分）。 */
+/** AutoScore 分段颜色：≥90 绿（自动发布线）、75-89 黄（达旧发布线但需人工确认）、<75 红（需人工）、null 灰（未评分）。 */
 function scoreTone(score: number | null | undefined) {
   if (score == null) return { color: 'var(--adm-text-3)', tone: 'info' as const, label: '未评' }
-  if (score >= 85) return { color: '#22c55e', tone: 'success' as const, label: '优' }
+  if (score >= 90) return { color: '#22c55e', tone: 'success' as const, label: '优' }
   if (score >= 75) return { color: '#f59e0b', tone: 'warning' as const, label: '良' }
   return { color: '#ef4444', tone: 'danger' as const, label: '低分' }
 }
@@ -113,7 +125,7 @@ function scoreTone(score: number | null | undefined) {
 /** 待审核条目里高分可自动发布的统计提示。 */
 const pendingScoreStats = computed(() => {
   const pending = items.value.filter(i => i.status === 'pending_review')
-  const autoPublish = pending.filter(i => (i.autoScore ?? 0) >= 75).length
+  const autoPublish = pending.filter(i => (i.autoScore ?? 0) >= 90).length
   const lowQuality = pending.length - autoPublish
   return { total: pending.length, autoPublish, lowQuality }
 })
@@ -127,6 +139,7 @@ function scoreSegments(bd: NonNullable<ApiLibraryImportItem['scoreBreakdown']>) 
     return '#ef4444'
   }
   return [
+    { label: '身份', score: bd.identity.score, max: bd.identity.maxScore, pct: (bd.identity.score / bd.identity.maxScore) * 100, reason: bd.identity.reason, color: tone(bd.identity) },
     { label: '音质', score: bd.quality.score, max: bd.quality.maxScore, pct: (bd.quality.score / bd.quality.maxScore) * 100, reason: bd.quality.reason, color: tone(bd.quality) },
     { label: '元数据', score: bd.metadata.score, max: bd.metadata.maxScore, pct: (bd.metadata.score / bd.metadata.maxScore) * 100, reason: bd.metadata.reason, color: tone(bd.metadata) },
     { label: '歌词', score: bd.lyrics.score, max: bd.lyrics.maxScore, pct: (bd.lyrics.score / bd.lyrics.maxScore) * 100, reason: bd.lyrics.reason, color: tone(bd.lyrics) },
@@ -188,6 +201,10 @@ function openReview(item: ApiLibraryImportItem) {
   form.trackNumber = item.metadata.trackNumber ?? ''
   form.discNumber = item.metadata.discNumber ?? ''
   form.releaseYear = item.metadata.releaseYear ?? ''
+  form.releaseDate = item.metadata.releaseDate ?? ''
+  form.isrc = item.metadata.isrc ?? ''
+  form.albumArtists = (item.metadata.albumArtists ?? []).join('、')
+  form.originalGenres = (item.metadata.originalGenres ?? []).join('、')
   form.genres = item.metadata.genres.join('、')
   form.lyrics = item.metadata.lyrics ?? ''
   forceFulfill.value = false
@@ -212,14 +229,18 @@ async function saveMetadata() {
   saving.value = true
   try {
     const updated = await updateImportItem(item.id, {
-      title: form.title.trim() || undefined,
-      artists: splitValues(form.artists),
-      albumTitle: form.albumTitle.trim() || null,
-      trackNumber: optionalNumber(form.trackNumber),
-      discNumber: optionalNumber(form.discNumber),
-      releaseYear: optionalNumber(form.releaseYear),
-      genres: splitValues(form.genres),
-      lyrics: form.lyrics.trim() || null,
+      title: form.title.trim() !== (item.metadata.title ?? '') ? form.title.trim() || undefined : undefined,
+      artists: form.artists !== item.metadata.artists.join('、') ? splitValues(form.artists) : undefined,
+      albumTitle: form.albumTitle.trim() !== (item.metadata.albumTitle ?? '') ? form.albumTitle.trim() : undefined,
+      trackNumber: (optionalNumber(form.trackNumber) ?? 0) !== (item.metadata.trackNumber ?? 0) ? optionalNumber(form.trackNumber) ?? 0 : undefined,
+      discNumber: (optionalNumber(form.discNumber) ?? 0) !== (item.metadata.discNumber ?? 0) ? optionalNumber(form.discNumber) ?? 0 : undefined,
+      releaseYear: (optionalNumber(form.releaseYear) ?? 0) !== (item.metadata.releaseYear ?? 0) ? optionalNumber(form.releaseYear) ?? 0 : undefined,
+      genres: form.genres !== item.metadata.genres.join('、') ? splitValues(form.genres) : undefined,
+      lyrics: form.lyrics.trim() !== (item.metadata.lyrics ?? '') ? form.lyrics.trim() : undefined,
+      releaseDate: form.releaseDate.trim() !== (item.metadata.releaseDate ?? '') ? form.releaseDate.trim() : undefined,
+      isrc: form.isrc.trim() !== (item.metadata.isrc ?? '') ? form.isrc.trim() : undefined,
+      albumArtists: form.albumArtists !== (item.metadata.albumArtists ?? []).join('、') ? splitValues(form.albumArtists) : undefined,
+      originalGenres: form.originalGenres !== (item.metadata.originalGenres ?? []).join('、') ? splitValues(form.originalGenres) : undefined,
     })
     current.value = { ...updated }
     replaceRow(current.value)
@@ -267,7 +288,7 @@ async function publish() {
   }
 }
 
-/** 一键发布所有自动发布候选（分数 ≥ 75 的 pending_review 条目）。 */
+/** 一键发布所有自动发布候选（分数 ≥ 90 的 pending_review 条目）。 */
 async function handleBulkPublish() {
   const candidateCount = pendingScoreStats.value.autoPublish
   if (candidateCount === 0) {
@@ -276,7 +297,7 @@ async function handleBulkPublish() {
   }
   try {
     await ElMessageBox.confirm(
-      `将一键发布 ${candidateCount} 条高分待审核曲目（分数 ≥ 75，非用户上传，转码已完成）。低分曲目（< 75）不受影响。`,
+      `将一键发布 ${candidateCount} 条高分待审核曲目（分数 ≥ 90，非用户上传，转码已完成）。低分曲目（< 90）不受影响。`,
       '一键发布高分曲目',
       {
         confirmButtonText: '确认发布',
@@ -330,6 +351,94 @@ async function reject(item: ApiLibraryImportItem) {
   }
 }
 
+/** 表格多选变化时同步选中列表。 */
+function handleSelectionChange(selection: ApiLibraryImportItem[]) {
+  selectedItems.value = selection
+}
+
+/** 批量审核：通过选中的条目。 */
+async function handleBulkApprove() {
+  const candidates = selectedItems.value.filter(item => canReview(item))
+  if (candidates.length === 0) {
+    ElMessage.warning('请先选择可审核的条目（待审核/可发布/待转公开）')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `将批量通过 ${candidates.length} 条待审核条目，元数据齐全的将置为「可发布」。`,
+      '批量通过',
+      { confirmButtonText: '确认通过', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  bulkReviewing.value = true
+  try {
+    const result = await bulkReviewImportItems({
+      itemIds: candidates.map(item => item.id),
+      action: 'approve' as BulkReviewAction,
+    })
+    if (result.success === result.total) {
+      ElMessage.success(`全部 ${result.total} 条审核通过！`)
+    } else {
+      const failed = result.results.filter(r => !r.success)
+      ElMessage.warning(`审核完成：成功 ${result.success}/${result.total}。${failed.length} 条失败，详情请看控制台。`)
+      failed.forEach(f => console.warn(`[bulk-approve 失败] ${f.displayName}`, f.error))
+    }
+    await loadItems()
+  } catch (error) {
+    ElMessage.error(describeError(error, '批量审核失败'))
+  } finally {
+    bulkReviewing.value = false
+  }
+}
+
+/** 批量审核：拒绝选中的条目（写入 identity_rejected 终态）。 */
+async function handleBulkReject() {
+  const candidates = selectedItems.value.filter(item => canReject(item))
+  if (candidates.length === 0) {
+    ElMessage.warning('请先选择可拒绝的条目')
+    return
+  }
+  let reason = ''
+  try {
+    const result = await ElMessageBox.prompt(
+      `将批量拒绝 ${candidates.length} 条条目，状态将置为「身份拒绝」（identity_rejected），隔离区文件会被删除。请填写拒绝原因（写入审计日志）：`,
+      '批量拒绝',
+      {
+        confirmButtonText: '确认拒绝',
+        cancelButtonText: '取消',
+        type: 'warning',
+        inputPlaceholder: '例如：曲目与歌单原曲不符 / 翻唱版本 / 音质不达标',
+        inputValidator: (value: string) => value.trim().length > 0 || '请填写拒绝原因',
+      },
+    )
+    reason = result.value
+  } catch {
+    return
+  }
+  bulkReviewing.value = true
+  try {
+    const result = await bulkReviewImportItems({
+      itemIds: candidates.map(item => item.id),
+      action: 'reject' as BulkReviewAction,
+      reason: reason.trim(),
+    })
+    if (result.success === result.total) {
+      ElMessage.success(`全部 ${result.total} 条已拒绝`)
+    } else {
+      const failed = result.results.filter(r => !r.success)
+      ElMessage.warning(`拒绝完成：成功 ${result.success}/${result.total}。${failed.length} 条失败，详情请看控制台。`)
+      failed.forEach(f => console.warn(`[bulk-reject 失败] ${f.displayName}`, f.error))
+    }
+    await loadItems()
+  } catch (error) {
+    ElMessage.error(describeError(error, '批量拒绝失败'))
+  } finally {
+    bulkReviewing.value = false
+  }
+}
+
 async function dismiss(item: ApiLibraryImportItem) {
   try {
     await dismissImportItem(item.id)
@@ -347,6 +456,10 @@ function fillForm(item: ApiLibraryImportItem) {
   form.trackNumber = item.metadata.trackNumber ?? ''
   form.discNumber = item.metadata.discNumber ?? ''
   form.releaseYear = item.metadata.releaseYear ?? ''
+  form.releaseDate = item.metadata.releaseDate ?? ''
+  form.isrc = item.metadata.isrc ?? ''
+  form.albumArtists = (item.metadata.albumArtists ?? []).join('、')
+  form.originalGenres = (item.metadata.originalGenres ?? []).join('、')
   form.genres = item.metadata.genres.join('、')
   form.lyrics = item.metadata.lyrics ?? ''
 }
@@ -496,13 +609,41 @@ onMounted(() => {
         </el-button>
       </div>
 
+      <!-- 批量审核操作栏：选中条目后出现 -->
+      <div v-if="selectedItems.length > 0" class="bulk-review-bar">
+        <span class="bulk-review-count">
+          已选 <b>{{ selectedItems.length }}</b> 条
+        </span>
+        <el-button
+          size="small"
+          type="primary"
+          :loading="bulkReviewing"
+          :disabled="selectedItems.filter(i => canReview(i)).length === 0"
+          @click="handleBulkApprove"
+        >
+          批量通过（{{ selectedItems.filter(i => canReview(i)).length }}）
+        </el-button>
+        <el-button
+          size="small"
+          type="danger"
+          :loading="bulkReviewing"
+          :disabled="selectedItems.filter(i => canReject(i)).length === 0"
+          @click="handleBulkReject"
+        >
+          批量拒绝（{{ selectedItems.filter(i => canReject(i)).length }}）
+        </el-button>
+        <el-button size="small" link @click="selectedItems = []">取消选择</el-button>
+      </div>
+
       <el-table
         v-loading="loading"
         :data="items"
         row-key="id"
         empty-text="当前状态暂无条目"
         @sort-change="handleSortChange"
+        @selection-change="handleSelectionChange"
       >
+        <el-table-column type="selection" width="42" :selectable="canReject" />
         <el-table-column label="文件 / 曲名" prop="title" sortable="custom" min-width="230">
           <template #default="{ row }">
             <div class="file-cell">
@@ -690,6 +831,18 @@ onMounted(() => {
               <el-input v-model="form.releaseYear" type="number" />
             </el-form-item>
           </div>
+          <el-form-item label="完整发行日期（未知可留空）"><el-input v-model="form.releaseDate" placeholder="YYYY-MM-DD" /></el-form-item>
+          <el-form-item label="ISRC（来源提供时填写）"><el-input v-model="form.isrc" maxlength="12" /></el-form-item>
+          <el-form-item label="专辑艺人（顿号分隔）"><el-input v-model="form.albumArtists" /></el-form-item>
+          <el-form-item label="原始流派（顿号分隔）"><el-input v-model="form.originalGenres" /></el-form-item>
+          <el-collapse v-if="current.metadata.fieldAudit?.length">
+            <el-collapse-item title="元数据来源与冲突" name="metadata-audit">
+              <div v-for="entry in current.metadata.fieldAudit" :key="entry.field">
+                <strong>{{ entry.field }}</strong> · {{ entry.source }} · {{ entry.manualLocked ? '人工锁定' : '自动合并' }}
+                <span v-if="entry.candidateJson"> · 候选 {{ entry.candidateJson }}（{{ entry.candidateSource }}），保留现有值</span>
+              </div>
+            </el-collapse-item>
+          </el-collapse>
           <el-form-item label="风格（顿号或逗号分隔）">
             <el-input v-model="form.genres" />
           </el-form-item>
@@ -840,6 +993,28 @@ onMounted(() => {
 
 .bulk-publish-btn {
   margin-left: auto;
+}
+
+.bulk-review-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 8px 14px;
+  background: var(--adm-bg-soft);
+  border: 1px solid var(--adm-border);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.bulk-review-count {
+  color: var(--adm-text-2);
+  margin-right: auto;
+}
+
+.bulk-review-count b {
+  color: var(--el-color-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 .hint-good { color: #22c55e; font-weight: 500; }

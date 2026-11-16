@@ -453,7 +453,6 @@ public sealed partial class MiguSourceProvider(
         if (resource is null || string.IsNullOrWhiteSpace(resource.ContentId))
             throw new SourceUnavailableException("咪咕未返回 contentId，无法解析下载地址。");
         var contentId = resource.ContentId;
-        var desiredTone = SelectTone(resource, options.Value.Migu.ToneFlag);
 
         // 2) curl 取 h5/v2.4 加密响应并解密得到 PQ 直链。
         var listenUrl = $"{ListenUrlH5Base}?contentId={Uri.EscapeDataString(contentId)}"
@@ -480,18 +479,83 @@ public sealed partial class MiguSourceProvider(
         if (string.IsNullOrWhiteSpace(pqUrl) || !pqUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
             throw new SourceUnavailableException("咪咕下载地址无效。");
 
-        // 3) 切换到目标音质。
-        var finalUrl = ChangeQuality(pqUrl, desiredTone);
-        var extension = ToneExtensions.TryGetValue(desiredTone, out var ext) ? ext : ".mp3";
-        var isLossless = desiredTone == "SQ";
-        var quality = QualityForTone(desiredTone);
-        var outputPath = Path.Combine(outputDirectory, fileBaseName + extension);
+        // 3) 逐档下载：从配置允许的最高档开始，失败或返回非音频内容时自动降到下一档。
+        //    resourceinfo 声明「有 SQ」不代表 SQ 直链真的可取——2026-11-12 实测《月亮代表我的心》
+        //    声明 SQ，但换档后的 FLAC URL 返回 404 + text/vnd.wap.wml；原实现会把这个错误页
+        //    当成 .flac 保存下来（curl 未加 --fail），后续 ffprobe 才失败，且不会自动降档。
+        //    这里按 SQ→HQ→PQ 逐档实测，取第一个真正拿到音频文件的档位。
+        var toneLadder = BuildToneLadder(SelectTone(resource, options.Value.Migu.ToneFlag));
+        SourceUnavailableException? lastFailure = null;
+        foreach (var tone in toneLadder)
+        {
+            var finalUrl = ChangeQuality(pqUrl, tone);
+            var extension = ToneExtensions.TryGetValue(tone, out var ext) ? ext : ".mp3";
+            var outputPath = Path.Combine(outputDirectory, fileBaseName + extension);
+            try
+            {
+                // CDN 同样拦截 .NET HttpClient，走 curl。
+                await CurlDownloadToFileAsync(finalUrl,
+                    new Dictionary<string, string> { ["Referer"] = "https://y.migu.cn/" },
+                    outputPath, TimeSpan.FromSeconds(600), cancellationToken);
+            }
+            catch (SourceUnavailableException exception)
+            {
+                lastFailure = exception;
+                TryDelete(outputPath);
+                continue;
+            }
 
-        // 4) curl 下载音频文件到隔离区（CDN 同样拦截 .NET HttpClient）。
-        await CurlDownloadToFileAsync(finalUrl, new Dictionary<string, string> { ["Referer"] = "https://y.migu.cn/" },
-            outputPath, TimeSpan.FromSeconds(600), cancellationToken);
+            if (!IsPlausibleAudioFile(outputPath))
+            {
+                lastFailure = new SourceUnavailableException($"咪咕 {tone} 档返回内容不是音频文件。");
+                TryDelete(outputPath);
+                continue;
+            }
 
-        return new SourceFileDownload(outputPath, extension.TrimStart('.'), quality);
+            return new SourceFileDownload(outputPath, extension.TrimStart('.'), QualityForTone(tone));
+        }
+
+        throw new SourceUnavailableException(
+            $"咪咕所有音质档均不可下载（{string.Join("/", toneLadder)}）：{lastFailure?.Message}");
+    }
+
+    /// <summary>按配置允许的最高档构造降档链：SQ→HQ→PQ、HQ→PQ、PQ。</summary>
+    private static List<string> BuildToneLadder(string highestTone) => highestTone switch
+    {
+        "SQ" => ["SQ", "HQ", "PQ"],
+        "HQ" => ["HQ", "PQ"],
+        _ => ["PQ"]
+    };
+
+    /// <summary>
+    /// 校验下载结果确实是音频，而不是 CDN 的 404/鉴权错误页。
+    /// 只看文件头魔数：fLaC / ID3 / MP3 帧同步 / OggS / RIFF / ftyp(M4A) / MAC(APE) / wvpk。
+    /// </summary>
+    private static bool IsPlausibleAudioFile(string path)
+    {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            var head = new byte[16];
+            var read = stream.Read(head, 0, head.Length);
+            if (read < 4) return false;
+            var ascii = Encoding.ASCII.GetString(head, 0, Math.Min(read, 4));
+            if (ascii is "fLaC" or "ID3" or "OggS" or "RIFF" or "MAC " or "wvpk") return true;
+            // M4A/MP4：'ftyp' 位于偏移 4。
+            if (read >= 8 && Encoding.ASCII.GetString(head, 4, 4) == "ftyp") return true;
+            // MP3 裸流帧同步：0xFF Ex。
+            return head[0] == 0xFF && (head[1] & 0xE0) == 0xE0;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); }
+        catch (IOException) { }
     }
 
     /// <summary>用 curl.exe 请求 URL 并将响应体作为字节数组返回（用于加密二进制响应）。</summary>
@@ -569,6 +633,10 @@ public sealed partial class MiguSourceProvider(
             RedirectStandardError = true,
         };
         startInfo.ArgumentList.Add("-sS");
+        // --fail：把 4xx/5xx 变成非零退出码。否则咪咕 CDN 的 404 错误页会被当成音频文件
+        // 原样写入 .flac（原实现只检查文件非空），直到 ffprobe 才暴露，且无法自动降档。
+        startInfo.ArgumentList.Add("--fail");
+        startInfo.ArgumentList.Add("--location");
         startInfo.ArgumentList.Add("--max-time");
         startInfo.ArgumentList.Add(((int)timeout.TotalSeconds).ToString());
         startInfo.ArgumentList.Add("--retry");

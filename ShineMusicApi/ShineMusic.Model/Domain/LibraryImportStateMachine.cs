@@ -9,14 +9,17 @@ namespace ShineMusic.Model.Domain;
 /// <summary>导入条目状态流转与可变性判定。</summary>
 public static class LibraryImportStateMachine
 {
-    /// <summary>已发布/已拒绝为不可变状态：PATCH 与 DELETE 均返回 409。</summary>
+    /// <summary>已发布/已拒绝/身份拒绝为不可变状态：PATCH 与 DELETE 均返回 409。</summary>
     public static bool IsImmutable(string status) =>
-        status is LibraryImportItemStatuses.Published or LibraryImportItemStatuses.Rejected;
+        status is LibraryImportItemStatuses.Published
+            or LibraryImportItemStatuses.Rejected
+            or LibraryImportItemStatuses.IdentityRejected;
 
-    /// <summary>终态：已发布、已拒绝、处理失败。只有终态条目可从列表移除（dismiss）。</summary>
+    /// <summary>终态：已发布、已拒绝、身份拒绝、处理失败。只有终态条目可从列表移除（dismiss）。</summary>
     public static bool IsTerminal(string status) =>
         status is LibraryImportItemStatuses.Published
             or LibraryImportItemStatuses.Rejected
+            or LibraryImportItemStatuses.IdentityRejected
             or LibraryImportItemStatuses.ProcessingFailed;
 
     /// <summary>处理中间态：这些状态下不允许丢弃条目（应先等流水线跑完或拒绝）。</summary>
@@ -28,7 +31,7 @@ public static class LibraryImportStateMachine
 
     /// <summary>
     /// 是否允许拒绝/丢弃条目：已发布与处理中间态不允许（与改造前端点判定逐项一致）。
-    /// 注意已拒绝条目允许再次丢弃（端点会幂等地把状态写回 rejected）。
+    /// 注意已拒绝/身份拒绝条目允许再次丢弃（端点会幂等地把状态写回 rejected）。
     /// </summary>
     public static bool CanDiscard(string status) =>
         status != LibraryImportItemStatuses.Published && !IsIntermediate(status);

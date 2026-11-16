@@ -38,6 +38,7 @@ export interface PlaylistImportParseResult {
   coverUrl: string | null
   total: number
   tracks: PlaylistImportPreviewTrack[]
+  snapshotId?: string | null
 }
 
 /** 导入结果 */
@@ -77,8 +78,12 @@ export async function parsePlaylistImport(url: string): Promise<PlaylistImportPa
 }
 
 /** 将解析结果中的未入库曲目加入后台下载队列，不创建用户歌单。 */
-export async function queuePlaylistDownloads(url: string): Promise<PlaylistDownloadQueueResult> {
-  return request<PlaylistDownloadQueueResult>('POST', `${API_PREFIX}/me/playlist-imports/queue`, { url }, {
+export async function queuePlaylistDownloads(
+  url: string,
+  selectedIndices?: number[],
+  snapshotId?: string | null,
+): Promise<PlaylistDownloadQueueResult> {
+  return request<PlaylistDownloadQueueResult>('POST', `${API_PREFIX}/me/playlist-imports/queue`, { url, selectedIndices, snapshotId }, {
     timeoutMs: 120000,
   })
 }

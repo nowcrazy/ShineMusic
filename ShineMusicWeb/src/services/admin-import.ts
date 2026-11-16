@@ -10,6 +10,7 @@
  * - PATCH  /import-items/{id}             （修正元数据：标题/艺人/专辑/曲序/碟序/年份/流派）
  * - POST   /import-items/{id}/publish     （审核通过，正式入库）
  * - DELETE /import-items/{id}             （拒绝，删除隔离区文件）
+ * - POST   /import-items/bulk-review      （批量审核：通过 / 拒绝多个条目）
  */
 import type { ApiPageResult } from '@/types/music'
 import type {
@@ -49,6 +50,11 @@ export interface ImportMetadata {
   lyricsSource: string | null
   /** 歌词匹配置信度 0~1；外部源按相似度打分，其余为 1 */
   lyricsConfidence: number | null
+  releaseDate?: string | null
+  isrc?: string | null
+  albumArtists?: string[] | null
+  originalGenres?: string[] | null
+  fieldAudit?: { field: string; source: string; sourceId: string | null; observedAtUtc: string; manualLocked: boolean; candidateJson?: string | null; candidateSource?: string | null; reason?: string | null }[] | null
 }
 
 /** 转码状态 */
@@ -114,6 +120,8 @@ export const ImportItemStatus = {
   PendingPublication: 'pending_publication',
   Published: 'published',
   Rejected: 'rejected',
+  /** 身份三态闸门拒绝后的终态，不进入后台自动重试扫描 */
+  IdentityRejected: 'identity_rejected',
   ProcessingFailed: 'processing_failed',
 } as const
 
@@ -128,6 +136,7 @@ export const ImportItemStatusLabel: Record<string, string> = {
   pending_publication: 'importStatus.pendingPublication',
   published: 'importStatus.published',
   rejected: 'importStatus.rejected',
+  identity_rejected: 'importStatus.identityRejected',
   processing_failed: 'importStatus.processingFailed',
 }
 
@@ -327,6 +336,10 @@ export async function updateImportItem(
     releaseYear?: number | null
     genres?: string[]
     lyrics?: string | null
+    releaseDate?: string
+    isrc?: string
+    albumArtists?: string[]
+    originalGenres?: string[]
   },
 ): Promise<LibraryImportItem> {
   return http.patch<LibraryImportItem>(`${API_PREFIX}/admin/library/import-items/${itemId}`, update)
@@ -355,6 +368,32 @@ export async function rejectImportItem(itemId: string): Promise<void> {
   return http.delete<void>(`${API_PREFIX}/admin/library/import-items/${itemId}`)
 }
 
+/** 批量审核动作：approve=通过 / reject=拒绝 */
+export type BulkReviewAction = 'approve' | 'reject'
+
+/** POST /import-items/bulk-review 请求体 */
+export interface BulkReviewPayload {
+  itemIds: string[]
+  action: BulkReviewAction
+  /** reject 时必填，会写入审计日志；approve 时可省略 */
+  reason?: string
+}
+
+/** 批量审核中单个条目的执行结果 */
+export interface BulkReviewItemResult {
+  itemId: string
+  displayName: string
+  success: boolean
+  error: string | null
+}
+
+/** POST /import-items/bulk-review 响应体 */
+export interface BulkReviewResult {
+  total: number
+  success: number
+  results: BulkReviewItemResult[]
+}
+
 /**
  * 一键发布所有「自动发布候选」：pending_review + AutoScore ≥ 阈值 + 转码成功 + 非用户上传。
  * 后端逐条走 PublishAsync，失败条目记录原因后继续。
@@ -363,6 +402,19 @@ export async function bulkPublishCandidates(threshold?: number): Promise<ApiBulk
   const query = threshold != null ? `?threshold=${threshold}` : ''
   return http.post<ApiBulkPublishResult>(
     `${API_PREFIX}/admin/library/import-items/bulk-publish-candidates${query}`,
+  )
+}
+
+/**
+ * 批量审核导入条目：一次请求对多个条目执行「通过」或「拒绝」。
+ * - approve：置为元数据已审核 + ready_to_publish
+ * - reject：置为新终态 identity_rejected（不进入后台自动重试扫描），reason 必填并写入审计日志
+ * 与 bulkPublishCandidates 一致，复用统一 http.post（鉴权头 / 401 刷新 / 错误解包由 http 层负责）。
+ */
+export async function bulkReviewImportItems(payload: BulkReviewPayload): Promise<BulkReviewResult> {
+  return http.post<BulkReviewResult>(
+    `${API_PREFIX}/admin/library/import-items/bulk-review`,
+    payload,
   )
 }
 

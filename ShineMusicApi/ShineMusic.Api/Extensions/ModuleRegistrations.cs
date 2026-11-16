@@ -17,6 +17,8 @@ using ShineMusic.Service.Application;
 using ShineMusic.Service.Lyrics;
 using ShineMusic.Service.PlaylistImport;
 using ShineMusic.Service.SourceDownload;
+using ShineMusic.Service.SourceProviders.Adapters;
+using ShineMusic.Service.SourceProviders.Engine;
 
 namespace ShineMusic.Api.Extensions;
 
@@ -32,6 +34,8 @@ public static class ModuleRegistrations
         services.AddSingleton<FfmpegMediaService>();
         services.AddSingleton<AudioMetadataParser>();
         services.AddSingleton<ArtworkFetcher>();
+        services.AddSingleton<ImportMetadataEnricher>();
+        services.AddSingleton<ProviderMetadataEnricher>();
         // 领域端口 → 基础设施实现：用例层只依赖 Model.Ports 中的接口。
         services.AddSingleton<IAudioStorage, LocalAudioStorage>();
         services.AddSingleton<IMediaTranscoder, MediaTranscoderAdapter>();
@@ -50,6 +54,7 @@ public static class ModuleRegistrations
     {
         // 歌词解析器与外部源提供者链。
         services.AddHttpClient(LyricsResolver.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(30));
+        services.AddSingleton<IExternalLyricsProvider, NeteaseLyricsProvider>();
         services.AddSingleton<IExternalLyricsProvider, LrclibLyricsProvider>();
         services.AddSingleton<IExternalLyricsProvider, KuGouLyricsProvider>();
         services.AddSingleton<IExternalLyricsProvider, MiguLyricsProvider>();
@@ -200,8 +205,69 @@ public static class ModuleRegistrations
         services.AddSingleton<IMusicSourceProvider, BilibiliSourceProvider>();
         services.AddScoped<SourceDownloadService>();
         services.AddScoped<SourceDownloadFallbackService>();
+
+        // ===== V2.0 Phase 1：Provider 核心架构 =====
+        // 纯加法注册：只新增服务，不替换任何既有 provider / 下载链路，老链路行为完全不变。
+        services.AddShineMusicProviderFrameworkModule();
         return services;
     }
+
+    /// <summary>
+    /// V2.0 Provider 框架注册（提案 §3.4 / §11 原则 1）。
+    /// 新增音源时只需在本方法内追加一行 <c>AddMusicProvider&lt;NewProvider&gt;()</c>
+    /// 与一段配置，Registry / Orchestrator 无需改动。
+    /// </summary>
+    public static IServiceCollection AddShineMusicProviderFrameworkModule(this IServiceCollection services)
+    {
+        services.AddShineMusicProviderFrameworkCore();
+
+        // IEnumerable<IMusicProvider> 的解析顺序即注册顺序，所有实现必须在本方法内连续注册。
+        // 调度优先级由 SourceDownload:ProviderFramework:Providers:*:Priority 决定（netease 100 / migu 95），
+        // 配置缺失时以这里的注册顺序作为稳定兜底。
+        services.AddMusicProvider<NeteaseProvider>(serviceProvider => new NeteaseProvider(
+            ResolveLegacySource(serviceProvider, "netease"),
+            serviceProvider.GetRequiredService<IOptions<SourceDownloadOptions>>()));
+        services.AddMusicProvider<MiguProvider>(serviceProvider => new MiguProvider(
+            ResolveLegacySource(serviceProvider, "migu"),
+            serviceProvider.GetRequiredService<IOptions<SourceDownloadOptions>>()));
+        // Phase 4：国内音源 V2 适配器（配置层默认禁用，需配置 Cookie/Credentials 后手动启用）。
+        // 注册顺序 = 兜底优先级：酷我 > QQ > 酷狗 > 千千 > 汽水（按独家无损覆盖价值排序）。
+        services.AddMusicProvider<KuwoProvider>(serviceProvider => new KuwoProvider(
+            ResolveLegacySource(serviceProvider, "kuwo"),
+            serviceProvider.GetRequiredService<IOptions<SourceDownloadOptions>>()));
+        services.AddMusicProvider<QqProvider>(serviceProvider => new QqProvider(
+            ResolveLegacySource(serviceProvider, "qq"),
+            serviceProvider.GetRequiredService<IOptions<SourceDownloadOptions>>()));
+        services.AddMusicProvider<KugouProvider>(serviceProvider => new KugouProvider(
+            ResolveLegacySource(serviceProvider, "kugou"),
+            serviceProvider.GetRequiredService<IOptions<SourceDownloadOptions>>()));
+        services.AddMusicProvider<QianqianProvider>(serviceProvider => new QianqianProvider(
+            ResolveLegacySource(serviceProvider, "qianqian"),
+            serviceProvider.GetRequiredService<IOptions<SourceDownloadOptions>>()));
+        services.AddMusicProvider<QishuiProvider>(serviceProvider => new QishuiProvider(
+            ResolveLegacySource(serviceProvider, "qishui"),
+            serviceProvider.GetRequiredService<IOptions<SourceDownloadOptions>>()));
+        services.AddMusicProvider<AudiusProvider>(serviceProvider => new AudiusProvider(
+            ResolveLegacySource(serviceProvider, "audius"),
+            serviceProvider.GetRequiredService<IOptions<SourceDownloadOptions>>()));
+        services.AddMusicProvider<JamendoProvider>(serviceProvider => new JamendoProvider(
+            ResolveLegacySource(serviceProvider, "jamendo"),
+            serviceProvider.GetRequiredService<IOptions<SourceDownloadOptions>>()));
+        services.AddMusicProvider<BilibiliProvider>(serviceProvider => new BilibiliProvider(
+            ResolveLegacySource(serviceProvider, "bilibili"),
+            serviceProvider.GetRequiredService<IOptions<SourceDownloadOptions>>()));
+        services.AddMusicProvider<YouTubeMusicProvider>(serviceProvider => new YouTubeMusicProvider(
+            ResolveLegacySource(serviceProvider, "ytmusic"),
+            serviceProvider.GetRequiredService<IOptions<SourceDownloadOptions>>()));
+        return services;
+    }
+
+    /// <summary>从既有 provider 集合里挑出指定平台；缺失即 fail-fast，避免静默装上半套框架。</summary>
+    private static IMusicSourceProvider ResolveLegacySource(IServiceProvider serviceProvider, string providerName) =>
+        serviceProvider.GetServices<IMusicSourceProvider>().FirstOrDefault(provider =>
+            string.Equals(provider.Provider, providerName, StringComparison.OrdinalIgnoreCase))
+        ?? throw new InvalidOperationException(
+            $"V2 Provider 适配失败：DI 中未找到 IMusicSourceProvider.Provider='{providerName}'。");
 
     /// <summary>Library 模块：曲库查询编排、推荐策略与推荐服务。</summary>
     public static IServiceCollection AddShineMusicLibraryModule(this IServiceCollection services)

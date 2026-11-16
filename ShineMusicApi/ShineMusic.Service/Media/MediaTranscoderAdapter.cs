@@ -17,7 +17,10 @@ public sealed class MediaTranscoderAdapter(FfmpegMediaService inner) : IMediaTra
             probed.Codec,
             probed.BitrateKbps,
             probed.DurationMs,
-            probed.FormatNames);
+            probed.FormatNames,
+            probed.SampleRateHz,
+            probed.BitsPerSample,
+            probed.Channels);
     }
 
     /// <inheritdoc />

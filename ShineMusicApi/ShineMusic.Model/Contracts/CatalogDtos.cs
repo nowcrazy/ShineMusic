@@ -61,6 +61,10 @@ public sealed record AudioDto(string Container, string Codec, int? BitrateKbps);
 /// <param name="DurationMs">曲目时长，单位毫秒；探测失败时为 null。</param>
 /// <param name="ArtworkUrl">封面图片地址；无封面时为 null。</param>
 /// <param name="Audio">可播放音频信息；未完成转码或当前功能开关不允许播放时为 null。</param>
+/// <param name="ReleaseDate">完整发行日期。</param>
+/// <param name="Isrc">ISRC。</param>
+/// <param name="AlbumArtists">专辑艺人。</param>
+/// <param name="OriginalGenres">原始流派。</param>
 public sealed record TrackDto(
     Guid Id,
     string Title,
@@ -72,7 +76,11 @@ public sealed record TrackDto(
     IReadOnlyList<string> Genres,
     long? DurationMs,
     string? ArtworkUrl,
-    AudioDto? Audio);
+    AudioDto? Audio,
+    string? ReleaseDate = null,
+    string? Isrc = null,
+    IReadOnlyList<string>? AlbumArtists = null,
+    IReadOnlyList<string>? OriginalGenres = null);
 
 /// <summary>
 /// 艺人详情页数据。

@@ -51,7 +51,8 @@ public static class LibraryImportDtoMapper
             item.ArtworkStorageKey is not null,
             item.Lyrics,
             item.LyricsSource,
-            item.LyricsConfidence),
+            item.LyricsConfidence, item.ReleaseDate, item.Isrc,
+            MetadataMerge.List(item.AlbumArtistsJson), MetadataMerge.List(item.OriginalGenresJson), MetadataMerge.Audit(item.MetadataAuditJson)),
         new ImportTranscodeDto(item.TranscodeStatus, item.TranscodeFormat, item.TranscodeBitrateKbps, item.ErrorCode),
         DeserializeList(item.WarningsJson).Concat(item.ErrorCode is null ? [] : [item.ErrorCode]).ToArray(),
         AsUtc(item.CreatedAtUtc),
@@ -91,12 +92,17 @@ public static class LibraryImportDtoMapper
                     TryGet(seg, "reason", out var r) ? r.GetString() ?? string.Empty : string.Empty);
             }
 
+            var identity = ReadSeg(root, "identity");
             var quality = ReadSeg(root, "quality");
             var metadata = ReadSeg(root, "metadata");
             var lyrics = ReadSeg(root, "lyrics");
             if (quality is null || metadata is null || lyrics is null) return null;
 
-            return new ImportScoreBreakdownDto(total.GetDouble(), quality, metadata, lyrics);
+            // identity 维度是 V2 Phase 2 新增的，旧数据可能没有——缺失时默认满分（40），
+            // 因为旧数据是在身份闸门改为评分维度之前写入的，身份判定当时不影响评分。
+            identity ??= new ScoreSegmentDto(40, 40, "历史数据：身份维度未评估（按满分计）");
+
+            return new ImportScoreBreakdownDto(total.GetDouble(), identity, quality, metadata, lyrics);
         }
         catch { return null; }
     }

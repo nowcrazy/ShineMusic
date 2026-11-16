@@ -6,12 +6,14 @@
 // 服务不感知 HttpContext：错误以结果对象返回，由调用方映射为 HTTP 响应或后台日志。
 
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Options;
 using ShineMusic.Model.Contracts;
 using ShineMusic.Model.Domain;
 using ShineMusic.Model.Entities;
 using ShineMusic.Model.Options;
 using ShineMusic.Repository.Data;
+using ShineMusic.Service.SourceDownload;
 using SqlSugar;
 using static ShineMusic.Service.ImportFormatting;
 
@@ -56,7 +58,6 @@ public sealed class ImportPublishService(
     IOptions<SongRequestFulfillmentOptions> fulfillmentOptions,
     QuarantineStoragePaths quarantinePaths,
     LibraryStoragePaths libraryPaths,
-    ArtworkFetcher artworkFetcher,
     ILogger<ImportPublishService> logger)
 {
     /// <summary>
@@ -73,6 +74,8 @@ public sealed class ImportPublishService(
         // 闸门与必填字段判定统一交给领域层，人工发布与后台自动发布共用同一份规则。
         if (!PublishGate.IsEligible(item))
             return ImportPublishResult.Failure(ImportPublishErrorKind.Conflict, "The item must be transcoded successfully and reviewed before publishing.");
+        if (context.IsAutomatic && MetadataMerge.HasConflicts(item))
+            return ImportPublishResult.Failure(ImportPublishErrorKind.Conflict, "Metadata conflicts require manual review.");
 
         // 发布前完整性校验：歌名、艺人、时长缺一不可；歌词是可选内容
         // （用户上传往往没有歌词，缺失时播放器显示“暂无歌词”，不影响播放与上架）。
@@ -89,7 +92,10 @@ public sealed class ImportPublishService(
         // 原始下载文件可能被后台任务的重复投递/去重清理误删（同一个 taskId 复用 sourcedl/<id>.* 文件名），
         // 但转码产物仍是完整可播放的音频。此时用转码产物兜底作为 original 资产，
         // 避免条目永久卡在 ready_to_publish、发布恒返回 404（2026-11-10 下游链路实测修复）。
-        if (!quarantinePaths.TryResolve(item.SourceStorageKey, out var sourcePath) || !System.IO.File.Exists(sourcePath))
+        // 同时记录原文件是否真的存在：兜底场景下 original 资产里装的是 m4a，不能按原始容器标为播放主资产。
+        var originalFileAvailable = quarantinePaths.TryResolve(item.SourceStorageKey, out var sourcePath)
+            && System.IO.File.Exists(sourcePath);
+        if (!originalFileAvailable)
             sourcePath = transcodedPath;
 
         // 审计先暂存，随发布事务一并提交；发布失败返回时丢弃（与原「仅 SaveChanges 才落库」语义一致）。
@@ -200,6 +206,11 @@ public sealed class ImportPublishService(
             TrackNumber = item.TrackNumber,
             DiscNumber = item.DiscNumber,
             ReleaseYear = item.ReleaseYear,
+            ReleaseDate = item.ReleaseDate,
+            Isrc = item.Isrc,
+            AlbumArtistsJson = item.AlbumArtistsJson,
+            OriginalGenresJson = item.OriginalGenresJson,
+            MetadataAuditJson = item.MetadataAuditJson,
             DurationMs = item.DurationMs,
             AddedAtUtc = DateTimeOffset.UtcNow,
             PublishedAt = DateTimeOffset.UtcNow,
@@ -225,25 +236,6 @@ public sealed class ImportPublishService(
         Directory.CreateDirectory(Path.GetDirectoryName(finalPlaybackPath)!);
         try
         {
-            // —— iTunes 元数据获取：只要有艺人就调一次，无论有没有内嵌封面 ——
-            ItunesMetadataResult? itunesResult = null;
-            var firstArtist = artistNames.FirstOrDefault();
-            if (!string.IsNullOrWhiteSpace(firstArtist))
-            {
-                var artworkDir = libraryPaths.TryResolve("artwork/.placeholder", out var placeholderPath)
-                    ? Path.GetDirectoryName(placeholderPath)!
-                    : Path.Combine(Path.GetDirectoryName(finalOriginalPath)!, "..", "..", "artwork");
-                artworkDir = Path.GetFullPath(artworkDir);
-
-                itunesResult = await artworkFetcher.FetchAsync(
-                    firstArtist,
-                    item.AlbumTitle,
-                    item.Title,
-                    "artwork",
-                    artworkDir,
-                    cancellationToken);
-            }
-
             // 封面处理：内嵌封面优先，iTunes 封面兜底
             if (hasEmbeddedArtwork)
             {
@@ -256,65 +248,6 @@ public sealed class ImportPublishService(
                     copiedPaths.Add(artworkDestination);
                     track.Artwork = new Artwork { Id = artworkId, StorageKey = artworkKey, ContentType = GetImageContentType(extension) };
                 }
-            }
-            else if (itunesResult is { Success: true, StorageKey: not null })
-            {
-                if (libraryPaths.TryResolve(itunesResult.StorageKey, out var fetchedPath) && System.IO.File.Exists(fetchedPath))
-                {
-                    copiedPaths.Add(fetchedPath);
-                    track.Artwork = new Artwork
-                    {
-                        Id = artworkId,
-                        StorageKey = itunesResult.StorageKey,
-                        ContentType = itunesResult.ContentType ?? "image/jpeg"
-                    };
-                }
-            }
-
-            // —— iTunes 元数据回填：只补空字段，不覆盖用户已手动填写的 ——
-            if (itunesResult is { Success: true })
-            {
-                // 流派：ImportItem.GenresJson 为空时，把 iTunes 的英文流派经 GenreMoodMapper 映射成中文 mood 标签
-                var currentGenres = PublishGate.DeserializeList(item.GenresJson);
-                if (currentGenres.Count == 0 && !string.IsNullOrWhiteSpace(itunesResult.Genre))
-                {
-                    var mood = GenreMoodMapper.Map(itunesResult.Genre);
-                    if (mood is not null)
-                    {
-                        item.GenresJson = JsonSerializer.Serialize(new[] { mood });
-                        genreNames.Add(mood);
-                    }
-                }
-
-                // 专辑名：空时回填
-                if (string.IsNullOrWhiteSpace(item.AlbumTitle) && !string.IsNullOrWhiteSpace(itunesResult.AlbumTitle))
-                {
-                    item.AlbumTitle = itunesResult.AlbumTitle.Trim();
-                }
-
-                // 发行年：空时回填
-                if (!item.ReleaseYear.HasValue && itunesResult.ReleaseYear.HasValue)
-                {
-                    item.ReleaseYear = itunesResult.ReleaseYear.Value;
-                    track.ReleaseYear = itunesResult.ReleaseYear.Value;
-                }
-
-                if (!item.TrackNumber.HasValue && itunesResult.TrackNumber is > 0)
-                {
-                    item.TrackNumber = itunesResult.TrackNumber.Value;
-                    track.TrackNumber = itunesResult.TrackNumber.Value;
-                }
-
-                if (!item.DiscNumber.HasValue && itunesResult.DiscNumber is > 0)
-                {
-                    item.DiscNumber = itunesResult.DiscNumber.Value;
-                    track.DiscNumber = itunesResult.DiscNumber.Value;
-                }
-
-                if (!item.ItunesTrackId.HasValue && itunesResult.ItunesTrackId is > 0)
-                    item.ItunesTrackId = itunesResult.ItunesTrackId;
-                if (string.IsNullOrWhiteSpace(item.ItunesCountry) && !string.IsNullOrWhiteSpace(itunesResult.Country))
-                    item.ItunesCountry = itunesResult.Country.Trim();
             }
             System.IO.File.Copy(sourcePath, finalOriginalPath, overwrite: false);
             copiedPaths.Add(finalOriginalPath);
@@ -389,6 +322,11 @@ public sealed class ImportPublishService(
                 };
             }
 
+            // 音质优先（2026-11-12）：原实现固定把 192kbps 转码副本设为 primary，
+            // 导致 320k MP3 / 无损 FLAC 下载下来后播放端仍按 192kbps 输出。
+            // 现在由 PlaybackMediaPolicy 判定：原始文件存在、容器可流、且音质不低于转码副本时，
+            // 让原始文件当播放主资产；转码副本保留为兼容副本。
+            var preferOriginal = PlaybackMediaPolicy.ShouldPreferOriginal(item, originalFileAvailable);
             var originalAsset = new MediaAsset
             {
                 Id = assetId,
@@ -399,7 +337,7 @@ public sealed class ImportPublishService(
                 ContentHash = item.ContentHash,
                 BitrateKbps = item.BitrateKbps,
                 IsPublished = true,
-                IsPrimary = false
+                IsPrimary = preferOriginal
             };
             var playbackAsset = new MediaAsset
             {
@@ -410,8 +348,67 @@ public sealed class ImportPublishService(
                 ContentHash = $"transcoded:{item.Id:N}",
                 BitrateKbps = item.TranscodeBitrateKbps,
                 IsPublished = true,
-                IsPrimary = true
+                IsPrimary = !preferOriginal
             };
+
+            // —— 交付契约（音源质量稳定性策略 §8 第 1 步）——
+            // 发布前把「用户将实际拿到什么」写成显式承诺，并对主资产做离线验证。
+            // 失败直接阻断发布，不让低码率 / 错容器 / 身份不符的条目静默到达用户；
+            // 不自动回滚到 192k 兼容副本（§5.4），也不改状态机（条目保持原状态可重试）。
+            // 真实 HTTP 回读（L3a）留给 K5 启动引导接缝方案，见 docs 文档 §12.4。
+            var primaryStorageKey = preferOriginal ? originalKey : playbackKey;
+            var primarySourcePath = preferOriginal ? sourcePath : transcodedPath;
+            var primaryContainer = preferOriginal ? item.Container : "m4a";
+            var candidateArtists = PublishGate.DeserializeList(item.ArtistsJson);
+            var candidateIdentity = new TrackIdentity(item.Title ?? string.Empty, candidateArtists, item.DurationMs);
+            // V2.0 Phase 2：身份比对从「自评（Expected==Resolved）」改为真实候选 vs 期望。
+            // 期望身份来源：ExternalDownloadTask 的快照（歌单导入时从 pending 行复制的原曲信息）。
+            // 无关联任务时回退为自评（Expected==Candidate），身份维度给 Matched。
+            var expectedIdentity = await ResolveExpectedIdentityAsync(item, cancellationToken);
+            var identityDecision = TrackIdentityMatcher.Evaluate(expectedIdentity, candidateIdentity);
+            var contract = new DeliveryContract(
+                item.Id,
+                track.Id,
+                expectedIdentity,
+                candidateIdentity,
+                identityDecision.Verdict,
+                identityDecision.ReasonCode,
+                DeliveryContractVerifier.AutomaticPublishMinimumBitrateKbps,
+                primaryStorageKey,
+                PlaybackMediaPolicy.TryGetContentType(primaryContainer),
+                preferOriginal ? item.BitrateKbps : item.TranscodeBitrateKbps,
+                System.IO.File.Exists(primarySourcePath) ? new FileInfo(primarySourcePath).Length : 0,
+                item.ContentHash,
+                originalFileAvailable);
+            var verification = DeliveryContractVerifier.Verify(contract, primarySourcePath, item.TranscodeBitrateKbps);
+            if (!verification.IsAccepted)
+            {
+                logger.LogWarning("Delivery contract rejected for import item {ItemId}: {Failures}",
+                    item.Id, string.Join(" | ", verification.Failures));
+                foreach (var path in copiedPaths) TryDelete(path);
+                // 失败留痕：消息与日志逐条列出差异；条目不改状态、不落库，管理员修正后可重发。
+                return ImportPublishResult.Failure(ImportPublishErrorKind.Conflict,
+                    $"交付契约未通过：{string.Join("；", verification.Failures)}");
+            }
+
+            // 验证结果零 DDL 落库：WarningsJson 记机器可读代码，AutoScoreBreakdownJson 记明细，
+            // 供审核页展示与后续「未验证占比 / 契约失败数」指标聚合（§2 / §7.3）。
+            item.WarningsJson = AppendWarning(item.WarningsJson, verification.ReasonCode);
+            foreach (var warning in verification.Warnings)
+                item.WarningsJson = AppendWarning(item.WarningsJson, warning);
+            item.AutoScoreBreakdownJson = WithVerification(item.AutoScoreBreakdownJson, new
+            {
+                reason = verification.ReasonCode,
+                accepted = verification.IsAccepted,
+                effectiveBitrateFloorKbps = verification.EffectiveBitrateFloorKbps,
+                primaryStorageKey = contract.PrimaryStorageKey,
+                expectedContentType = contract.ExpectedContentType,
+                expectedSizeBytes = contract.ExpectedSizeBytes,
+                probedBitrateKbps = contract.ProbedBitrateKbps,
+                originalFileAvailable = contract.OriginalFileAvailable,
+                warnings = verification.Warnings,
+                failures = verification.Failures
+            });
 
             // SqlSugar 不做导航属性外键修正：曲目封面外键需显式回填。
             track.ArtworkId = track.Artwork?.Id;
@@ -556,10 +553,14 @@ public sealed class ImportPublishService(
             LibraryImportItemStatuses.PendingPublication or
             LibraryImportItemStatuses.Published or
             LibraryImportItemStatuses.Rejected or
+            LibraryImportItemStatuses.IdentityRejected or
             LibraryImportItemStatuses.ProcessingFailed)))
             return;
 
-        var hasErrors = statuses.Any(status => status is LibraryImportItemStatuses.ProcessingFailed or LibraryImportItemStatuses.Rejected);
+        var hasErrors = statuses.Any(status => status is
+            LibraryImportItemStatuses.ProcessingFailed or
+            LibraryImportItemStatuses.Rejected or
+            LibraryImportItemStatuses.IdentityRejected);
         var batchStatus = hasErrors ? LibraryImportStatuses.CompletedWithErrors : LibraryImportStatuses.Completed;
         await db.Updateable<LibraryImportBatch>()
             .SetColumns(batch => batch.Status == batchStatus)
@@ -588,9 +589,66 @@ public sealed class ImportPublishService(
             ? string.Empty
             : System.Text.RegularExpressions.Regex.Replace(value, @"\s+", " ").Trim().ToLowerInvariant();
 
+    /// <summary>向 WarningsJson 追加一个机器可读代码（去重；历史非数组内容退化为重新累积）。</summary>
+    internal static string AppendWarning(string? warningsJson, string code)
+    {
+        List<string> codes;
+        try
+        {
+            codes = string.IsNullOrWhiteSpace(warningsJson)
+                ? []
+                : JsonSerializer.Deserialize<List<string>>(warningsJson) ?? [];
+        }
+        catch (JsonException) { codes = []; }
+        if (!codes.Contains(code, StringComparer.Ordinal))
+            codes.Add(code);
+        return JsonSerializer.Serialize(codes);
+    }
+
+    /// <summary>把 verification 节点并入评分分项 JSON（零 DDL，复用既有列）。</summary>
+    internal static string WithVerification(string? breakdownJson, object verification)
+    {
+        JsonObject root;
+        try
+        {
+            root = string.IsNullOrWhiteSpace(breakdownJson)
+                ? new JsonObject()
+                : JsonNode.Parse(breakdownJson) as JsonObject ?? new JsonObject();
+        }
+        catch (JsonException) { root = new JsonObject(); }
+        root["verification"] = JsonSerializer.SerializeToNode(verification);
+        return root.ToJsonString();
+    }
+
     private static void TryDelete(string path)
     {
         try { if (System.IO.File.Exists(path)) System.IO.File.Delete(path); }
         catch (IOException) { }
+    }
+
+    /// <summary>
+    /// 反查期望身份（V2.0 Phase 2 评分重构）。
+    /// 期望身份来源：ExternalDownloadTask 的 Title/ArtistsJson/DurationMs（歌单导入时从 pending 行复制的原曲信息）。
+    /// 无关联任务或快照缺失时回退为导入条目自身的身份（自评 Matched）。
+    /// </summary>
+    private async Task<TrackIdentity> ResolveExpectedIdentityAsync(
+        LibraryImportItem item, CancellationToken cancellationToken)
+    {
+        var taskSnapshot = await db.Queryable<ExternalDownloadTask>()
+            .Where(task => task.ImportItemId == item.Id)
+            .Select(task => new { task.Title, task.ArtistsJson, task.DurationMs,
+                task.ExpectedTitle, task.ExpectedArtistsJson, task.ExpectedDurationMs, task.ExpectedAlbumTitle })
+            .FirstAsync(cancellationToken);
+        if (taskSnapshot is not null && !string.IsNullOrWhiteSpace(taskSnapshot.ExpectedTitle ?? taskSnapshot.Title))
+        {
+            var expectedArtists = PublishGate.DeserializeList(taskSnapshot.ExpectedArtistsJson ?? taskSnapshot.ArtistsJson);
+            if (expectedArtists.Count > 0)
+                return new TrackIdentity(taskSnapshot.ExpectedTitle ?? taskSnapshot.Title!, expectedArtists,
+                    taskSnapshot.ExpectedTitle is not null ? taskSnapshot.ExpectedDurationMs : taskSnapshot.DurationMs,
+                    taskSnapshot.ExpectedAlbumTitle);
+        }
+        // 回退：无期望身份时用候选身份自评（Matched）。
+        var fallbackArtists = PublishGate.DeserializeList(item.ArtistsJson);
+        return new TrackIdentity(item.Title ?? string.Empty, fallbackArtists, item.DurationMs);
     }
 }

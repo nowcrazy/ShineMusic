@@ -104,6 +104,20 @@ public static class SqlSugarSchemaBootstrap
         EnsureColumn(db, logger, "external_download_tasks", ToSnakeCase(nameof(ShineMusic.Model.Entities.ExternalDownloadTask.ReleaseYear)), "integer");
         EnsureColumn(db, logger, "user_playlist_pending_tracks", "search_diagnostics_json", "text");
         EnsureColumn(db, logger, "playlist_download_queue_items", "search_diagnostics_json", "text");
+        // 元数据与导入身份升级：仅增加可空列，兼容存量数据，不重写既有列。
+        foreach (var table in new[] { "tracks", "library_import_items" })
+        {
+            EnsureColumn(db, logger, table, "release_date");
+            EnsureColumn(db, logger, table, "isrc");
+            EnsureColumn(db, logger, table, "album_artists_json", "text");
+            EnsureColumn(db, logger, table, "original_genres_json", "text");
+            EnsureColumn(db, logger, table, "metadata_audit_json", "text");
+        }
+        EnsureColumn(db, logger, "user_playlists", "import_snapshot_json", "text");
+        EnsureColumn(db, logger, "external_download_tasks", "expected_title", "text");
+        EnsureColumn(db, logger, "external_download_tasks", "expected_artists_json", "text");
+        EnsureColumn(db, logger, "external_download_tasks", "expected_album_title", "text");
+        EnsureColumn(db, logger, "external_download_tasks", "expected_duration_ms", "bigint");
 
         // 存量库：details_json 早期由 CodeFirst 默认建为 varchar(255)，写入完整请求快照会触发
         // PG 22001（推荐策略保存 500 的根因）。varchar→text 在 PG 中二进制兼容、不重写表，幂等升级一次。

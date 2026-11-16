@@ -295,12 +295,42 @@ public static class ServiceCollectionExtensions
                 "SourceDownload:Jamendo:ClientId is required when Jamendo is enabled.")
             .Validate(options => options.AutoPublishThreshold is >= 0 and <= 100,
                 "SourceDownload:AutoPublishThreshold must be between 0 and 100.")
+            // 评分权重逐项配置化（用户追加裁决）：四项必须非负且合计 100，
+            // 否则「总分 100」与阈值 90 的语义会漂移，启动即拒绝。
+            .Validate(options => options.ScoreWeights.AllNonNegative && options.ScoreWeights.Total == 100,
+                "SourceDownload:ScoreWeights 的四项分值必须非负且合计 100（Identity/Quality/Metadata/Lyrics）。")
+            // 质量闸门不变量：身份 Rejected 或低码率（<256kbps）的理论总分上限由当前权重动态推导
+            // = max(Identity, Quality) + Metadata + Lyrics（默认 40+15+5=60）。
+            // 阈值若被误调到该上限及以下，身份不符或低质量文件会重新获得自动发布资格。
+            .Validate(options => !options.AutoPublishEnabled
+                || options.AutoPublishThreshold > options.ScoreWeights.LowQualityCeiling,
+                "SourceDownload:AutoPublishThreshold must be greater than ScoreWeights.LowQualityCeiling " +
+                "(max(Identity,Quality)+Metadata+Lyrics), otherwise identity-rejected or sub-256kbps audio can be auto-published.")
+            // 咪咕档位只允许 PQ/HQ/SQ；拼错时原实现会静默按 PQ 取流，属于典型的「配置漂移」。
+            .Validate(options => !options.Migu.Enabled
+                || new[] { "PQ", "HQ", "SQ" }.Contains(options.Migu.ToneFlag, StringComparer.OrdinalIgnoreCase),
+                "SourceDownload:Migu:ToneFlag must be one of PQ / HQ / SQ.")
             .Validate(options => options.Download.MaxConcurrentDownloads is >= 1 and <= 4,
                 "SourceDownload:Download:MaxConcurrentDownloads must be between 1 and 4.")
             .Validate(options => options.YtDlp.SearchTimeoutSeconds is >= 10 and <= 300,
                 "SourceDownload:YtDlp:SearchTimeoutSeconds must be between 10 and 300.")
             .Validate(options => options.YtDlp.MetadataTimeoutSeconds is >= 5 and <= 120,
                 "SourceDownload:YtDlp:MetadataTimeoutSeconds must be between 5 and 120.")
+            // ── V2.0 Phase 1：Provider 框架配置不变量（失败即拒绝启动，避免静默退化）──
+            .Validate(options => options.ProviderFramework.Search.TotalBudgetSeconds is >= 1 and <= 300,
+                "SourceDownload:ProviderFramework:Search:TotalBudgetSeconds must be between 1 and 300.")
+            .Validate(options => options.ProviderFramework.Search.ProviderTimeoutSeconds is >= 1 and <= 60,
+                "SourceDownload:ProviderFramework:Search:ProviderTimeoutSeconds must be between 1 and 60.")
+            .Validate(options => options.ProviderFramework.Search.ProviderTimeoutSeconds
+                                 <= options.ProviderFramework.Search.MaxProviderTimeoutSeconds,
+                "SourceDownload:ProviderFramework:Search:ProviderTimeoutSeconds must not exceed MaxProviderTimeoutSeconds.")
+            .Validate(options => options.ProviderFramework.Search.MaxConcurrentProviders is >= 1 and <= 16,
+                "SourceDownload:ProviderFramework:Search:MaxConcurrentProviders must be between 1 and 16.")
+            .Validate(options => options.ProviderFramework.Search.MaxResultsPerProvider is >= 1 and <= 50,
+                "SourceDownload:ProviderFramework:Search:MaxResultsPerProvider must be between 1 and 50.")
+            .Validate(options => options.ProviderFramework.HealthCheck.RecoverySeconds
+                                 <= options.ProviderFramework.HealthCheck.MaxRecoverySeconds,
+                "SourceDownload:ProviderFramework:HealthCheck:RecoverySeconds must not exceed MaxRecoverySeconds.")
             .ValidateOnStart();
         return services;
     }
@@ -378,6 +408,8 @@ public static class ServiceCollectionExtensions
             services.AddHostedService<ShineMusic.Tasks.LibraryImportConsumerService>();
             services.AddHostedService<ShineMusic.Tasks.SourceDownloadRetrySweepService>();
             services.AddHostedService<ShineMusic.Tasks.LibraryImportRetrySweepService>();
+            // Phase 5：Provider 健康监控器（自动熔断恢复），与音源调用在同一进程。
+            services.AddHostedService<ShineMusic.Service.SourceDownload.ProviderHealthMonitor>();
         }
         if (runNonMedia)
         {

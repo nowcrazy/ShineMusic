@@ -145,6 +145,28 @@ export interface ApiBulkPublishResult {
   items: readonly ApiBulkPublishItemResult[]
 }
 
+/** 来源：`ShineMusicApi/ShineMusic.Model/Contracts/LibraryImportDtos.cs` */
+export interface ApiBulkReviewItemResult {
+  itemId: string
+  displayName: string
+  success: boolean
+  error?: string | null
+}
+
+/** 来源：`ShineMusicApi/ShineMusic.Model/Contracts/LibraryImportDtos.cs` */
+export interface ApiBulkReviewRequest {
+  itemIds: readonly string[]
+  action: string
+  reason?: string | null
+}
+
+/** 来源：`ShineMusicApi/ShineMusic.Model/Contracts/LibraryImportDtos.cs` */
+export interface ApiBulkReviewResult {
+  total: number
+  success: number
+  results: readonly ApiBulkReviewItemResult[]
+}
+
 /** 来源：`ShineMusicApi/ShineMusic.Model/Contracts/ProfileDtos.cs` */
 export interface ApiChangePassword {
   currentPassword: string
@@ -223,6 +245,7 @@ export interface ApiCreateSourceDownloadTasks {
   providerTrackIds?: readonly string[] | null
   metadata?: Record<string, ApiSourceSearchItem> | null
   candidates?: readonly ApiSourceSearchItem[] | null
+  expectedTrack?: ApiSourceExpectedTrack | null
 }
 
 /** 来源：`ShineMusicApi/ShineMusic.Model/Contracts/SourceDownloadDtos.cs` */
@@ -318,11 +341,17 @@ export interface ApiImportMetadata {
   lyrics?: string | null
   lyricsSource?: string | null
   lyricsConfidence?: number | null
+  releaseDate?: string | null
+  isrc?: string | null
+  albumArtists?: readonly string[] | null
+  originalGenres?: readonly string[] | null
+  fieldAudit?: readonly ApiMetadataFieldAudit[] | null
 }
 
 /** 来源：`ShineMusicApi/ShineMusic.Model/Contracts/LibraryImportDtos.cs` */
 export interface ApiImportScoreBreakdown {
   total: number
+  identity: ApiScoreSegment
   quality: ApiScoreSegment
   metadata: ApiScoreSegment
   lyrics: ApiScoreSegment
@@ -488,6 +517,19 @@ export interface ApiMessageQueueTaskList {
   items: readonly ApiMessageQueueTask[]
 }
 
+/** 来源：`ShineMusicApi/ShineMusic.Model/Contracts/MetadataAuditDtos.cs` */
+export interface ApiMetadataFieldAudit {
+  field: string
+  valueJson?: string | null
+  source: string
+  sourceId?: string | null
+  observedAtUtc: string
+  manualLocked: boolean
+  candidateJson?: string | null
+  candidateSource?: string | null
+  reason?: string | null
+}
+
 /** 来源：`ShineMusicApi/ShineMusic.Model/Contracts/CatalogDtos.cs` */
 export interface ApiMusicHome {
   featured?: ApiTrack | null
@@ -560,6 +602,8 @@ export interface ApiPlaylistDownloadQueue {
 /** 来源：`ShineMusicApi/ShineMusic.Api/Controllers/PlaylistImportController.cs` */
 export interface ApiPlaylistImportParseRequest {
   url?: string | null
+  selectedIndices?: readonly number[] | null
+  snapshotId?: string | null
 }
 
 /** 来源：`ShineMusicApi/ShineMusic.Api/Controllers/PlaylistImportController.cs` */
@@ -569,6 +613,7 @@ export interface ApiPlaylistImportParseResponse {
   coverUrl?: string | null
   total: number
   tracks: readonly ApiPlaylistImportPreviewTrack[]
+  snapshotId?: string | null
 }
 
 /** 来源：`ShineMusicApi/ShineMusic.Api/Controllers/PlaylistImportController.cs` */
@@ -579,6 +624,33 @@ export interface ApiPlaylistImportPreviewTrack {
   durationMs?: number | null
   matched: boolean
   matchedTrackId?: string | null
+}
+
+/** 来源：`ShineMusicApi/ShineMusic.Model/Contracts/PlaylistImportProgressDtos.cs` */
+export interface ApiPlaylistImportProgress {
+  playlistId: string
+  originalCount?: number | null
+  linkedCount: number
+  pendingCount: number
+  originalSnapshotJson?: string | null
+  items: readonly ApiPlaylistImportProgressItem[]
+}
+
+/** 来源：`ShineMusicApi/ShineMusic.Model/Contracts/PlaylistImportProgressDtos.cs` */
+export interface ApiPlaylistImportProgressItem {
+  position: number
+  title: string
+  sourcePlatform: string
+  sourceTrackId?: string | null
+  sourceUrl?: string | null
+  status: string
+  downloadTaskId?: string | null
+  downloadStatus?: string | null
+  importItemId?: string | null
+  importStatus?: string | null
+  errorCode?: string | null
+  errorMessage?: string | null
+  searchDiagnosticsJson?: string | null
 }
 
 /** 来源：`ShineMusicApi/ShineMusic.Api/Controllers/PlaylistImportController.cs` */
@@ -748,6 +820,48 @@ export interface ApiSongRequestTimelineItem {
   actorKind: string
   note?: string | null
   createdAt: string
+}
+
+/** 来源：`ShineMusicApi/ShineMusic.Model/Contracts/SourceDownloadDtos.cs` */
+export interface ApiSourceExpectedTrack {
+  title: string
+  artists: readonly string[]
+  albumTitle?: string | null
+  durationMs?: number | null
+}
+
+/** 来源：`ShineMusicApi/ShineMusic.Model/Contracts/SourceProviderDtos.cs` */
+export interface ApiSourceMetadataField {
+  field: string
+  search: ApiSourceMetadataFieldOrigin
+  detail: ApiSourceMetadataFieldOrigin
+}
+
+/** 来源：`ShineMusicApi/ShineMusic.Model/Contracts/SourceProviderDtos.cs` */
+export interface ApiSourceMetadataFieldOrigin {
+  supported: boolean
+  source: string
+  meaning: string
+}
+
+/** 来源：`ShineMusicApi/ShineMusic.Model/Contracts/SourceProviderDtos.cs` */
+export interface ApiSourceProviderAbility {
+  implemented: boolean
+  enabled: boolean
+  status: string
+  evidence?: string | null
+}
+
+/** 来源：`ShineMusicApi/ShineMusic.Model/Contracts/SourceProviderDtos.cs` */
+export interface ApiSourceProvider {
+  provider: string
+  priority: number
+  enabled: boolean
+  disabledReason?: string | null
+  metadata: ApiSourceProviderAbility
+  search: ApiSourceProviderAbility
+  download: ApiSourceProviderAbility
+  metadataFields: readonly ApiSourceMetadataField[]
 }
 
 /** 来源：`ShineMusicApi/ShineMusic.Model/Contracts/SourceDownloadDtos.cs` */
@@ -922,6 +1036,10 @@ export interface ApiTrack {
   durationMs?: number | null
   artworkUrl?: string | null
   audio?: ApiAudio | null
+  releaseDate?: string | null
+  isrc?: string | null
+  albumArtists?: readonly string[] | null
+  originalGenres?: readonly string[] | null
 }
 
 /** 来源：`ShineMusicApi/ShineMusic.Model/Contracts/SourceDownloadDtos.cs` */
@@ -1003,6 +1121,10 @@ export interface ApiUpdateImportItem {
   genres?: readonly string[] | null
   lyrics?: string | null
   songRequestId?: string | null
+  releaseDate?: string | null
+  isrc?: string | null
+  albumArtists?: readonly string[] | null
+  originalGenres?: readonly string[] | null
 }
 
 /** 来源：`ShineMusicApi/ShineMusic.Model/Contracts/CatalogDtos.cs` */

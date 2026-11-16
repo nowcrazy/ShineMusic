@@ -9,6 +9,7 @@ import { Download, Refresh, Search } from '@element-plus/icons-vue'
 import {
   createDownloadTasks,
   getDownloadTasks,
+  getSourceProviders,
   retryDownloadTask,
   searchSources,
   switchSource,
@@ -20,7 +21,7 @@ import {
 } from '@/services/admin-source-download'
 import { describeError } from '@/services/errors'
 import { formatTime } from '@/utils/format'
-import type { ApiSourceProviderError } from '@/types/api.generated'
+import type { ApiSourceProvider, ApiSourceProviderError } from '@/types/api.generated'
 
 const providerOptions: { value: SourceProviderFilter; label: string }[] = [
   { value: 'all', label: '全部平台' },
@@ -91,6 +92,10 @@ const searchForm = reactive({
   limit: 20,
 })
 const searching = ref(false)
+const providerCatalog = ref<ApiSourceProvider[]>([])
+function canSelectDownload(item: SourceSearchItem): boolean {
+  return providerCatalog.value.some(provider => provider.provider === item.provider && provider.enabled && provider.download.enabled)
+}
 const results = ref<SourceSearchItem[]>([])
 const providerErrors = ref<ApiSourceProviderError[]>([])
 const selected = ref<SourceSearchItem[]>([])
@@ -156,7 +161,7 @@ const qualityRank: Record<string, number> = {
 }
 
 function onSelectionChange(rows: SourceSearchItem[]) {
-  selected.value = rows
+  selected.value = rows.filter(canSelectDownload)
 }
 
 function resultKey(item: SourceSearchItem): string {
@@ -175,6 +180,7 @@ async function runSearch() {
   }
   searching.value = true
   try {
+    providerCatalog.value = await getSourceProviders()
     const result = await searchSources(
       searchForm.query.trim(),
       searchForm.provider,
@@ -202,7 +208,7 @@ async function downloadSelected() {
   }
   creating.value = true
   try {
-    const result = await createDownloadTasks(selected.value)
+    const result = await createDownloadTasks(selected.value.filter(canSelectDownload))
     ElMessage.success(
       `已创建 ${result.created.length} 个下载任务` +
         (result.skippedDuplicates.length ? `，跳过 ${result.skippedDuplicates.length} 首重复曲目` : ''),
@@ -369,7 +375,7 @@ onMounted(loadTasks)
         empty-text="输入关键词搜索外部音源"
         @selection-change="onSelectionChange"
       >
-        <el-table-column type="selection" width="46" />
+        <el-table-column type="selection" width="46" :selectable="canSelectDownload" />
         <el-table-column label="曲名 / 艺人" prop="title" sortable min-width="240">
           <template #default="{ row }">
             <div class="title-cell">
@@ -378,9 +384,12 @@ onMounted(loadTasks)
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="平台" prop="provider" sortable width="110">
+        <el-table-column label="平台 / 下载能力" prop="provider" sortable width="190">
           <template #default="{ row }">
             <el-tag size="small" type="info">{{ providerLabel(row.provider) }}</el-tag>
+            <el-tag size="small" :type="canSelectDownload(row) ? 'success' : 'warning'">
+              {{ canSelectDownload(row) ? '下载已启用' : '仅搜索 · 下载未启用' }}
+            </el-tag>
           </template>
         </el-table-column>
         <el-table-column label="专辑" prop="albumTitle" sortable min-width="150">

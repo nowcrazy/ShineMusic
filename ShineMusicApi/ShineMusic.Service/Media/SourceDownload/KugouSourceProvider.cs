@@ -47,7 +47,13 @@ public sealed partial class KugouSourceProvider(
     {
         var client = httpClientFactory.CreateClient(HttpClientName);
         var url = $"{SearchBase}?keyword={Uri.EscapeDataString(query)}&page=1&pagesize={Math.Clamp(limit, 1, 50)}";
-        var raw = await client.GetStringAsync(url, cancellationToken);
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        // 真实巡检：旧 iPhone 指纹收到成功空列表；Android UA + Referer 可返回结果。
+        request.Headers.UserAgent.ParseAdd("Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36");
+        request.Headers.Referrer = new Uri("https://y.qq.com/");
+        using var response = await client.SendAsync(request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var raw = await response.Content.ReadAsStringAsync(cancellationToken);
 
         using var document = JsonDocument.Parse(raw);
         if (!document.RootElement.TryGetProperty("data", out var data)

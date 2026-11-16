@@ -20,7 +20,7 @@ public sealed partial class NeteasePlaylistParser(IHttpClientFactory httpClientF
     private const string SongDetailApiBase = "https://music.163.com/api/v3/song/detail";
 
     /// <summary>单批 song/detail 请求的最大曲目数（避免 URL 过长/触发风控）。</summary>
-    private const int SongDetailBatchSize = 500;
+    private const int SongDetailBatchSize = 50;
 
     /// <inheritdoc />
     public string Platform => "netease";
@@ -37,17 +37,25 @@ public sealed partial class NeteasePlaylistParser(IHttpClientFactory httpClientF
             ?? throw new PlaylistParseException("无法从链接中识别网易云歌单 ID。");
         var client = httpClientFactory.CreateClient(HttpClientName);
 
-        // 主路径：歌单页内嵌 JSON（包含完整 tracks，字段名 artists/album/duration）。
-        var html = await PlaylistHttpText.GetStringAsync(client, $"{PlaylistPageBase}?id={id}", cancellationToken);
-        var embedded = ExtractEmbeddedJson(html);
-        if (embedded is not null)
+        string? html = null;
+        try
         {
-            var parsed = TryParseEmbedded(id, embedded);
-            if (parsed is not null)
-                return parsed;
+            html = await PlaylistHttpText.GetStringAsync(client, $"{PlaylistPageBase}?id={id}", cancellationToken);
         }
-
-        // 兜底：官方 API（字段名缩写 ar/al/dt）。
+        catch (PlaylistParseException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // The public HTML endpoint can fail independently of the playlist API.
+        }
+        if (html is not null)
+        {
+            var embedded = ExtractEmbeddedJson(html);
+            if (embedded is not null)
+            {
+                var parsed = TryParseEmbedded(id, embedded);
+                if (parsed is not null)
+                    return parsed;
+            }
+        }
         return await ParseViaApiAsync(client, id, cancellationToken);
     }
 
@@ -98,7 +106,7 @@ public sealed partial class NeteasePlaylistParser(IHttpClientFactory httpClientF
             {
                 var title = GetString(track, "name");
                 if (string.IsNullOrWhiteSpace(title))
-                    continue;
+                    return null;
                 var artists = new List<string>();
                 if (track.TryGetProperty("artists", out var artistArray) && artistArray.ValueKind == JsonValueKind.Array)
                 {
@@ -114,6 +122,7 @@ public sealed partial class NeteasePlaylistParser(IHttpClientFactory httpClientF
                     album = GetString(albumElement, "name");
                 int? durationMs = GetInt(track, "duration");
                 var trackId = GetNumberAsString(track, "id");
+                if (artists.Count == 0 || string.IsNullOrWhiteSpace(trackId)) return null;
                 items.Add(new ParsedPlaylistTrack(
                     title.Trim(),
                     artists,
@@ -125,8 +134,10 @@ public sealed partial class NeteasePlaylistParser(IHttpClientFactory httpClientF
             return items.Count == 0
                 || !expectedTrackCount.HasValue
                 || items.Count != expectedTrackCount.Value
+                || items.Select(t => t.SourceTrackId).Distinct().Count() != items.Count
+                || (trackIds.Count > 0 && !trackIds.SequenceEqual(items.Select(t => t.SourceTrackId)))
                 ? null
-                : new ParsedPlaylist(name.Trim(), cover, description, items);
+                : new ParsedPlaylist(name.Trim(), cover, description, items) { ExpectedTrackCount = expectedTrackCount };
         }
         catch (JsonException)
         {
@@ -157,38 +168,39 @@ public sealed partial class NeteasePlaylistParser(IHttpClientFactory httpClientF
         if (expectedTrackCount.HasValue && trackIds.Count > 0 && trackIds.Count != expectedTrackCount.Value)
             throw new PlaylistParseException("网易云歌单曲目编号不完整，请稍后重试。");
 
-        JsonElement tracksToUse = tracks;
-        List<JsonElement>? pooledSongs = null;
+        if (trackIds.Count > 0 && trackIds.Distinct(StringComparer.Ordinal).Count() != trackIds.Count)
+            throw new PlaylistParseException("网易云歌单曲目编号重复，无法保证导入顺序。");
 
-        if (trackIds.Count > tracks.GetArrayLength()
-            || (expectedTrackCount.HasValue && expectedTrackCount.Value > tracks.GetArrayLength()))
+        if (expectedTrackCount is null or <= 0 or > 10000)
+            throw new PlaylistParseException("网易云未返回有效的歌单总数，无法保证全部解析。");
+        var songsById = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        foreach (var track in tracks.EnumerateArray())
         {
-            if (trackIds.Count == 0)
-                throw new PlaylistParseException("网易云未返回完整歌单曲目编号，无法保证全部解析。");
-            var songsById = await FetchSongsByIdAsync(client, trackIds, cancellationToken);
-            if (trackIds.Any(trackId => !songsById.ContainsKey(trackId)))
-                throw new PlaylistParseException("网易云部分歌单曲目详情不可用，未能完整解析。");
-            pooledSongs = trackIds.Select(trackId => songsById[trackId]).ToList();
-            tracksToUse = default;
+            var trackId = GetNumberAsString(track, "id");
+            if (string.IsNullOrWhiteSpace(trackId) || !songsById.TryAdd(trackId, track))
+                throw new PlaylistParseException("网易云曲目编号缺失或重复，未能完整解析。");
         }
-
         var items = new List<ParsedPlaylistTrack>();
-        if (pooledSongs is not null)
+        if (trackIds.Count > 0)
         {
-            foreach (var track in pooledSongs)
+            var missing = trackIds.Where(key => !songsById.ContainsKey(key)).ToList();
+            foreach (var pair in await FetchSongsByIdAsync(client, missing, cancellationToken))
+                songsById.Add(pair.Key, pair.Value);
+            foreach (var key in trackIds)
+            {
+                if (!songsById.TryGetValue(key, out var track))
+                    throw new PlaylistParseException("网易云部分歌单曲目详情不可用，未能完整解析。");
                 AddTrackFromApi(items, track);
+            }
         }
         else
-        {
-            foreach (var track in tracksToUse.EnumerateArray())
-                AddTrackFromApi(items, track);
-        }
+            foreach (var track in tracks.EnumerateArray()) AddTrackFromApi(items, track);
 
         if (items.Count == 0)
             throw new PlaylistParseException("歌单解析失败，请确认链接为公开歌单后重试。");
         if (expectedTrackCount.HasValue && items.Count != expectedTrackCount.Value)
             throw new PlaylistParseException("网易云歌单曲目未能完整解析，请稍后重试。");
-        return new ParsedPlaylist(name.Trim(), cover, description, items);
+        return new ParsedPlaylist(name.Trim(), cover, description, items) { ExpectedTrackCount = expectedTrackCount };
     }
 
     /// <summary>从 playlist 节点提取全量曲目 Id（trackIds[].id）。</summary>
@@ -200,8 +212,9 @@ public sealed partial class NeteasePlaylistParser(IHttpClientFactory httpClientF
         foreach (var item in trackIds.EnumerateArray())
         {
             var id = GetNumberAsString(item, "id");
-            if (id is not null)
-                ids.Add(id);
+            if (!long.TryParse(id, out var number) || number <= 0)
+                throw new PlaylistParseException("网易云歌单曲目编号无效，未能完整解析。");
+            ids.Add(id!);
         }
         return ids;
     }
@@ -225,8 +238,8 @@ public sealed partial class NeteasePlaylistParser(IHttpClientFactory httpClientF
                 foreach (var song in songsArray.EnumerateArray())
                 {
                     var id = GetNumberAsString(song, "id");
-                    if (id is not null)
-                        songs[id] = song.Clone();
+                    if (id is null || !batch.Contains(id) || !songs.TryAdd(id, song.Clone()))
+                        throw new PlaylistParseException("网易云曲目详情编号异常，未能完整解析。");
                 }
             }
         }
@@ -238,7 +251,7 @@ public sealed partial class NeteasePlaylistParser(IHttpClientFactory httpClientF
     {
         var title = GetString(track, "name");
         if (string.IsNullOrWhiteSpace(title))
-            return;
+            throw new PlaylistParseException("网易云部分曲目缺少标题，未能完整解析。");
         var artists = new List<string>();
         if (track.TryGetProperty("ar", out var artistArray) && artistArray.ValueKind == JsonValueKind.Array)
         {
@@ -254,6 +267,8 @@ public sealed partial class NeteasePlaylistParser(IHttpClientFactory httpClientF
             album = GetString(albumElement, "name");
         int? durationMs = GetInt(track, "dt");
         var trackId = GetNumberAsString(track, "id");
+        if (artists.Count == 0 || string.IsNullOrWhiteSpace(trackId))
+            throw new PlaylistParseException("网易云曲目缺少艺人或来源编号，未能完整解析。");
         items.Add(new ParsedPlaylistTrack(
             title.Trim(),
             artists,

@@ -56,6 +56,8 @@ builder.Services.AddShineMusicAuthentication(builder.Configuration);
 // 启动数据初始化服务与管理员创建命令（Scoped，依赖 ISqlSugarClient / UserService）。
 builder.Services.AddScoped<StartupDataInitializer>();
 builder.Services.AddScoped<CreateAdminCommand>();
+// 启动引导抽成接口：生产实现见 Services/StartupBootstrap.cs；集成测试可替换为无 DB/MQ 依赖版本。
+builder.Services.AddSingleton<IStartupBootstrap, StartupBootstrap>();
 
 var app = builder.Build();
 
@@ -133,15 +135,11 @@ if (args.Contains("--create-database", StringComparer.OrdinalIgnoreCase))
         return;
 }
 
-// ===== 启动数据准备：CodeFirst 建表 + 角色播种 + 合集播种 =====
-await using (var scope = app.Services.CreateAsyncScope())
-{
-    var initializer = scope.ServiceProvider.GetRequiredService<StartupDataInitializer>();
-    await initializer.InitializeAsync();
-}
-
-// ===== 队列引导：恢复中断任务（必须在 CodeFirst 初始化之后执行）=====
-await ShineMusic.Tasks.QueueBootstrap.InitializeAsync(app.Services);
+// ===== 启动引导：CodeFirst 建表 + 角色播种 + 队列恢复（顺序由实现保证）=====
+// 与重构前两段顶层 await 等价；抽成 IStartupBootstrap 后，WebApplicationFactory 集成测试
+// 可用 ConfigureTestServices 替换为 Noop，避免测试宿主连接真实 PostgreSQL / RabbitMQ。
+var startupBootstrap = app.Services.GetRequiredService<IStartupBootstrap>();
+await startupBootstrap.InitializeAsync(app.Services);
 
 // ===== 命令行模式：--create-admin 创建管理员账号 =====
 // 可重复执行（不做“库中无用户”限制），重复的用户名/邮箱由 UserService 唯一性校验拦下。

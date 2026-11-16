@@ -65,6 +65,22 @@ public sealed class ExternalDownloadTask
     [SugarColumn(IsNullable = true)]
     public int? AttemptIndex { get; set; }
 
+
+    /// <summary>导入/人工请求的原始目标标题；为空表示历史任务或没有独立目标。</summary>
+    [SugarColumn(IsNullable = true)]
+    public string? ExpectedTitle { get; set; }
+
+    /// <summary>原始目标艺人JSON；换源更新当前来源字段时不可覆盖。</summary>
+    [SugarColumn(ColumnDataType = "text", IsNullable = true)]
+    public string? ExpectedArtistsJson { get; set; }
+
+    /// <summary>原始目标时长（毫秒），用于跨源身份和试听校验。</summary>
+    [SugarColumn(IsNullable = true)]
+    public long? ExpectedDurationMs { get; set; }
+
+    /// <summary>原始目标专辑；为空表示未提供。</summary>
+    [SugarColumn(IsNullable = true)]
+    public string? ExpectedAlbumTitle { get; set; }
     /// <summary>平台返回的曲目标题（创建任务时的快照，入库时预填给导入条目）。</summary>
     [SugarColumn(IsNullable = true)]
     public string? Title { get; set; }

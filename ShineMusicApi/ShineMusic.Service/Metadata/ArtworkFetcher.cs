@@ -12,6 +12,8 @@
 using System.Globalization;
 using System.Net;
 using System.Text.Json;
+using System.Text;
+using ShineMusic.Service.SourceDownload;
 
 namespace ShineMusic.Service;
 
@@ -24,7 +26,7 @@ public sealed record ItunesMetadataResult(
     string? StorageKey = null,
     string? ContentType = null,
     string? Error = null,
-    // 下面是 iTunes 同步拿到的额外元数据，封面下载成功才会填
+    // 匹配确认后的元数据，无封面时同样返回。
     string? Genre = null,
     string? AlbumTitle = null,
     int? ReleaseYear = null,
@@ -34,7 +36,9 @@ public sealed record ItunesMetadataResult(
     int? DiscNumber = null,
     long? ItunesTrackId = null,
     string? Country = null,
-    string? Explicitness = null);
+    string? Explicitness = null,
+    string? ReleaseDate = null,
+    string? TrackTitle = null);
 
 /// <summary>
 /// 基于 iTunes Search API 的元数据 + 封面自动获取服务。
@@ -53,7 +57,7 @@ public sealed class ArtworkFetcher(
     /// 同时返回搜索结果中的 流派/专辑名/发行年 供调用方回填缺失字段。
     /// </summary>
     /// <param name="artist">歌手名（必填）</param>
-    /// <param name="album">专辑名（可选，歌曲搜索未命中时作为回退）。</param>
+    /// <param name="album">专辑名（可选，已知时必须精确匹配）。</param>
     /// <param name="song">歌曲名（可选，有歌名时优先搜索歌曲实体）。</param>
     /// <param name="storageKeyPrefix">存储键前缀，如 "artwork"</param>
     /// <param name="outputDirectory">封面图保存的物理目录</param>
@@ -70,6 +74,8 @@ public sealed class ArtworkFetcher(
         string outputDirectory,
         CancellationToken cancellationToken = default)
     {
+        if (!string.IsNullOrWhiteSpace(song))
+            return await FetchMatchedAsync(song, [artist], album, null, storageKeyPrefix, outputDirectory, cancellationToken);
         if (string.IsNullOrWhiteSpace(artist))
             return new ItunesMetadataResult(false, Error: "Artist name is required.");
 
@@ -92,36 +98,68 @@ public sealed class ArtworkFetcher(
         }
     }
 
-    /// <summary>
-    /// 仅凭歌曲名从 iTunes 获取封面与元数据（用于标签里完全没有歌手名的兜底场景）。
-    /// </summary>
-    public async Task<ItunesMetadataResult> FetchByTitleAsync(
+    /// <summary>缺少艺人时不自动猜测歌曲身份，也不发起网络请求。</summary>
+    public Task<ItunesMetadataResult> FetchByTitleAsync(
         string title,
         string storageKeyPrefix,
         string outputDirectory,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(title))
-            return new ItunesMetadataResult(false, Error: "Song title is required.");
+        cancellationToken.ThrowIfCancellationRequested();
+        logger.LogDebug("Title-only metadata lookup skipped: identity insufficient.");
+        return Task.FromResult(new ItunesMetadataResult(false, Error: "identity_insufficient"));
+    }
+
+    /// <summary>只有标题、艺人、已知时长与专辑均确认后，才返回元数据并下载封面。</summary>
+    public async Task<ItunesMetadataResult> FetchMatchedAsync(
+        string title,
+        IReadOnlyList<string> artists,
+        string? album,
+        long? durationMs,
+        string storageKeyPrefix,
+        string outputDirectory,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(title) || artists is null || !artists.Any(a => !string.IsNullOrWhiteSpace(a)))
+            return new ItunesMetadataResult(false, Error: "identity_insufficient");
 
         try
         {
-            var itunesResult = await SearchByTitleAsync(title, cancellationToken);
-            if (itunesResult is null)
-                return new ItunesMetadataResult(false, Error: "No matching track found on iTunes.");
+            var expected = new TrackIdentity(title, artists, durationMs, album);
+            var candidates = await SearchCandidatesAsync($"{string.Join(" ", artists)} {title}", "song", cancellationToken);
+            var matches = candidates.Where(candidate =>
+                TrackIdentityMatcher.Evaluate(expected, new TrackIdentity(candidate.TrackName ?? "",
+                    [candidate.ArtistName ?? ""], candidate.TrackTimeMs, candidate.CollectionName)).Verdict == IdentityVerdict.Matched
+                && (string.IsNullOrWhiteSpace(album) || NormalizeAlbum(album) == NormalizeAlbum(candidate.CollectionName)))
+                .ToList();
+            if (matches.Count == 0)
+                return new ItunesMetadataResult(false, Error: "metadata_not_found");
+            if (string.IsNullOrWhiteSpace(album)
+                && matches.Select(candidate => NormalizeAlbum(candidate.CollectionName)).Distinct().Skip(1).Any())
+                return new ItunesMetadataResult(false, Error: "metadata_ambiguous");
 
-            return await BuildResultAsync(itunesResult, storageKeyPrefix, outputDirectory, cancellationToken);
+            return await BuildResultAsync(matches[0], storageKeyPrefix, outputDirectory, cancellationToken);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            throw;
+            return new ItunesMetadataResult(false, Error: "metadata_source_unavailable");
         }
+        catch (OperationCanceledException) { throw; }
         catch (Exception exception)
         {
-            logger.LogWarning(exception, "Failed to fetch iTunes metadata for title {Title}", title);
-            return new ItunesMetadataResult(false, Error: exception.Message);
+            logger.LogWarning(exception, "Failed to fetch matched iTunes metadata for {Title}", title);
+            return new ItunesMetadataResult(false, Error: "metadata_source_unavailable");
         }
     }
+
+    // Preserve version decorations and punctuation: Deluxe/Live albums must not collapse into the original.
+    private static string NormalizeAlbum(string? album)
+        => string.Concat((album ?? "").Normalize(NormalizationForm.FormKC).Where(c => !char.IsWhiteSpace(c))).ToUpperInvariant();
+
+    private static string? IsoDate(string? value)
+        => value is { Length: >= 10 } && DateOnly.TryParseExact(value[..10], "yyyy-MM-dd",
+            CultureInfo.InvariantCulture, DateTimeStyles.None, out var date)
+            ? date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : null;
 
     /// <summary>
     /// 把一次 iTunes 搜索命中项落地为「封面下载 + 完整元数据」结果：
@@ -187,7 +225,9 @@ public sealed class ArtworkFetcher(
             DiscNumber: itunesResult.DiscNumber,
             ItunesTrackId: itunesResult.ItunesTrackId,
             Country: itunesResult.Country,
-            Explicitness: itunesResult.Explicitness);
+            Explicitness: itunesResult.Explicitness,
+            ReleaseDate: IsoDate(itunesResult.ReleaseDate),
+            TrackTitle: itunesResult.TrackName);
     }
 
     /// <summary>构造「无封面（或封面下载失败）但元数据可用」的结果。</summary>
@@ -204,26 +244,17 @@ public sealed class ArtworkFetcher(
             DiscNumber: itunesResult.DiscNumber,
             ItunesTrackId: itunesResult.ItunesTrackId,
             Country: itunesResult.Country,
-            Explicitness: itunesResult.Explicitness);
+            Explicitness: itunesResult.Explicitness,
+            ReleaseDate: IsoDate(itunesResult.ReleaseDate),
+            TrackTitle: itunesResult.TrackName);
 
-    /// <summary>仅凭歌曲名搜索 iTunes：entity=song、media=music，返回第一个有效命中。</summary>
-    private async Task<ItunesResult?> SearchByTitleAsync(string title, CancellationToken ct)
-        => await SearchByTermAsync(title, "song", ct);
-
-    /// <summary>优先搜索歌曲实体以获取曲序/碟序，歌曲未命中时回退搜索专辑。</summary>
+    /// <summary>仅在没有歌曲名时保留原有专辑查询路径。</summary>
     private async Task<ItunesResult?> SearchBestMatchAsync(
         string artist,
         string? album,
         string? song,
         CancellationToken ct)
     {
-        if (!string.IsNullOrWhiteSpace(song))
-        {
-            var result = await SearchByTermAsync($"{artist} {song}", "song", ct);
-            if (result is not null)
-                return result;
-        }
-
         if (!string.IsNullOrWhiteSpace(album))
             return await SearchByTermAsync($"{artist} {album}", "album", ct);
 
@@ -232,36 +263,32 @@ public sealed class ArtworkFetcher(
 
     /// <summary>按指定 term 和 entity 类型搜索 iTunes，返回第一个含有可用元数据的结果。</summary>
     private async Task<ItunesResult?> SearchByTermAsync(string term, string entity, CancellationToken ct)
+        => (await SearchCandidatesAsync(term, entity, ct)).FirstOrDefault(result =>
+            !string.IsNullOrWhiteSpace(result.ArtworkUrl100)
+            || !string.IsNullOrWhiteSpace(result.PrimaryGenreName)
+            || result.TrackNumber is > 0
+            || result.DiscNumber is > 0
+            || !string.IsNullOrWhiteSpace(result.ReleaseDate));
+
+    private async Task<IReadOnlyList<ItunesResult>> SearchCandidatesAsync(string term, string entity, CancellationToken ct)
     {
-        var url = $"{ItunesSearchUrl}?term={WebUtility.UrlEncode(term)}&media=music&entity={entity}&limit=5";
+        var url = $"{ItunesSearchUrl}?term={WebUtility.UrlEncode(term)}&media=music&entity={entity}&limit=20";
 
         var client = httpClientFactory.CreateClient();
         client.Timeout = TimeSpan.FromSeconds(15);
 
         try
         {
-            var response = await client.GetAsync(url, ct);
-            if (!response.IsSuccessStatusCode)
-                return null;
+            using var response = await client.GetAsync(url, ct);
+            response.EnsureSuccessStatusCode();
 
             var json = await response.Content.ReadAsStringAsync(ct);
             using var doc = JsonDocument.Parse(json);
             if (!doc.RootElement.TryGetProperty("results", out var results)
                 || results.ValueKind != JsonValueKind.Array)
-                return null;
+                return [];
 
-            foreach (var item in results.EnumerateArray())
-            {
-                var result = DeserializeResult(item);
-                if (!string.IsNullOrWhiteSpace(result.ArtworkUrl100)
-                    || !string.IsNullOrWhiteSpace(result.PrimaryGenreName)
-                    || result.TrackNumber is > 0
-                    || result.DiscNumber is > 0
-                    || !string.IsNullOrWhiteSpace(result.ReleaseDate))
-                    return result;
-            }
-
-            return null;
+            return results.EnumerateArray().Take(20).Select(DeserializeResult).ToArray();
         }
         catch (OperationCanceledException)
         {
@@ -270,7 +297,7 @@ public sealed class ArtworkFetcher(
         catch (Exception exception)
         {
             logger.LogDebug(exception, "iTunes search failed for term={Term} entity={Entity}", term, entity);
-            return null;
+            throw;
         }
     }
 

@@ -61,7 +61,7 @@ public sealed class QQMusicPlaylistParser(IHttpClientFactory httpClientFactory) 
                     ?? GetString(song, "title")
                     ?? GetString(song, "name");
                 if (string.IsNullOrWhiteSpace(title))
-                    continue;
+                    throw new PlaylistParseException("QQ 音乐歌单包含缺少标题的曲目，未能完整解析。");
                 var artists = new List<string>();
                 if (song.TryGetProperty("singer", out var singerArray) && singerArray.ValueKind == JsonValueKind.Array)
                 {
@@ -74,6 +74,8 @@ public sealed class QQMusicPlaylistParser(IHttpClientFactory httpClientFactory) 
                 }
                 int? durationMs = GetInt(song, "interval") is { } seconds ? seconds * 1000 : null;
                 var mid = GetString(song, "songmid") ?? GetString(song, "mid");
+                if (artists.Count == 0 || string.IsNullOrWhiteSpace(mid))
+                    throw new PlaylistParseException("QQ 音乐曲目缺少艺人或来源编号，未能完整解析。");
                 var album = GetString(song, "albumname");
                 if (album is null
                     && song.TryGetProperty("album", out var albumElement)
@@ -88,12 +90,13 @@ public sealed class QQMusicPlaylistParser(IHttpClientFactory httpClientFactory) 
                     mid is null ? null : $"https://y.qq.com/n/ryqq/songDetail/{mid}"));
             }
         }
-        if (items.Count == 0)
-            throw new PlaylistParseException("歌单解析失败，请确认链接为公开歌单后重试。");
-        var expectedTrackCount = GetInt(first, "cur_song_num") ?? GetInt(first, "songnum");
-        if (expectedTrackCount.HasValue && items.Count != expectedTrackCount.Value)
-            throw new PlaylistParseException("QQ 音乐歌单曲目未能完整解析，请稍后重试。");
-        return new ParsedPlaylist(name.Trim(), cover, description, items);
+        var expectedTrackCount = GetInt(first, "total_song_num") ?? GetInt(first, "songnum") ?? GetInt(first, "cur_song_num");
+        if (expectedTrackCount is null or <= 0 or > 10000 || items.Count != expectedTrackCount.Value
+            || (GetInt(first, "cur_song_num") is { } current && current != items.Count))
+            throw new PlaylistParseException("QQ 音乐歌单数量不完整或仅返回一页，未能完整解析。");
+        if (items.Select(t => t.SourceTrackId).Distinct().Count() != items.Count)
+            throw new PlaylistParseException("QQ 音乐歌单包含重复曲目编号，未能完整解析。");
+        return new ParsedPlaylist(name.Trim(), cover, description, items) { ExpectedTrackCount = expectedTrackCount };
     }
 
     /// <summary>从 URL 中提取歌单数字 Id（支持路径段与 query 两种形态）。</summary>

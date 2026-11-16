@@ -13,6 +13,8 @@
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
     <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <!-- L3a：发布后 /stream 真实 HTTP 回读断言需要 WebApplicationFactory/TestServer。 -->
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.15" />
   </ItemGroup>
 
   <ItemGroup>
@@ -26,6 +28,11 @@
     <ProjectReference Include="..\ShineMusic.Common\ShineMusic.Common.csproj" />
     <!-- P6 架构测试需要反射接口层程序集（Controller 不得直连基础设施等约束）。 -->
     <ProjectReference Include="..\ShineMusic.Api\ShineMusic.Api.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="../../docs/verification/playlist-900025217/playlist.json" Link="Fixtures/playlist-900025217.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../docs/verification/playlist-900025217/lyrics-independent-check.json" Link="Fixtures/lyrics-before.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

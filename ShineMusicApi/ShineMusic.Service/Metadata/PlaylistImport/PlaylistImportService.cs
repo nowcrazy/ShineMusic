@@ -11,6 +11,7 @@ using ShineMusic.Model.Contracts;
 using ShineMusic.Model.Entities;
 using ShineMusic.Model.Options;
 using ShineMusic.Service.SourceDownload;
+using ShineMusic.Service.SourceProviders.Engine;
 using SqlSugar;
 
 namespace ShineMusic.Service.PlaylistImport;
@@ -30,7 +31,8 @@ public sealed record PlaylistParsePreview(
     string Name,
     string? CoverUrl,
     int Total,
-    IReadOnlyList<PlaylistPreviewTrack> Tracks);
+    IReadOnlyList<PlaylistPreviewTrack> Tracks,
+    string? SnapshotId = null);
 
 /// <summary>导入结果汇总。</summary>
 public sealed record PlaylistImportResult(Guid PlaylistId, int Total, int Matched, int Pending);
@@ -54,6 +56,7 @@ public sealed partial class PlaylistImportService(
     ISqlSugarClient db,
     IEnumerable<IPlaylistParser> parsers,
     IEnumerable<IMusicSourceProvider> providers,
+    ISearchAggregator searchAggregator,
     SourceDownloadService sourceDownloadService,
     PlaylistParseCache parseCache,
     IOptions<SourceDownloadOptions> options,
@@ -124,7 +127,7 @@ public sealed partial class PlaylistImportService(
                 track.Title, track.Artists, track.AlbumTitle, track.DurationMs,
                 matchedId.HasValue, matchedId));
         }
-        return new PlaylistParsePreview(platform, parsed.Name, parsed.CoverUrl, tracks.Count, tracks);
+        return new PlaylistParsePreview(platform, parsed.Name, parsed.CoverUrl, tracks.Count, tracks, SnapshotId(parsed));
     }
 
     /// <summary>
@@ -151,6 +154,8 @@ public sealed partial class PlaylistImportService(
         // 优先复用预览阶段的解析结果：避免二次抓取平台接口（大歌单解析 20~60 秒）。
         if (!parseCache.TryGet(userId, url, out var parsed, out var platform))
             (platform, parsed) = await ParseAsync(url, cancellationToken);
+        if (parsed.ExpectedTrackCount is { } expectedCount && expectedCount != parsed.Tracks.Count)
+            throw new PlaylistParseException($"歌单未完整解析：平台声明 {expectedCount} 首，实际 {parsed.Tracks.Count} 首，未创建歌单。");
 
         var playlistName = !string.IsNullOrWhiteSpace(name) ? name.Trim() : parsed.Name.Trim();
         if (playlistName.Length > 100)
@@ -161,10 +166,14 @@ public sealed partial class PlaylistImportService(
         {
             UserId = userId,
             Name = playlistName,
+            ImportSnapshotJson = JsonSerializer.Serialize(new { Platform = platform, SourceUrl = url, parsed.ExpectedTrackCount, Tracks = parsed.Tracks }),
             Description = parsed.Description is { Length: > 500 } ? parsed.Description[..500] : parsed.Description,
             CreatedAtUtc = now,
             UpdatedAtUtc = now
         };
+        await db.Ado.BeginTranAsync();
+        try
+        {
         await db.Insertable(playlist).ExecuteCommandAsync(cancellationToken);
 
         var matchedCount = 0;
@@ -202,20 +211,44 @@ public sealed partial class PlaylistImportService(
             pendingCount++;
         }
 
+        await db.Ado.CommitTranAsync();
         return new PlaylistImportResult(playlist.Id, parsed.Tracks.Count, matchedCount, pendingCount);
+        }
+        catch
+        {
+            await db.Ado.RollbackTranAsync();
+            throw;
+        }
     }
+
+    // Bind ordered row indices to the exact server-side preview, including duplicate occurrences.
+    private static string SnapshotId(ParsedPlaylist parsed) => Convert.ToHexString(
+        System.Security.Cryptography.SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(parsed)));
 
     /// <summary>只把外部歌单中尚未入库的曲目加入后台下载队列，不创建用户歌单。</summary>
     public async Task<PlaylistDownloadQueueResult> EnqueueDownloadsAsync(
-        string url, Guid userId, CancellationToken cancellationToken)
+        string url, Guid userId, CancellationToken cancellationToken,
+        IReadOnlyList<int>? selectedIndices = null, string? snapshotId = null)
     {
-        if (!parseCache.TryGet(userId, url, out var parsed, out var platform))
+        var cached = parseCache.TryGet(userId, url, out var parsed, out var platform);
+        if (selectedIndices is not null)
+        {
+            if (!cached || string.IsNullOrWhiteSpace(snapshotId) || snapshotId != SnapshotId(parsed))
+                throw new PlaylistParseException("预览已过期或发生变化，请重新解析后选择曲目。");
+            if (selectedIndices.Count == 0 || selectedIndices.Any(index => index < 0 || index >= parsed.Tracks.Count)
+                || selectedIndices.Distinct().Count() != selectedIndices.Count)
+                throw new PlaylistParseException("请选择有效且不重复的曲目序号。");
+        }
+        else if (!cached)
             (platform, parsed) = await ParseAsync(url, cancellationToken);
+
+        var tracks = selectedIndices is null ? parsed.Tracks
+            : selectedIndices.OrderBy(index => index).Select(index => parsed.Tracks[index]).ToArray();
 
         var now = DateTime.UtcNow;
         var matchedCount = 0;
         var queueItems = new List<PlaylistDownloadQueueItem>();
-        foreach (var track in parsed.Tracks)
+        foreach (var track in tracks)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (await MatchLibraryAsync(
@@ -244,7 +277,7 @@ public sealed partial class PlaylistImportService(
         if (queueItems.Count > 0)
             await db.Insertable(queueItems).ExecuteCommandAsync(cancellationToken);
 
-        return new PlaylistDownloadQueueResult(parsed.Tracks.Count, matchedCount, queueItems.Count);
+        return new PlaylistDownloadQueueResult(tracks.Count, matchedCount, queueItems.Count);
     }
 
     /// <summary>
@@ -483,7 +516,7 @@ public sealed partial class PlaylistImportService(
     private static string BuildUnmatchedReason(string status, string? diagnosticsJson)
     {
         if (status == PendingStatuses.Failed)
-            return "已创建下载任务，但下载阶段所有候选音源均失败；逐源失败明细见「音源抓歌」页的下载任务";
+            return "下载或导入处理失败；请查看关联下载任务和导入条目的错误，处理失败不代表人工审核拒绝";
 
         var diagnostics = DeserializeDiagnostics(diagnosticsJson);
         if (diagnostics.Count == 0)
@@ -542,6 +575,8 @@ public sealed partial class PlaylistImportService(
             .Where(item => item.PlaylistId == playlistId
                 && (item.Status == PendingStatuses.Pending
                     || item.Status == PendingStatuses.Downloading
+                    || item.Status == PendingStatuses.Failed
+                    || item.Status == PendingStatuses.Rejected
                     || item.Status == PendingStatuses.NeedsReview))
             .ToListAsync(cancellationToken);
         if (pendings.Count == 0)
@@ -577,13 +612,16 @@ public sealed partial class PlaylistImportService(
 
                 switch (importItem?.Status)
                 {
+                    case LibraryImportItemStatuses.IdentityRejected:
                     case LibraryImportItemStatuses.Rejected:
-                    case LibraryImportItemStatuses.ProcessingFailed:
-                        // 审核拒绝 / 处理失败：音频不会入库。标记 rejected（区别于音源失败的 failed），
-                        // 重新下载不会改变结果，需重新排队才会重新走一遍。
+                        // 人工拒绝与处理异常必须区分。
                         if (pending.Status != PendingStatuses.Rejected)
                             await MarkPendingAsync(pending, PendingStatuses.Rejected, cancellationToken);
                         continue;
+                    case LibraryImportItemStatuses.ProcessingFailed:
+                        await MarkPendingAsync(pending, PendingStatuses.Failed, cancellationToken);
+                        continue;
+                    case LibraryImportItemStatuses.ReadyToPublish:
                     case LibraryImportItemStatuses.PendingReview:
                     case LibraryImportItemStatuses.PendingPublication:
                         // 音频已下载落地，但自动评分低于自动发布阈值，等管理员在「曲库导入」页发布。
@@ -713,17 +751,17 @@ public sealed partial class PlaylistImportService(
         var matched = albumMatches.Count > 0 ? albumMatches : songAndArtistMatches;
         if (matched.Count == 0)
             return null;
-        if (matched.Count == 1 || durationMs is null)
-            return matched[0].Id;
+        if (durationMs is null)
+            return matched.Count == 1 ? matched[0].Id : null;
 
-        // 多候选：时长差 5 秒内取最接近者；都不在窗口内则取第一个标题/艺人命中项。
+        // 有时长基准时必须落入窗口；歧义或明显不一致不自动匹配。
         return matched
             .Where(candidate => candidate.DurationMs.HasValue)
             .Select(candidate => (candidate.Id, Diff: Math.Abs(candidate.DurationMs!.Value - durationMs.Value)))
             .Where(entry => entry.Diff < 5000)
             .OrderBy(entry => entry.Diff)
             .Select(entry => (Guid?)entry.Id)
-            .FirstOrDefault() ?? matched[0].Id;
+            .FirstOrDefault();
     }
 
     /// <summary>
@@ -793,6 +831,7 @@ public sealed partial class PlaylistImportService(
                 Provider = primary.Provider,
                 ProviderTrackIds = [primary.ProviderTrackId],
                 Metadata = metadata,
+                ExpectedTrack = new SourceExpectedTrackDto(track.Title, track.Artists, track.AlbumTitle, track.DurationMs),
                 Candidates = sorted.Select(c => new SourceSearchItemDto(
                     c.Provider, c.ProviderTrackId, c.Title, c.Artists, c.AlbumTitle,
                     c.DurationMs, c.Genres, c.CoverUrl, c.SourcePageUrl, c.License,
@@ -835,47 +874,31 @@ public sealed partial class PlaylistImportService(
 
         var primaryArtist = track.Artists.First(artist => !string.IsNullOrWhiteSpace(artist));
         var query = $"{track.Title} {primaryArtist}";
+        // Phase 2：源清单以 V2 Registry 为准，并行扇出 / 总预算 / 单源超时 / 异常收敛统一由聚合器承担。
+        // 注意：budgetSecondsOverride 现在只作用于下面的音质阶梯与可下载性预判，
+        // 搜索阶段的预算改由 SourceDownload:ProviderFramework:Search 统一控制（裁决④）。
         var budgetSeconds = Math.Clamp(budgetSecondsOverride ?? options.Value.SearchBudgetSeconds, 3, 300);
-        var enabledProviders = providers.Where(p => p.IsEnabled).ToList();
-
-        var searchTasks = enabledProviders.Select(async provider =>
-        {
-            using var budgetCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            budgetCts.CancelAfter(TimeSpan.FromSeconds(budgetSeconds));
-            try
-            {
-                return (Provider: provider, Results: await provider.SearchAsync(query, 10, budgetCts.Token), Outcome: (string?)null, Message: (string?)null);
-            }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-            {
-                logger.LogWarning(
-                    "Playlist source search timed out for provider {Provider}, track {Title} by {Artist}.",
-                    provider.Provider, track.Title, primaryArtist);
-                return (Provider: provider, Results: Array.Empty<SourceSearchResult>(), Outcome: (string?)SearchOutcomes.Timeout, Message: (string?)$"搜索超时（>{budgetSeconds} 秒）");
-            }
-            catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
-            {
-                logger.LogWarning(exception,
-                    "Playlist source search failed for provider {Provider}, track {Title} by {Artist}.",
-                    provider.Provider, track.Title, primaryArtist);
-                return (Provider: provider, Results: Array.Empty<SourceSearchResult>(), Outcome: (string?)SearchOutcomes.Error, Message: (string?)exception.Message);
-            }
-        });
-        var providerResults = await Task.WhenAll(searchTasks);
+        var aggregated = await searchAggregator.SearchAsync(
+            query, maxResultsPerProvider: 10, cancellationToken: cancellationToken);
+        // 搜索源可以只提供信息；补齐队列只使用明确配置下载能力的源。
+        var providerResults = aggregated.Outcomes.Where(outcome => searchAggregator.Providers.Any(descriptor =>
+            string.Equals(descriptor.ProviderName, outcome.ProviderName, StringComparison.OrdinalIgnoreCase)
+            && descriptor.ConfigEnabled && descriptor.DownloadEnabled
+            && descriptor.Declares(ShineMusic.Service.SourceProviders.Abstractions.ProviderCapability.Resolve))).ToArray();
 
         // 逐源诊断（只记录，不改变候选筛选）：超时/异常源以往被悄悄丢弃，这里显式落库。
         var songAndArtistMatches = providerResults
             .SelectMany(search => search.Results
                 .Where(result => MatchesSongAndArtist(track, result))
-                .Select(result => (search.Provider, Result: result)))
+                .Select(result => (Provider: search.Legacy, Result: result)))
             .ToList();
         var normalizedAlbum = NormalizeLoose(track.AlbumTitle);
-        List<(IMusicSourceProvider Provider, SourceSearchResult Result)> albumMatches = normalizedAlbum.Length == 0
+        List<(IMusicSourceProvider? Provider, SourceSearchResult Result)> albumMatches = normalizedAlbum.Length == 0
             ? []
             : songAndArtistMatches
                 .Where(candidate => NormalizeLoose(candidate.Result.AlbumTitle) == normalizedAlbum)
                 .ToList();
-        var fallbackMatches = new List<(IMusicSourceProvider Provider, SourceSearchResult Result)>();
+        var fallbackMatches = new List<(IMusicSourceProvider? Provider, SourceSearchResult Result)>();
         var selectedMatches = albumMatches.Count > 0 ? albumMatches : songAndArtistMatches;
         if (selectedMatches.Count == 0)
         {
@@ -904,18 +927,28 @@ public sealed partial class PlaylistImportService(
 
         var diagnostics = providerResults.Select(outcome =>
         {
-            if (outcome.Outcome is not null)
-                return new ProviderSearchDiagnostic(outcome.Provider.Provider, outcome.Outcome, 0, outcome.Message);
+            if (outcome.ErrorCode is not null)
+            {
+                var failedOutcome = outcome.ErrorCode is ProviderOrchestrator.ErrorProviderTimeout
+                    or ProviderOrchestrator.ErrorBudgetExhausted
+                    ? SearchOutcomes.Timeout
+                    : SearchOutcomes.Error;
+                return new ProviderSearchDiagnostic(
+                    outcome.ProviderName, failedOutcome, 0,
+                    outcome.ErrorMessage ?? (failedOutcome == SearchOutcomes.Timeout
+                        ? $"搜索超时（>{budgetSeconds} 秒）"
+                        : "搜索失败"));
+            }
             var matchedCount = outcome.Results.Count(result =>
                 MatchesSongAndArtist(track, result)
                 || fallbackMatches.Any(match => ReferenceEquals(match.Result, result)));
             return matchedCount > 0
-                ? new ProviderSearchDiagnostic(outcome.Provider.Provider, SearchOutcomes.Matched, matchedCount, null)
+                ? new ProviderSearchDiagnostic(outcome.ProviderName, SearchOutcomes.Matched, matchedCount, null)
                 : new ProviderSearchDiagnostic(
-                    outcome.Provider.Provider,
+                    outcome.ProviderName,
                     SearchOutcomes.NoMatch,
-                    outcome.Results.Length,
-                    outcome.Results.Length == 0 ? "未返回搜索结果" : $"返回 {outcome.Results.Length} 条结果，均未通过标题+艺人匹配");
+                    outcome.Results.Count,
+                    outcome.Results.Count == 0 ? "未返回搜索结果" : $"返回 {outcome.Results.Count} 条结果，均未通过标题+艺人匹配");
         }).ToList();
 
         if (selectedMatches.Count == 0)
@@ -943,6 +976,8 @@ public sealed partial class PlaylistImportService(
         {
             var provider = selection.Provider;
             var best = selection.Result;
+            // 纯 V2 provider 没有 legacy 实例；只用于诊断展示，不参与可下载性预判。
+            var providerName = provider?.Provider ?? best.Provider;
             using var budgetCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             budgetCts.CancelAfter(TimeSpan.FromSeconds(budgetSeconds));
 
@@ -967,19 +1002,22 @@ public sealed partial class PlaylistImportService(
                 {
                     logger.LogWarning(
                         "Playlist backfill quality lookup timed out for provider {Provider}, track {TrackId}; using search quality {Quality}.",
-                        provider.Provider, best.ProviderTrackId, best.Quality);
+                        providerName, best.ProviderTrackId, best.Quality);
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)
                 {
                     logger.LogWarning(exception,
                         "Playlist backfill quality lookup failed for provider {Provider}, track {TrackId}; using search quality {Quality}.",
-                        provider.Provider, best.ProviderTrackId, best.Quality);
+                        providerName, best.ProviderTrackId, best.Quality);
                 }
             }
 
             // 批量补齐模式跳过可下载预判：预判会再消耗一份预算，且下载阶段的换源机制已能兜底，
             // 对「几百首排队」的批量场景性价比太低（单首耗时直接翻倍）。
             if (!precheckDownloadable)
+                return best;
+            // 纯 V2 provider 没有 legacy 可预判：沿用「预判失败保守保留」的既有策略。
+            if (provider is null)
                 return best;
 
             // 轻量预判可下载性：不可下载的候选直接过滤（不浪费换源配额）。
@@ -1033,7 +1071,9 @@ public sealed partial class PlaylistImportService(
         int? searchBudgetSeconds = null, bool precheckDownloadable = true)
     {
         var kugou = providers.FirstOrDefault(candidate => candidate.Provider == "kugou");
-        if (kugou is null || !kugou.IsEnabled)
+        if (kugou is null || !kugou.IsEnabled || !searchAggregator.Providers.Any(descriptor =>
+                descriptor.ProviderName == "kugou" && descriptor.ConfigEnabled && descriptor.DownloadEnabled
+                && descriptor.Declares(ShineMusic.Service.SourceProviders.Abstractions.ProviderCapability.Resolve)))
             return false;
 
         // 酷狗直连候选（hash 已知，零搜索错配）。
@@ -1099,6 +1139,7 @@ public sealed partial class PlaylistImportService(
             Provider = primary.Provider,
             ProviderTrackIds = [primary.ProviderTrackId],
             Metadata = metadata,
+            ExpectedTrack = new SourceExpectedTrackDto(track.Title, track.Artists, track.AlbumTitle, track.DurationMs),
             Candidates = sorted
         };
         var created = await sourceDownloadService.CreateTasksAsync(request, userId, cancellationToken);
@@ -1133,39 +1174,41 @@ public sealed partial class PlaylistImportService(
         return candidates[0];
     }
 
+    /// <summary>
+    /// 候选是否与歌单原曲身份一致：委托全仓唯一决策点 <see cref="TrackIdentityMatcher.Evaluate"/>。
+    /// Rejected → 不进入候选；Matched / Ambiguous → 进入候选（Ambiguous 交下载后身份闸门与评分制最终判定）。
+    /// 替代原先基于 <see cref="NormalizeLoose"/> 的私有标题全等 + 艺人集合命中逻辑。
+    /// </summary>
     private static bool MatchesSongAndArtist(ParsedPlaylistTrack track, SourceSearchResult candidate)
-        => MatchesSongAndArtist(track.Title, track.Artists, candidate.Title, candidate.Artists);
+        => !IsRejected(track.Title, track.Artists, track.DurationMs, candidate.Title, candidate.Artists, candidate.DurationMs);
 
     private static bool MatchesSongAndArtist(ParsedPlaylistTrack track, SourceSearchItemDto candidate)
-        => MatchesSongAndArtist(track.Title, track.Artists, candidate.Title, candidate.Artists);
+        => !IsRejected(track.Title, track.Artists, track.DurationMs, candidate.Title, candidate.Artists, candidate.DurationMs);
 
-    private static bool MatchesSongAndArtist(
+    /// <summary>
+    /// 候选是否与期望身份不一致（Rejected）。Ambiguous 不在此拒绝——搜索阶段宁可多召回，
+    /// 交由发布时的评分闸门（身份 40 分维度）和交付契约做最终判定。
+    /// </summary>
+    private static bool IsRejected(
         string expectedTitle,
         IReadOnlyList<string> expectedArtists,
+        int? expectedDurationMs,
         string candidateTitle,
-        IReadOnlyList<string> candidateArtists)
+        IReadOnlyList<string> candidateArtists,
+        long? candidateDurationMs)
     {
-        expectedTitle = NormalizeLoose(expectedTitle);
-        if (expectedTitle.Length == 0 || NormalizeLoose(candidateTitle) != expectedTitle)
-            return false;
-
-        var targetArtists = expectedArtists
-            .Select(NormalizeLoose)
-            .Where(artist => artist.Length > 0)
-            .ToHashSet(StringComparer.Ordinal);
-        return targetArtists.Count > 0
-            && candidateArtists
-                .Select(NormalizeLoose)
-                .Any(targetArtists.Contains);
+        var expected = new TrackIdentity(expectedTitle, expectedArtists, expectedDurationMs);
+        var candidate = new TrackIdentity(candidateTitle, candidateArtists, candidateDurationMs);
+        return TrackIdentityMatcher.Evaluate(expected, candidate).Verdict == IdentityVerdict.Rejected;
     }
 
     /// <summary>
     /// 跨语言曲名兜底匹配：部分平台对同一首歌使用不同语言的曲名（汽水 "BBIBBI" vs 韩文原名 "삐삐"），
     /// 标题比较必然失败。此时用「艺人 + 专辑 + 时长（±5 秒）」三元组确认，三者必须同时命中。
     /// </summary>
-    private static List<(IMusicSourceProvider Provider, SourceSearchResult Result)> FindAlbumArtistDurationMatches(
+    private static List<(IMusicSourceProvider? Provider, SourceSearchResult Result)> FindAlbumArtistDurationMatches(
         ParsedPlaylistTrack track,
-        (IMusicSourceProvider Provider, SourceSearchResult[] Results, string? Outcome, string? Message)[] providerResults)
+        IReadOnlyList<ProviderSearchOutcome> providerResults)
     {
         var targetAlbum = NormalizeLoose(track.AlbumTitle);
         var targetArtists = track.Artists
@@ -1181,7 +1224,7 @@ public sealed partial class PlaylistImportService(
                     && Math.Abs(candidateDuration - durationMs) <= 5000
                     && NormalizeLoose(result.AlbumTitle) == targetAlbum
                     && result.Artists.Select(NormalizeLoose).Any(targetArtists.Contains))
-                .Select(result => (search.Provider, Result: result)))
+                .Select(result => (Provider: search.Legacy, Result: result)))
             .ToList();
     }
 
@@ -1189,9 +1232,9 @@ public sealed partial class PlaylistImportService(
     /// 标题包含兜底：平台常给曲名追加后缀（"背对背拥抱 (电视剧《爱情睡醒了》插曲)"、"阿刁 (歌手2018)"），
     /// 标题全等会漏配。改为「一方标题包含另一方 + 艺人命中 + 时长 ±5 秒」，时长约束用于排除 Live/伴奏等版本。
     /// </summary>
-    private static List<(IMusicSourceProvider Provider, SourceSearchResult Result)> FindContainedTitleMatches(
+    private static List<(IMusicSourceProvider? Provider, SourceSearchResult Result)> FindContainedTitleMatches(
         ParsedPlaylistTrack track,
-        (IMusicSourceProvider Provider, SourceSearchResult[] Results, string? Outcome, string? Message)[] providerResults)
+        IReadOnlyList<ProviderSearchOutcome> providerResults)
     {
         var targetTitle = NormalizeLoose(track.Title);
         var targetArtists = track.Artists
@@ -1213,7 +1256,7 @@ public sealed partial class PlaylistImportService(
                         && Math.Abs(candidateDuration - durationMs) <= 5000
                         && result.Artists.Select(NormalizeLoose).Any(targetArtists.Contains);
                 })
-                .Select(result => (search.Provider, Result: result)))
+                .Select(result => (Provider: search.Legacy, Result: result)))
             .ToList();
     }
 
@@ -1221,9 +1264,9 @@ public sealed partial class PlaylistImportService(
     /// 主标题兜底：剥离括号说明（"（歌手2018）"）与「 - Live」等尾缀后再比较主标题，
     /// 解决同曲不同版本标注（"阿刁 - Live" vs "阿刁 (歌手2018)"）；仍要求艺人命中且时长 ±5 秒。
     /// </summary>
-    private static List<(IMusicSourceProvider Provider, SourceSearchResult Result)> FindCoreTitleMatches(
+    private static List<(IMusicSourceProvider? Provider, SourceSearchResult Result)> FindCoreTitleMatches(
         ParsedPlaylistTrack track,
-        (IMusicSourceProvider Provider, SourceSearchResult[] Results, string? Outcome, string? Message)[] providerResults)
+        IReadOnlyList<ProviderSearchOutcome> providerResults)
     {
         var targetTitle = CoreTitle(track.Title);
         var targetArtists = track.Artists
@@ -1240,7 +1283,7 @@ public sealed partial class PlaylistImportService(
                     && result.DurationMs is { } candidateDuration
                     && Math.Abs(candidateDuration - durationMs) <= 5000
                     && result.Artists.Select(NormalizeLoose).Any(targetArtists.Contains))
-                .Select(result => (search.Provider, Result: result)))
+                .Select(result => (Provider: search.Legacy, Result: result)))
             .ToList();
     }
 
@@ -1313,6 +1356,7 @@ public sealed partial class PlaylistImportService(
         var playlist = await db.Queryable<UserPlaylist>()
             .FirstAsync(candidate => candidate.Id == playlistId, cancellationToken)
             ?? throw new InvalidOperationException("歌单不存在。");
+        await ResolvePendingAsync(playlistId, cancellationToken);
         var pendings = await db.Queryable<UserPlaylistPendingTrack>()
             .Where(item => item.PlaylistId == playlistId)
             .OrderBy(item => item.SortOrder)
@@ -1327,7 +1371,10 @@ public sealed partial class PlaylistImportService(
             if (pending.Status == PendingStatuses.Downloading && pending.DownloadTaskId is { } taskId)
             {
                 var alive = await db.Queryable<ExternalDownloadTask>()
-                    .AnyAsync(candidate => candidate.Id == taskId, cancellationToken);
+                    .AnyAsync(candidate => candidate.Id == taskId &&
+                        (candidate.Status == ExternalDownloadTaskStatuses.Queued ||
+                         candidate.Status == ExternalDownloadTaskStatuses.Downloading ||
+                         candidate.Status == ExternalDownloadTaskStatuses.ImportQueued), cancellationToken);
                 if (alive)
                 {
                     unchanged++;
@@ -1392,10 +1439,14 @@ public sealed partial class PlaylistImportService(
             : WhitespaceRegex().Replace(value, " ").Trim().ToLowerInvariant();
 
     /// <summary>
-    /// 更宽松的归一化：仅保留字母与数字（含 CJK），丢弃空格与全部标点。
-    /// 各平台对空格/标点的写法不一致（"G.E.M. 邓紫棋" vs "G.E.M.邓紫棋"、
-    /// "阿刁 - Live" vs "阿刁 (Live)"），严格归一化会把这些同一首歌判成不同曲目。
-    /// 注意：查询曲库时仍用 <see cref="Normalize"/>（SQL 端按 Title 原值比较），此方法只用于跨源比较。
+    /// 更宽松的字段归一化：仅保留字母与数字（含 CJK），丢弃空格与全部标点。
+    /// 各平台对空格/标点的写法不一致（"G.E.M. 邓紫棋" vs "G.E.M.邓紫棋"），
+    /// 严格归一化会把这些同一首歌判成不同曲目。
+    /// 注意：
+    /// - 身份匹配已收归 <see cref="TrackIdentityMatcher"/>，不再使用此方法；
+    /// - 查询曲库时用 <see cref="Normalize"/>（SQL 端按 Title 原值比较）；
+    /// - 此方法仅用于搜索阶段的**字段比较**（专辑名/艺人名的松散集合命中），
+    ///   属于搜索召回策略，不是身份判定。
     /// </summary>
     private static string NormalizeLoose(string? value)
     {

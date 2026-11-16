@@ -13,6 +13,7 @@ import type {
   ApiExternalDownloadTask,
   ApiExternalDownloadTaskList,
   ApiSourceSearch,
+  ApiSourceProvider,
   ApiSourceSearchItem,
   ApiSwitchSourceResponse,
   ApiUnmatchedTrackList,
@@ -66,6 +67,10 @@ export const SourceQualityLabel: Record<string, string> = {
   standard: 'sourceDownload.quality.standard',
 }
 
+export function getSourceProviders(): Promise<ApiSourceProvider[]> {
+  return http.get<ApiSourceProvider[]>(`${API_PREFIX}/admin/source-providers`)
+}
+
 /** 按精确条件搜索曲目或专辑。provider 缺省为 all（并行聚合各启用源，单源失败见 providerErrors）。
  *  聚合搜索可能触发多个外部源串行请求，超时放大到 90s。 */
 export async function searchSources(
@@ -84,17 +89,6 @@ export async function searchSources(
   })
 }
 
-/** 音质排序权重（与后端 SourceQualities.Rank 对齐，值越小越好）。 */
-const qualityRank: Record<string, number> = {
-  lossless: 0,
-  high: 1,
-  standard: 2,
-}
-
-/** 按音质从好到坏排序（未知音质排最后）。 */
-function sortByQuality(items: SourceSearchItem[]): SourceSearchItem[] {
-  return [...items].sort((a, b) => (qualityRank[a.quality] ?? 3) - (qualityRank[b.quality] ?? 3))
-}
 
 /** 归一化标题+艺人作为同曲分组键。 */
 function songKey(item: SourceSearchItem): string {
@@ -114,19 +108,20 @@ export async function createDownloadTasks(
 ): Promise<ApiCreateSourceDownloadTasksResult> {
   if (items.length === 0) throw new Error('No tracks were selected for download.')
 
-  // 按同曲分组：同一 (归一化标题+艺人) 的条目为一组，可能跨 provider。
-  const groups = new Map<string, SourceSearchItem[]>()
+  // Require every known duration in a group to agree; avoid transitive 5-second chains.
+  const groups: SourceSearchItem[][] = []
   for (const item of items) {
-    const key = songKey(item)
-    const list = groups.get(key) ?? []
-    list.push(item)
-    groups.set(key, list)
+    const group = groups.find(list => list.every(other => songKey(other) === songKey(item)
+      && (other.albumTitle ?? '').trim().toLowerCase() === (item.albumTitle ?? '').trim().toLowerCase()
+      && (!(other.durationMs && item.durationMs) || Math.abs(other.durationMs - item.durationMs) <= 5000)))
+    if (group) group.push(item)
+    else groups.push([item])
   }
 
   const allCreated: ApiExternalDownloadTask[] = []
   const allSkipped: string[] = []
 
-  for (const [, groupItems] of groups) {
+  for (const groupItems of groups) {
     // 单 provider 单条：旧模式。
     if (groupItems.length === 1) {
       const item = groupItems[0]
@@ -158,9 +153,9 @@ export async function createDownloadTasks(
       continue
     }
 
-    // 跨 provider 同曲：多候选换源模式，按音质排序。
-    const sorted = sortByQuality(groupItems)
-    const primary = sorted[0]
+    // Keep the first selection as the expected identity; quality must not replace it.
+    const sorted = groupItems
+    const primary = groupItems[0]
     const metadata: Record<string, ApiSourceSearchItem> = {}
     for (const item of sorted) metadata[item.providerTrackId] = item
     const result = await http.post<ApiCreateSourceDownloadTasksResult>(`${API_PREFIX}/admin/source-downloads/tasks`, {
@@ -168,6 +163,7 @@ export async function createDownloadTasks(
       providerTrackIds: [primary.providerTrackId],
       metadata,
       candidates: sorted,
+      expectedTrack: { title: primary.title, artists: primary.artists, durationMs: primary.durationMs, albumTitle: primary.albumTitle },
     })
     allCreated.push(...result.created)
     allSkipped.push(...result.skippedDuplicates)

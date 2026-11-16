@@ -8,7 +8,7 @@
 //      注：酷狗 CDN 的 https 证书在本机 schannel 下不受信，故走 http 明文（歌词非敏感数据，可接受）。
 //   3. MiguLyricsProvider（咪咕）——运营商版权曲库（含主流华语）；两步链路：search_all 响应直接携带
 //      lyricUrl 直链，GET 即得标准 LRC。零风控零签名（仅需 Referer: m.music.migu.cn）。
-// 已评估放弃：网易云（匿名搜索触发 -462 风控）、QQ 音乐（搜索接口需签名，匿名 500）、
+// 网易同ID查询见 NeteaseLyricsProvider；匿名搜索仍不使用。
 // 酷我（歌词需 zlib+base64+XOR 解码且主流华语曲库有缺口）、Genius/Musixmatch（需密钥且免费层残缺）。
 
 using System.Globalization;
@@ -25,7 +25,7 @@ namespace ShineMusic.Service.Lyrics;
 
 /// <summary>
 /// 外部歌词源提供者：按标题/艺人/时长匹配并取回歌词正文。
-/// 实现方负责自身的候选打分与阈值过滤；任何失败都返回 null，不向上抛。
+/// 实现方先验证身份与时间轴再评分；调用者取消必须传播。
 /// </summary>
 public interface IExternalLyricsProvider
 {
@@ -40,8 +40,8 @@ public interface IExternalLyricsProvider
 public readonly record struct LyricsCandidateInfo(string? Title, string? Artist, string? Album, double DurationSeconds);
 
 /// <summary>
-/// 歌词候选打分器：标题 45% + 艺人 35% + 时长 15% + 专辑 5%。
-/// 归一化会剥离括号版本说明（Live/Remix）与 feat. 后缀，避免同名不同版本错配。
+/// 歌词候选排序分：标题 45% + 艺人 35% + 时长 15% + 专辑 5%。
+/// 仅用于已经通过共享身份闸门的候选排序，不代表准确率。
 /// </summary>
 internal static class LyricsMatching
 {
@@ -174,8 +174,8 @@ internal static class ExternalLyricsHttp
         request.Headers.TryAddWithoutValidation("Accept", "application/json");
 
         using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-        if (!response.IsSuccessStatusCode)
-            return null;
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
+        response.EnsureSuccessStatusCode();
 
         return await response.Content.ReadFromJsonAsync<T>(JsonOptions, cancellationToken);
     }
@@ -231,7 +231,7 @@ public sealed class LrclibLyricsProvider(
                 ["duration"] = durationSeconds.Value.ToString(CultureInfo.InvariantCulture)
             });
             var exact = await ExternalLyricsHttp.GetJsonAsync<LrclibRecord>(client, exactUrl, _options.UserAgent, cancellationToken);
-            var exactMatch = BuildMatch(exact, 1.0);
+            var exactMatch = BuildMatch(query, exact);
             if (exactMatch is not null)
                 return exactMatch;
         }
@@ -246,36 +246,32 @@ public sealed class LrclibLyricsProvider(
         if (candidates is null || candidates.Count == 0)
             return null;
 
-        LrclibRecord? best = null;
-        double bestScore = 0;
-        foreach (var candidate in candidates)
-        {
-            if (candidate.Instrumental || PickContent(candidate) is null)
-                continue;
-            var score = LyricsMatching.Score(query,
-                new LyricsCandidateInfo(candidate.TrackName, candidate.ArtistName, candidate.AlbumName, candidate.Duration));
-            if (score < _options.MinScore || score <= bestScore)
-                continue;
-            best = candidate;
-            bestScore = score;
-        }
-
-        return best is null ? null : BuildMatch(best, bestScore);
+        return candidates.Take(20)
+            .Select(candidate => BuildMatch(query, candidate))
+            .Where(match => match is not null)
+            .OrderByDescending(match => match!.Confidence).FirstOrDefault();
     }
 
-    /// <summary>把 LRCLIB 记录转换为匹配结果；纯音乐或无歌词内容时返回 null。</summary>
-    private LyricsMatch? BuildMatch(LrclibRecord? record, double confidence)
+    private LyricsMatch? BuildMatch(LyricsQuery query, LrclibRecord? record)
     {
-        if (record is null || record.Instrumental)
+        if (record is null) return null;
+        var id = record.Id.ToString(CultureInfo.InvariantCulture);
+        var info = new LyricsCandidateInfo(record.TrackName, record.ArtistName, record.AlbumName, record.Duration);
+        if (!LyricsValidation.ValidateIdentity(query, Source, id, info)) return null;
+        if (record.Instrumental)
+        {
+            LyricsValidation.Reject(query, Source, id, "instrumental");
             return null;
+        }
         var content = PickContent(record);
-        if (content is null)
+        if (!LyricsValidation.ValidateContent(query, Source, id, content)) return null;
+        var score = LyricsMatching.Score(query, info);
+        if (score < _options.MinScore)
+        {
+            LyricsValidation.Reject(query, Source, id, "score_below_threshold");
             return null;
-        return new LyricsMatch(
-            content,
-            LyricsSources.Lrclib,
-            Math.Round(Math.Clamp(confidence, 0, 1), 3),
-            record.Id > 0 ? record.Id.ToString(CultureInfo.InvariantCulture) : null);
+        }
+        return new LyricsMatch(content!, Source, Math.Round(score, 3), id);
     }
 
     /// <summary>选择歌词正文：优先逐行时间轴版本（可滚动高亮），否则退回纯文本。</summary>
@@ -335,27 +331,21 @@ public sealed class KuGouLyricsProvider(
         if (infos is null || infos.Count == 0)
             return null;
 
-        // 2) 打分挑最佳（歌名/艺人字段可能带 <em> 高亮标签，先剥离）。
-        KuGouSongInfo? best = null;
-        double bestScore = 0;
-        foreach (var info in infos)
+        var ranked = infos.Take(5).Where(info => LyricsValidation.ValidateIdentity(query, Source, info.Hash,
+                new LyricsCandidateInfo(StripHighlight(info.SongName), StripHighlight(info.SingerName), StripHighlight(info.AlbumName), info.Duration)))
+            .Select(info => (Song: info, Score: LyricsMatching.Score(query, new LyricsCandidateInfo(
+                StripHighlight(info.SongName), StripHighlight(info.SingerName), StripHighlight(info.AlbumName), info.Duration))))
+            .Where(item => item.Score >= _options.MinScore).OrderByDescending(item => item.Score).ToArray();
+        foreach (var (best, bestScore) in ranked)
         {
-            var score = LyricsMatching.Score(query, new LyricsCandidateInfo(
-                StripHighlight(info.SongName), StripHighlight(info.SingerName), StripHighlight(info.AlbumName), info.Duration));
-            if (score < _options.MinScore || score <= bestScore)
-                continue;
-            best = info;
-            bestScore = score;
-        }
-        if (best is null || string.IsNullOrWhiteSpace(best.Hash))
-            return null;
+        if (string.IsNullOrWhiteSpace(best.Hash)) continue;
 
         // 3) 按时长取歌词候选并逐个尝试下载解码（前 3 个候选即止）。
         var durationMs = best.Duration > 0 ? (long)(best.Duration * 1000) : query.DurationMs ?? 0;
         var candidatesUrl = $"{LyricSearchBase}?ver=1&man=yes&client=mobi&keyword=&duration={durationMs}&hash={Uri.EscapeDataString(best.Hash)}";
         var candidates = await ExternalLyricsHttp.GetJsonAsync<KuGouLyricCandidates>(client, candidatesUrl, _options.UserAgent, cancellationToken);
         if (candidates?.Candidates is null)
-            return null;
+            continue;
 
         foreach (var candidate in candidates.Candidates.Take(3))
         {
@@ -364,9 +354,10 @@ public sealed class KuGouLyricsProvider(
             var downloadUrl = $"{LyricDownloadBase}?ver=1&client=pc&id={candidate.Id}&accesskey={Uri.EscapeDataString(candidate.AccessKey)}&fmt=lrc&charset=utf8";
             var download = await ExternalLyricsHttp.GetJsonAsync<KuGouLyricDownload>(client, downloadUrl, _options.UserAgent, cancellationToken);
             var content = DecodeContent(download?.Content);
-            if (content is null)
+            if (!LyricsValidation.ValidateContent(query, Source, candidate.Id.ToString(CultureInfo.InvariantCulture), content))
                 continue;
-            return new LyricsMatch(content, LyricsSources.KuGou, Math.Round(Math.Clamp(bestScore, 0, 1), 3), candidate.Id.ToString(CultureInfo.InvariantCulture));
+            return new LyricsMatch(content!, LyricsSources.KuGou, Math.Round(Math.Clamp(bestScore, 0, 1), 3), candidate.Id.ToString(CultureInfo.InvariantCulture));
+        }
         }
         return null;
     }
@@ -462,8 +453,7 @@ public sealed class MiguLyricsProvider(
             request.Headers.TryAddWithoutValidation("Referer", Referer);
             request.Headers.TryAddWithoutValidation("Accept", "application/json");
             using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-            if (!response.IsSuccessStatusCode)
-                return null;
+            response.EnsureSuccessStatusCode();
             search = await response.Content.ReadFromJsonAsync<MiguSearchResponse>(ExternalLyricsHttp.JsonOptions, cancellationToken);
         }
 
@@ -471,32 +461,23 @@ public sealed class MiguLyricsProvider(
         if (results is null || results.Count == 0)
             return null;
 
-        // 2) 打分挑最佳（咪咕条目歌手为数组；时长字段可能缺失，缺失时该维度计 0 分）。
-        MiguSongEntry? best = null;
-        double bestScore = 0;
-        foreach (var entry in results)
+        var ranked = results.Take(10).Where(entry => LyricsValidation.ValidateIdentity(query, Source, entry.CopyrightId ?? entry.SongId,
+                new LyricsCandidateInfo(entry.Name,
+                    entry.Singers is { Count: > 0 } ? string.Join(" & ", entry.Singers.Select(s => s.Name)) : null,
+                    entry.Albums?.FirstOrDefault()?.Name, ParseDuration(entry.Duration))))
+            .Select(entry => (Song: entry, Score: LyricsMatching.Score(query, new LyricsCandidateInfo(entry.Name,
+                entry.Singers is { Count: > 0 } ? string.Join(" & ", entry.Singers.Select(s => s.Name)) : null,
+                entry.Albums?.FirstOrDefault()?.Name, ParseDuration(entry.Duration)))))
+            .Where(item => item.Score >= _options.MinScore).OrderByDescending(item => item.Score).Take(5).ToArray();
+        foreach (var (best, bestScore) in ranked)
         {
-            if (string.IsNullOrWhiteSpace(entry.LyricUrl))
-                continue;
-            var score = LyricsMatching.Score(query, new LyricsCandidateInfo(
-                entry.Name,
-                entry.Singers is { Count: > 0 } ? string.Join(" & ", entry.Singers.Select(s => s.Name).Where(n => !string.IsNullOrWhiteSpace(n))) : null,
-                entry.Albums is { Count: > 0 } ? entry.Albums[0].Name : null,
-                ParseDuration(entry.Duration)));
-            if (score < _options.MinScore || score <= bestScore)
-                continue;
-            best = entry;
-            bestScore = score;
+            if (string.IsNullOrWhiteSpace(best.LyricUrl)) continue;
+            var lrcText = await GetPlainTextAsync(client, best.LyricUrl, cancellationToken);
+            var content = LyricsContent.Normalize(lrcText);
+            if (!LyricsValidation.ValidateContent(query, Source, best.CopyrightId ?? best.SongId, content)) continue;
+            return new LyricsMatch(content!, Source, Math.Round(bestScore, 3), best.CopyrightId ?? best.SongId);
         }
-        if (best is null)
-            return null;
-
-        // 3) 直链取 LRC 正文（咪咕 OSS 直链，无需特殊头）。
-        var lrcText = await GetPlainTextAsync(client, best.LyricUrl!, cancellationToken);
-        var content = LyricsContent.Normalize(lrcText);
-        return content is null
-            ? null
-            : new LyricsMatch(content, LyricsSources.Migu, Math.Round(Math.Clamp(bestScore, 0, 1), 3), best.CopyrightId ?? best.SongId);
+        return null;
     }
 
     /// <summary>咪咕 duration 可能是秒数字符串或数字，宽松解析；解析失败返回 0。</summary>
@@ -514,8 +495,7 @@ public sealed class MiguLyricsProvider(
         if (!string.IsNullOrWhiteSpace(_options.UserAgent))
             request.Headers.TryAddWithoutValidation("User-Agent", _options.UserAgent);
         using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-        if (!response.IsSuccessStatusCode)
-            return null;
+        response.EnsureSuccessStatusCode();
         var text = await response.Content.ReadAsStringAsync(cancellationToken);
         return string.IsNullOrWhiteSpace(text) ? null : text;
     }
@@ -552,11 +532,9 @@ public sealed class MiguLyricsProvider(
     }
 }
 
-/// <summary>歌词正文清洗：统一换行、去首尾空白、截断超长；空白内容返回 null。（与 LyricsResolver 共用）</summary>
+/// <summary>歌词正文清洗：统一换行和首尾空白；外部结果由 LyricsValidation 检查长度，不截断时间轴。</summary>
 internal static class LyricsContent
 {
-    /// <summary>单份歌词的最大字符数，防止异常数据撑爆数据库字段。</summary>
-    private const int MaxLyricsChars = 20000;
 
     public static string? Normalize(string? value)
     {
@@ -565,6 +543,6 @@ internal static class LyricsContent
         var normalized = value.Replace("\r\n", "\n").Replace('\r', '\n').Trim();
         if (normalized.Length == 0)
             return null;
-        return normalized.Length > MaxLyricsChars ? normalized[..MaxLyricsChars] : normalized;
+        return normalized;
     }
 }

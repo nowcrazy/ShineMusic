@@ -28,6 +28,11 @@ public sealed record ImportSourceFileDto(string DisplayName, long SizeBytes, str
 /// <param name="Lyrics">当前歌词正文（可能来自内嵌标签、旁挂 .lrc、外部源自动匹配或人工补充）；无歌词时为 null。</param>
 /// <param name="LyricsSource">歌词来源标识：embedded / sidecar / lrclib / manual；无歌词时为 null。</param>
 /// <param name="LyricsConfidence">歌词匹配置信度（0~1）；外部源按相似度打分，其余为 1。</param>
+/// <param name="ReleaseDate">完整发行日期。</param>
+/// <param name="Isrc">国际标准录音代码。</param>
+/// <param name="AlbumArtists">专辑艺人。</param>
+/// <param name="OriginalGenres">原始流派。</param>
+/// <param name="FieldAudit">来源、人工锁与冲突。</param>
 public sealed record ImportMetadataDto(
     string? Title,
     IReadOnlyList<string> Artists,
@@ -43,7 +48,12 @@ public sealed record ImportMetadataDto(
     bool ArtworkAvailable,
     string? Lyrics,
     string? LyricsSource,
-    double? LyricsConfidence);
+    double? LyricsConfidence,
+    string? ReleaseDate = null,
+    string? Isrc = null,
+    IReadOnlyList<string>? AlbumArtists = null,
+    IReadOnlyList<string>? OriginalGenres = null,
+    IReadOnlyList<MetadataFieldAuditDto>? FieldAudit = null);
 
 /// <summary>
 /// 单个导入文件的服务端转码状态。
@@ -84,7 +94,7 @@ public sealed record SongRequestMatchDto(
 /// <param name="SongRequestMatch">与关联需求的匹配结果；未关联或元数据未解析时为 null。</param>
 /// <param name="AutoScore">自动评分总分（0-100）；未评分或评分机制未启用时为 null。</param>
 /// <param name="AutoPublished">是否由评分闸门自动发布；false 表示人工审核后发布或尚未发布。</param>
-/// <param name="ScoreBreakdown">评分分项明细（音质/元数据/歌词），供审核面板直接展示；JSON 缺失时为 null。</param>
+/// <param name="ScoreBreakdown">评分分项明细（身份/音质/元数据/歌词），供审核面板直接展示；JSON 缺失时为 null。</param>
 public sealed record LibraryImportItemDto(
     Guid Id,
     string Status,
@@ -103,6 +113,7 @@ public sealed record LibraryImportItemDto(
 /// <summary>自动评分分项明细。原始 JSON 字段拆解为强类型，供前端抽屉面板直接渲染。</summary>
 public sealed record ImportScoreBreakdownDto(
     double Total,
+    ScoreSegmentDto Identity,
     ScoreSegmentDto Quality,
     ScoreSegmentDto Metadata,
     ScoreSegmentDto Lyrics);
@@ -130,6 +141,10 @@ public sealed record LibraryImportBatchDto(Guid Id, string Status, IReadOnlyList
 /// <param name="Genres">修正后的流派标签列表。</param>
 /// <param name="Lyrics">修正后的歌词；传空字符串表示清空，不传则保持原值。</param>
 /// <param name="SongRequestId">关联的点歌请求标识；当本次导入用于满足某条点歌诉求时传入，否则为 null。</param>
+/// <param name="ReleaseDate">完整日期，空串清空。</param>
+/// <param name="Isrc">ISRC，空串清空。</param>
+/// <param name="AlbumArtists">专辑艺人，空数组清空。</param>
+/// <param name="OriginalGenres">原始流派，空数组清空。</param>
 public sealed record UpdateImportItemRequest(
     string? Title,
     IReadOnlyList<string>? Artists,
@@ -139,7 +154,11 @@ public sealed record UpdateImportItemRequest(
     int? ReleaseYear,
     IReadOnlyList<string>? Genres,
     string? Lyrics,
-    Guid? SongRequestId);
+    Guid? SongRequestId,
+    string? ReleaseDate = null,
+    string? Isrc = null,
+    IReadOnlyList<string>? AlbumArtists = null,
+    IReadOnlyList<string>? OriginalGenres = null);
 
 /// <summary>
 /// 带上传者信息的导入条目（管理端审核列表用）。
@@ -181,6 +200,42 @@ public sealed record BulkPublishItemResult(
 /// <param name="Item">补全后的导入项最新状态（前端直接用它刷新表单）。</param>
 /// <param name="Filled">本次补齐的字段标识列表（lyrics/album/genres/releaseYear/cover/trackNumber/discNumber/explicit）；空数组表示外部源均无命中。</param>
 public sealed record EnrichImportItemResultDto(LibraryImportItemDto Item, IReadOnlyList<string> Filled);
+
+/// <summary>
+/// 批量审核请求体：一次请求对多个导入条目执行「通过」或「拒绝」。
+/// </summary>
+/// <param name="ItemIds">要审核的导入条目 Id 列表。</param>
+/// <param name="Action">审核动作：approve=通过 / reject=拒绝。</param>
+/// <param name="Reason">拒绝原因（reject 时必填，写入审计日志）；approve 时可省略。</param>
+public sealed record BulkReviewRequestDto(
+    IReadOnlyList<Guid> ItemIds,
+    string Action,
+    string? Reason);
+
+/// <summary>
+/// 批量审核中单条的结果。
+/// </summary>
+/// <param name="ItemId">导入条目 Id。</param>
+/// <param name="DisplayName">源文件显示名。</param>
+/// <param name="Success">是否审核操作成功。</param>
+/// <param name="Error">失败原因；成功时为 null。</param>
+public sealed record BulkReviewItemResultDto(
+    Guid ItemId,
+    string DisplayName,
+    bool Success,
+    string? Error);
+
+/// <summary>
+/// 批量审核结果。
+/// </summary>
+/// <param name="Total">本次处理的条目总数。</param>
+/// <param name="Success">操作成功的条数。</param>
+/// <param name="Results">每条的执行结果明细。</param>
+public sealed record BulkReviewResultDto(
+    int Total,
+    int Success,
+    IReadOnlyList<BulkReviewItemResultDto> Results);
+
 
 /// <summary>封面上传成功后的结果：封面标识与其读取地址。</summary>
 /// <param name="Id">封面唯一标识。</param>

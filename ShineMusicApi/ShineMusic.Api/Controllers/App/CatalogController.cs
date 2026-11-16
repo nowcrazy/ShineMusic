@@ -458,7 +458,8 @@ public sealed class CatalogController : ControllerBase
             track.TrackGenres.Select(link => link.Genre.Name).Order().ToArray(),
             track.DurationMs,
             ArtworkUrl(track.ArtworkId ?? track.Album?.ArtworkId),
-            primaryAsset is null ? null : new AudioDto(primaryAsset.Container, primaryAsset.Codec, primaryAsset.BitrateKbps));
+            primaryAsset is null ? null : new AudioDto(primaryAsset.Container, primaryAsset.Codec, primaryAsset.BitrateKbps),
+            track.ReleaseDate, track.Isrc, MetadataMerge.List(track.AlbumArtistsJson), MetadataMerge.List(track.OriginalGenresJson));
     }
 
     /// <summary>批量构造歌单摘要：按集合 Id 统计各自「已发布曲目」数量（数据库行数口径），再映射 DTO。</summary>
@@ -485,21 +486,11 @@ public sealed class CatalogController : ControllerBase
 
     private static string? ArtworkUrl(Guid? artworkId) => artworkId is null ? null : $"/api/v1/artwork/{artworkId.Value}";
 
-    private static string? GetAudioContentType(string container) => container.ToLowerInvariant() switch
-    {
-        "mp3" => "audio/mpeg",
-        "flac" => "audio/flac",
-        "wav" or "wave" => "audio/wav",
-        "aac" or "m4a" or "m4b" or "mp4" => "audio/mp4",
-        "ogg" or "oga" => "audio/ogg",
-        "wma" => "audio/x-ms-wma",
-        "aiff" or "aif" => "audio/aiff",
-        "ape" => "audio/ape",
-        "wv" => "audio/wavpack",
-        "mpc" or "mpp" => "audio/musepack",
-        "dsf" => "audio/dsf",
-        _ => null
-    };
+    /// <summary>
+    /// 与发布侧共用同一份容器白名单（PlaybackMediaPolicy），避免发布时把 FLAC 原文件标为 primary、
+    /// 播放时却又因白名单不一致返回 415。
+    /// </summary>
+    private static string? GetAudioContentType(string container) => PlaybackMediaPolicy.TryGetContentType(container);
 
     private static bool TryGetPaging(
         HttpContext ctx,

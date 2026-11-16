@@ -106,7 +106,7 @@ export default defineConfig(({ command, mode }) => {
   // 兼容旧配置：origin 缺失时依次回退旧字段，最后才是本机回环（无服务器、纯本地开发）。
   const serverOrigin =
     server.origin || server.apiOrigin || server.appApiOrigin || server.webOrigin || ''
-  const apiTarget = serverOrigin || `http://127.0.0.1:${apiPort}`
+  const apiTarget = process.env.SM_DEV_API_TARGET || serverOrigin || `http://127.0.0.1:${apiPort}`;
 
   // 开发：走 Vite 代理，天然同源；生产：独立站点直连 API（CORS 白名单由后端放行）。
   const apiBase = mode === 'production' ? serverOrigin : ''

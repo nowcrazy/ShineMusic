@@ -63,10 +63,11 @@ const targetRequest = ref<{ id: string; title: string; artistName: string } | nu
 // 自动刷新定时器
 let autoRefreshTimer: ReturnType<typeof setInterval> | null = null
 
-/** 判断条目是否需要显示在审核列表中（排除已发布/已拒绝/处理失败等终态） */
+/** 判断条目是否需要显示在审核列表中（排除已发布/已拒绝/身份拒绝/处理失败等终态） */
 function isActiveItem(status: string): boolean {
   return status !== ImportItemStatus.Published &&
     status !== ImportItemStatus.Rejected &&
+    status !== ImportItemStatus.IdentityRejected &&
     status !== ImportItemStatus.ProcessingFailed
 }
 
@@ -642,6 +643,7 @@ function statusClass(status: string): string {
     case 'pending_review':
       return 'status-warn'
     case 'rejected':
+    case 'identity_rejected':
     case 'processing_failed':
     case 'failed':
     case 'completed_with_errors':

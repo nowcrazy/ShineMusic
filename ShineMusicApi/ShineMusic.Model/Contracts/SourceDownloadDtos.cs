@@ -28,6 +28,10 @@ public sealed record SourceSearchResponse(
     IReadOnlyList<SourceProviderErrorDto> ProviderErrors,
     int FilteredCount = 0);
 
+/// <summary>用户/原歌单要求的歌曲身份，与可变下载候选分开保存。</summary>
+public sealed record SourceExpectedTrackDto(
+    string Title, IReadOnlyList<string> Artists, string? AlbumTitle, long? DurationMs);
+
 /// <summary>
 /// 创建下载任务请求。
 /// 两种模式互斥：
@@ -39,7 +43,8 @@ public sealed record CreateSourceDownloadTasksRequest(
     string? Provider = null,
     IReadOnlyList<string>? ProviderTrackIds = null,
     IReadOnlyDictionary<string, SourceSearchItemDto>? Metadata = null,
-    IReadOnlyList<SourceSearchItemDto>? Candidates = null);
+    IReadOnlyList<SourceSearchItemDto>? Candidates = null,
+    SourceExpectedTrackDto? ExpectedTrack = null);
 
 /// <summary>创建下载任务响应：新建/重置入队的任务与因重复被跳过的平台曲目 Id。</summary>
 public sealed record CreateSourceDownloadTasksResultDto(

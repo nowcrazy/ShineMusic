@@ -57,16 +57,22 @@ public sealed class DomainPolicyTests
     {
         Assert.True(LibraryImportStateMachine.IsImmutable(LibraryImportItemStatuses.Published));
         Assert.True(LibraryImportStateMachine.IsImmutable(LibraryImportItemStatuses.Rejected));
+        Assert.True(LibraryImportStateMachine.IsImmutable(LibraryImportItemStatuses.IdentityRejected));
         Assert.False(LibraryImportStateMachine.IsImmutable(LibraryImportItemStatuses.ProcessingFailed));
 
         Assert.True(LibraryImportStateMachine.CanDismiss(LibraryImportItemStatuses.ProcessingFailed));
+        Assert.True(LibraryImportStateMachine.CanDismiss(LibraryImportItemStatuses.IdentityRejected));
         Assert.False(LibraryImportStateMachine.CanDismiss(LibraryImportItemStatuses.PendingReview));
 
-        // 已拒绝条目允许再次丢弃（与改造前的端点判定一致）。
+        // 已拒绝/身份拒绝条目允许再次丢弃（与改造前的端点判定一致）。
         Assert.True(LibraryImportStateMachine.CanDiscard(LibraryImportItemStatuses.Rejected));
+        Assert.True(LibraryImportStateMachine.CanDiscard(LibraryImportItemStatuses.IdentityRejected));
         Assert.False(LibraryImportStateMachine.CanDiscard(LibraryImportItemStatuses.Published));
         Assert.False(LibraryImportStateMachine.CanDiscard(LibraryImportItemStatuses.Transcoding));
         Assert.True(LibraryImportStateMachine.CanDiscard(LibraryImportItemStatuses.PendingReview));
+
+        // IdentityRejected 是终态。
+        Assert.True(LibraryImportStateMachine.IsTerminal(LibraryImportItemStatuses.IdentityRejected));
     }
 
     [Fact]

@@ -38,7 +38,22 @@ public sealed class MediaProcessingException(string code, string message) : Exce
 /// <param name="BitrateKbps">比特率（kbps），探测失败时为 null。</param>
 /// <param name="DurationMs">时长（毫秒），探测失败时为 null。</param>
 /// <param name="FormatNames">ffprobe 返回的原始 format_name 逗号分隔列表。</param>
-public sealed record ProbedMedia(string Container, string Codec, int? BitrateKbps, long? DurationMs, string FormatNames);
+/// <param name="SampleRateHz">采样率（Hz）；Phase 3 新增，探测失败时为 null。</param>
+/// <param name="BitsPerSample">无损位深；Phase 3 新增，优先取 bits_per_raw_sample，回退 bits_per_sample。</param>
+/// <param name="Channels">声道数；Phase 3 新增，探测失败时为 null。</param>
+/// <remarks>
+/// 后三个参数是 V2 Phase 3 为 AudioValidator 追加的，带默认值以保全既有 5 参数构造
+/// （MediaTranscoderAdapter / LibraryImportJob / SourceDownloadJob 无需改动）。
+/// </remarks>
+public sealed record ProbedMedia(
+    string Container,
+    string Codec,
+    int? BitrateKbps,
+    long? DurationMs,
+    string FormatNames,
+    int? SampleRateHz = null,
+    int? BitsPerSample = null,
+    int? Channels = null);
 
 /// <summary>
 /// TagLib# 解析得到的音频元数据。
@@ -54,6 +69,8 @@ public sealed record ProbedMedia(string Container, string Codec, int? BitrateKbp
 /// <param name="ArtworkStorageKey">封面在隔离存储中的存储键。</param>
 /// <param name="Lyrics">从标签中读取的内嵌歌词（ID3v2 USLT 等）；无内嵌歌词时为 null。</param>
 /// <param name="Warnings">解析过程中收集的非致命告警（如缺少标题/艺术家）。</param>
+/// <param name="AlbumArtists">标签中的专辑艺人。</param>
+/// <param name="Isrc">标签中的录音代码。</param>
 public sealed record ParsedAudioMetadata(
     string? Title,
     IReadOnlyList<string> Artists,
@@ -65,7 +82,9 @@ public sealed record ParsedAudioMetadata(
     long? DurationMs,
     string? ArtworkStorageKey,
     string? Lyrics,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string>? AlbumArtists = null,
+    string? Isrc = null);
 
 /// <summary>
 /// 基于 ffmpeg/ffprobe 的媒体服务。
@@ -89,7 +108,9 @@ public sealed class FfmpegMediaService(IOptions<FfmpegOptions> options, ILogger<
         // 调用 ffprobe：仅输出 format 与 stream 的关键字段，格式为 JSON，便于解析。
         var json = await RunAsync(
             _options.ProbeExecutablePath,
-            ["-v", "error", "-show_entries", "format=format_name,duration,bit_rate", "-show_entries", "stream=codec_type,codec_name,bit_rate", "-of", "json", sourcePath],
+            ["-v", "error", "-show_entries", "format=format_name,duration,bit_rate,size",
+             "-show_entries", "stream=codec_type,codec_name,bit_rate,sample_rate,bits_per_raw_sample,bits_per_sample,channels",
+             "-of", "json", sourcePath],
             cancellationToken,
             $"probe {sourcePath}");
         try
@@ -115,6 +136,12 @@ public sealed class FfmpegMediaService(IOptions<FfmpegOptions> options, ILogger<
             // 比特率优先取音频流级别，回退到容器级别。
             var bitrate = ParseLong(ReadString(audioStream, "bit_rate")) ?? ParseLong(ReadString(format, "bit_rate"));
             var duration = ParseDouble(ReadString(format, "duration"));
+            // Phase 3：ffprobe 对 FLAC 通常给 bits_per_raw_sample（16/24），部分版本给 bits_per_sample。
+            // 两者都取，优先 raw；非正数（部分容器回填 0）视为缺失，避免把「未知」误判成不达标。
+            var bitsPerSample = PositiveOrNull(ParseLong(ReadString(audioStream, "bits_per_raw_sample")))
+                                ?? PositiveOrNull(ParseLong(ReadString(audioStream, "bits_per_sample")));
+            var sampleRate = PositiveOrNull(ParseLong(ReadString(audioStream, "sample_rate")));
+            var channels = PositiveOrNull(ParseLong(ReadString(audioStream, "channels")));
             return new ProbedMedia(
                 canonicalContainer,
                 codec,
@@ -122,7 +149,10 @@ public sealed class FfmpegMediaService(IOptions<FfmpegOptions> options, ILogger<
                 bitrate.HasValue ? (int)Math.Clamp(bitrate.Value / 1000, 1, int.MaxValue) : null,
                 // 时长从秒转换为毫秒，采用远离零的四舍五入。
                 duration.HasValue ? (long)Math.Round(duration.Value * 1000, MidpointRounding.AwayFromZero) : null,
-                formatNames);
+                formatNames,
+                sampleRate.HasValue ? (int)Math.Clamp(sampleRate.Value, 1, int.MaxValue) : null,
+                bitsPerSample.HasValue ? (int)Math.Clamp(bitsPerSample.Value, 1, int.MaxValue) : null,
+                channels.HasValue ? (int)Math.Clamp(channels.Value, 1, int.MaxValue) : null);
         }
         catch (JsonException exception)
         {
@@ -274,6 +304,9 @@ public sealed class FfmpegMediaService(IOptions<FfmpegOptions> options, ILogger<
     /// </summary>
     private static long? ParseLong(string? value) => long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) ? parsed : null;
 
+    /// <summary>非正数视为「探测不到」，避免 0 被当成真实位深/采样率/声道数参与质量判定。</summary>
+    private static long? PositiveOrNull(long? value) => value is > 0 ? value : null;
+
     /// <summary>
     /// 将字符串安全解析为 double，解析失败返回 null。
     /// </summary>
@@ -330,7 +363,9 @@ public sealed class AudioMetadataParser(QuarantineStoragePaths storagePaths)
                 media.Properties.Duration > TimeSpan.Zero ? (long)media.Properties.Duration.TotalMilliseconds : null,
                 artworkStorageKey,
                 lyrics,
-                warnings);
+                warnings,
+                (tag.AlbumArtists ?? []).Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v.Trim()).Distinct().ToArray(),
+                NullIfBlank(tag.ISRC));
         }
         catch (Exception exception) when (exception is TagLib.UnsupportedFormatException or TagLib.CorruptFileException or IOException or ArgumentException)
         {

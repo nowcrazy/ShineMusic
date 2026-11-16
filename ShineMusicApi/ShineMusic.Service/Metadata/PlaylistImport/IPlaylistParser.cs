@@ -26,7 +26,11 @@ public sealed record ParsedPlaylist(
     string Name,
     string? CoverUrl,
     string? Description,
-    IReadOnlyList<ParsedPlaylistTrack> Tracks);
+    IReadOnlyList<ParsedPlaylistTrack> Tracks)
+{
+    /// <summary>平台声明的曲目总数；null 表示平台未提供。</summary>
+    public int? ExpectedTrackCount { get; init; }
+}
 
 /// <summary>解析得到的单个曲目。</summary>
 /// <param name="Title">曲目标题。</param>

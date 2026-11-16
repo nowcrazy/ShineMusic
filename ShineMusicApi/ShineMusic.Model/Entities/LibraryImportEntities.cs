@@ -45,6 +45,10 @@ public static class LibraryImportItemStatuses
     public const string Published = "published";
     /// <summary>终态：管理员审核拒绝，文件不会入库。</summary>
     public const string Rejected = "rejected";
+    /// <summary>终态：身份闸门判定为 Rejected（翻唱/错误曲目），不进入后台自动重试扫描，等待人工确认或丢弃。
+    /// 与 <see cref="Rejected"/> 的区别：Rejected 是管理员主观拒绝；IdentityRejected 是身份决策点客观拒绝。
+    /// 零 DDL：复用既有 Status 字段，不新增表/列。</summary>
+    public const string IdentityRejected = "identity_rejected";
     /// <summary>终态：校验/解析/转码任一自动环节失败（错误码见 ErrorCode）。</summary>
     public const string ProcessingFailed = "processing_failed";
 }
@@ -146,6 +150,21 @@ public sealed class LibraryImportItem
     /// <summary>发行年份（标签 Year）。</summary>
     [SugarColumn(IsNullable = true)]
     public int? ReleaseYear { get; set; }
+    /// <summary>完整发行日期，ISO yyyy-MM-dd；仅年份已知时保持null。</summary>
+    [SugarColumn(IsNullable = true)]
+    public string? ReleaseDate { get; set; }
+    /// <summary>国际标准录音代码；源未提供时保持null。</summary>
+    [SugarColumn(IsNullable = true)]
+    public string? Isrc { get; set; }
+    /// <summary>专辑艺人列表，独立于曲目演唱者。</summary>
+    [SugarColumn(ColumnDataType = "text", IsNullable = true)]
+    public string? AlbumArtistsJson { get; set; }
+    /// <summary>来源原始流派，不受推荐分类映射影响。</summary>
+    [SugarColumn(ColumnDataType = "text", IsNullable = true)]
+    public string? OriginalGenresJson { get; set; }
+    /// <summary>逐字段来源、人工锁与冲突审计。</summary>
+    [SugarColumn(ColumnDataType = "text", IsNullable = true)]
+    public string? MetadataAuditJson { get; set; }
     /// <summary>iTunes 曲目 ID（溯源用）；来自外部元数据源，非必须。</summary>
     [SugarColumn(IsNullable = true)]
     public long? ItunesTrackId { get; set; }

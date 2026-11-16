@@ -91,6 +91,21 @@ public sealed class Track
     /// <summary>发行年份（可独立于专辑年份，元数据缺失时为空）。</summary>
     [SugarColumn(IsNullable = true)]
     public int? ReleaseYear { get; set; }
+    /// <summary>完整发行日期，ISO yyyy-MM-dd。</summary>
+    [SugarColumn(IsNullable = true)]
+    public string? ReleaseDate { get; set; }
+    /// <summary>国际标准录音代码。</summary>
+    [SugarColumn(IsNullable = true)]
+    public string? Isrc { get; set; }
+    /// <summary>专辑艺人列表，与曲目艺人独立。</summary>
+    [SugarColumn(ColumnDataType = "text", IsNullable = true)]
+    public string? AlbumArtistsJson { get; set; }
+    /// <summary>来源原始流派列表。</summary>
+    [SugarColumn(ColumnDataType = "text", IsNullable = true)]
+    public string? OriginalGenresJson { get; set; }
+    /// <summary>发布时保存的元数据来源和冲突审计。</summary>
+    [SugarColumn(ColumnDataType = "text", IsNullable = true)]
+    public string? MetadataAuditJson { get; set; }
     /// <summary>曲目时长（毫秒）；ffprobe 探测与 TagLib 解析结果会相互兜底。</summary>
     [SugarColumn(IsNullable = true)]
     public long? DurationMs { get; set; }

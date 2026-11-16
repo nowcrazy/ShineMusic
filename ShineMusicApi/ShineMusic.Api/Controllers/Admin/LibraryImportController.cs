@@ -279,6 +279,17 @@ public sealed class LibraryImportController : ControllerBase
         if (update.AlbumTitle?.Length > 300 || update.Genres is { Count: > 30 } || update.Genres?.Any(genre => genre.Trim().Length > 100) == true)
             return ApiResults.ValidationError(HttpContext, "metadata", "Album or genre metadata exceeds its limit.");
 
+        if (!string.IsNullOrWhiteSpace(update.ReleaseDate) && !DateOnly.TryParseExact(update.ReleaseDate,
+                "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out _))
+            return ApiResults.ValidationError(HttpContext, "releaseDate", "Use yyyy-MM-dd or an empty string to clear.");
+        if (!string.IsNullOrWhiteSpace(update.ReleaseDate) && update.ReleaseYear is > 0
+            && !update.ReleaseDate.StartsWith(update.ReleaseYear.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal))
+            return ApiResults.ValidationError(HttpContext, "releaseDate", "Release date and year must agree.");
+        if (!string.IsNullOrWhiteSpace(update.Isrc) && !System.Text.RegularExpressions.Regex.IsMatch(update.Isrc.Trim().ToUpperInvariant(), "^[A-Z]{2}[A-Z0-9]{3}[0-9]{7}$"))
+            return ApiResults.ValidationError(HttpContext, "isrc", "ISRC must contain 12 letters/digits in standard form.");
+        if (update.AlbumArtists is { Count: > 10 } || update.AlbumArtists?.Any(v => string.IsNullOrWhiteSpace(v) || v.Length > 200) == true
+            || update.OriginalGenres is { Count: > 30 } || update.OriginalGenres?.Any(v => string.IsNullOrWhiteSpace(v) || v.Length > 100) == true)
+            return ApiResults.ValidationError(HttpContext, "metadata", "Album artists or original genres exceed limits.");
         item.Title = update.Title?.Trim() ?? item.Title;
         if (update.Artists is not null)
             item.ArtistsJson = JsonSerializer.Serialize(update.Artists.Select(artist => artist.Trim()).Distinct(StringComparer.OrdinalIgnoreCase));
@@ -305,6 +316,33 @@ public sealed class LibraryImportController : ControllerBase
                 return ApiResults.NotFound(HttpContext);
             item.SongRequestId = update.SongRequestId;
         }
+        if (update.ReleaseDate is not null) item.ReleaseDate = string.IsNullOrWhiteSpace(update.ReleaseDate) ? null : update.ReleaseDate.Trim();
+        if (!string.IsNullOrWhiteSpace(update.ReleaseDate))
+        {
+            item.ReleaseYear = int.Parse(update.ReleaseDate[..4], System.Globalization.CultureInfo.InvariantCulture);
+            MetadataMerge.Manual(item, "releaseYear", item.ReleaseYear);
+        }
+        else if (update.ReleaseYear.HasValue && item.ReleaseDate is { } oldDate &&
+            (item.ReleaseYear is null || !oldDate.StartsWith(item.ReleaseYear.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal)))
+        {
+            item.ReleaseDate = null;
+            MetadataMerge.Manual(item, "releaseDate", null);
+        }
+        if (update.Isrc is not null) item.Isrc = string.IsNullOrWhiteSpace(update.Isrc) ? null : update.Isrc.Trim().ToUpperInvariant();
+        if (update.AlbumArtists is not null) item.AlbumArtistsJson = JsonSerializer.Serialize(update.AlbumArtists.Select(v => v.Trim()).Distinct());
+        if (update.OriginalGenres is not null) item.OriginalGenresJson = JsonSerializer.Serialize(update.OriginalGenres.Select(v => v.Trim()).Distinct());
+        if (update.Title is not null) MetadataMerge.Manual(item, "title", item.Title);
+        if (update.Artists is not null) MetadataMerge.Manual(item, "artists", DeserializeList(item.ArtistsJson));
+        if (update.AlbumTitle is not null) MetadataMerge.Manual(item, "album", item.AlbumTitle);
+        if (update.ReleaseYear.HasValue) MetadataMerge.Manual(item, "releaseYear", item.ReleaseYear);
+        if (update.TrackNumber.HasValue) MetadataMerge.Manual(item, "trackNumber", item.TrackNumber);
+        if (update.DiscNumber.HasValue) MetadataMerge.Manual(item, "discNumber", item.DiscNumber);
+        if (update.Genres is not null) MetadataMerge.Manual(item, "genres", DeserializeList(item.GenresJson));
+        if (update.Lyrics is not null) MetadataMerge.Manual(item, "lyrics", item.Lyrics);
+        if (update.ReleaseDate is not null) MetadataMerge.Manual(item, "releaseDate", item.ReleaseDate);
+        if (update.Isrc is not null) MetadataMerge.Manual(item, "isrc", item.Isrc);
+        if (update.AlbumArtists is not null) MetadataMerge.Manual(item, "albumArtists", MetadataMerge.List(item.AlbumArtistsJson));
+        if (update.OriginalGenres is not null) MetadataMerge.Manual(item, "originalGenres", MetadataMerge.List(item.OriginalGenresJson));
         item.IsMetadataReviewed = LibraryImportStateMachine.IsMetadataComplete(item.Title, PublishGate.DeserializeList(item.ArtistsJson).Count);
         item.Status = LibraryImportStateMachine.StatusAfterReview(item.Status, item.IsMetadataReviewed);
         item.UpdatedAtUtc = DateTime.UtcNow;
@@ -333,9 +371,8 @@ public sealed class LibraryImportController : ControllerBase
         Guid itemId,
         ISqlSugarClient db,
         ILyricsResolver lyricsResolver,
-        ArtworkFetcher artworkFetcher,
+        ImportMetadataEnricher metadataEnricher,
         QuarantineStoragePaths storagePaths,
-        LibraryStoragePaths libraryPaths,
         IOptions<SongRequestFulfillmentOptions> fulfillmentOptions,
         CancellationToken cancellationToken)
     {
@@ -349,7 +386,7 @@ public sealed class LibraryImportController : ControllerBase
         var artists = DeserializeList(item.ArtistsJson);
 
         // —— 歌词链：仅当当前无歌词时才跑外部源 ——
-        if (string.IsNullOrWhiteSpace(item.Lyrics))
+        if (string.IsNullOrWhiteSpace(item.Lyrics) && !MetadataMerge.Locked(item, "lyrics"))
         {
             storagePaths.TryResolve(item.SourceStorageKey, out var sourcePath);
             var match = await lyricsResolver.ResolveAsync(
@@ -365,70 +402,13 @@ public sealed class LibraryImportController : ControllerBase
             }
         }
 
-        // —— iTunes 元数据：有艺人或标题即尝试，只补空字段 ——
-        var needsMetadata = string.IsNullOrWhiteSpace(item.AlbumTitle)
-            || item.ReleaseYear is null
-            || DeserializeList(item.GenresJson).Count == 0
-            || string.IsNullOrWhiteSpace(item.ArtworkStorageKey)
-            || item.TrackNumber is null
-            || item.DiscNumber is null;
-        var firstArtist = artists.FirstOrDefault();
-        if (needsMetadata && (!string.IsNullOrWhiteSpace(firstArtist) || !string.IsNullOrWhiteSpace(item.Title)))
-        {
-            var artworkDir = libraryPaths.TryResolve("artwork/.placeholder", out var placeholderPath)
-                ? Path.GetDirectoryName(placeholderPath)!
-                : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "data", "library", "artwork"));
-            var itunes = string.IsNullOrWhiteSpace(firstArtist)
-                ? await artworkFetcher.FetchByTitleAsync(item.Title!, "artwork", artworkDir, cancellationToken)
-                : await artworkFetcher.FetchAsync(firstArtist, item.AlbumTitle, item.Title, "artwork", artworkDir, cancellationToken);
-            if (itunes.Success)
-            {
-                if (string.IsNullOrWhiteSpace(item.AlbumTitle) && !string.IsNullOrWhiteSpace(itunes.AlbumTitle))
-                {
-                    item.AlbumTitle = itunes.AlbumTitle.Trim();
-                    filled.Add("album");
-                }
-                if (item.ReleaseYear is null && itunes.ReleaseYear is >= 1800 and <= 2200)
-                {
-                    item.ReleaseYear = itunes.ReleaseYear;
-                    filled.Add("releaseYear");
-                }
-                if (DeserializeList(item.GenresJson).Count == 0 && GenreMoodMapper.Map(itunes.Genre) is { } mood)
-                {
-                    item.GenresJson = JsonSerializer.Serialize(new[] { mood });
-                    filled.Add("genres");
-                }
-                if (string.IsNullOrWhiteSpace(item.ArtworkStorageKey) && !string.IsNullOrWhiteSpace(itunes.StorageKey))
-                {
-                    item.ArtworkStorageKey = itunes.StorageKey;
-                    filled.Add("cover");
-                }
-                if (item.TrackNumber is null && itunes.TrackNumber is > 0)
-                {
-                    item.TrackNumber = itunes.TrackNumber;
-                    filled.Add("trackNumber");
-                }
-                if (item.DiscNumber is null && itunes.DiscNumber is > 0)
-                {
-                    item.DiscNumber = itunes.DiscNumber;
-                    filled.Add("discNumber");
-                }
-                if (item.ItunesTrackId is null && itunes.ItunesTrackId is > 0)
-                    item.ItunesTrackId = itunes.ItunesTrackId;
-                if (string.IsNullOrWhiteSpace(item.ItunesCountry) && !string.IsNullOrWhiteSpace(itunes.Country))
-                    item.ItunesCountry = itunes.Country.Trim();
-                if (item.IsExplicit is null && !string.IsNullOrWhiteSpace(itunes.Explicitness))
-                {
-                    item.IsExplicit = ItunesMetadataHelper.ParseExplicit(itunes.Explicitness);
-                    filled.Add("explicit");
-                }
-            }
-        }
+        var priorAudit = item.MetadataAuditJson;
+        var priorWarnings = item.WarningsJson;
+        filled.AddRange(await metadataEnricher.EnrichFieldsAsync(item, cancellationToken));
 
-        if (filled.Count > 0)
+        if (filled.Count > 0 || item.MetadataAuditJson != priorAudit || item.WarningsJson != priorWarnings)
         {
-            item.IsMetadataReviewed = LibraryImportStateMachine.IsMetadataComplete(item.Title, PublishGate.DeserializeList(item.ArtistsJson).Count);
-            item.Status = LibraryImportStateMachine.StatusAfterReview(item.Status, item.IsMetadataReviewed);
+            // 补全不是人工审核；保留原审核状态，冲突由管理员明确确认。
             item.UpdatedAtUtc = DateTime.UtcNow;
             // 条目更新 + 审计同事务提交。
             await db.Ado.BeginTranAsync();
@@ -614,6 +594,118 @@ public sealed class LibraryImportController : ControllerBase
         return Results.Ok(new BulkPublishResultDto(candidates.Count, success, results.ToArray()));
     }
 
+    /// <summary>
+    /// 批量审核导入条目：一次请求对多个条目执行「通过」或「拒绝」。
+    /// - approve：置为元数据已审核 + ready_to_publish（与单条 PATCH 路径一致）。
+    /// - reject：置为新终态 identity_rejected（不进入后台自动重试扫描），reason 必填并写入审计日志。
+    /// 逐条独立处理，失败条目记录原因后继续下一条，最终返回成功/失败明细供前端展示。
+    /// </summary>
+    [HttpPost("import-items/bulk-review", Name = "BulkReviewImportItems")]
+    public async Task<IResult> BulkReviewItems(
+        BulkReviewRequestDto request,
+        ISqlSugarClient db,
+        QuarantineStoragePaths storagePaths,
+        CancellationToken cancellationToken)
+    {
+        if (request.ItemIds is null || request.ItemIds.Count == 0)
+            return ApiResults.ValidationError(HttpContext, "itemIds", "At least one item ID is required.");
+        if (string.IsNullOrWhiteSpace(request.Action) ||
+            !string.Equals(request.Action.Trim(), "approve", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(request.Action.Trim(), "reject", StringComparison.OrdinalIgnoreCase))
+            return ApiResults.ValidationError(HttpContext, "action", "Action must be 'approve' or 'reject'.");
+        var action = request.Action.Trim().ToLowerInvariant();
+        if (action == "reject" && string.IsNullOrWhiteSpace(request.Reason))
+            return ApiResults.ValidationError(HttpContext, "reason", "A reason is required when rejecting items.");
+
+        var distinctIds = request.ItemIds.Distinct().ToList();
+        var items = await db.Queryable<LibraryImportItem>()
+            .Where(item => distinctIds.Contains(item.Id) && !item.IsDeleted)
+            .ToListAsync(cancellationToken);
+
+        // 找不到的 Id 单独标记为失败。
+        var foundIds = items.Select(item => item.Id).ToHashSet();
+        var results = new List<BulkReviewItemResultDto>(distinctIds.Count);
+        var success = 0;
+
+        foreach (var itemId in distinctIds)
+        {
+            if (!foundIds.Contains(itemId))
+            {
+                results.Add(new BulkReviewItemResultDto(itemId, "(not found)", false, "Item not found."));
+                continue;
+            }
+        }
+
+        foreach (var item in items)
+        {
+            try
+            {
+                if (action == "approve")
+                {
+                    if (LibraryImportStateMachine.IsImmutable(item.Status))
+                    {
+                        results.Add(new BulkReviewItemResultDto(item.Id, item.DisplayName, false, "Item is in an immutable state."));
+                        continue;
+                    }
+                    item.IsMetadataReviewed = LibraryImportStateMachine.IsMetadataComplete(
+                        item.Title, PublishGate.DeserializeList(item.ArtistsJson).Count);
+                    item.Status = LibraryImportStateMachine.StatusAfterReview(item.Status, item.IsMetadataReviewed);
+                    item.UpdatedAtUtc = DateTime.UtcNow;
+                    await db.Ado.BeginTranAsync();
+                    try
+                    {
+                        await db.Updateable(item).ExecuteCommandAsync(cancellationToken);
+                        AdminAudit.Add(HttpContext, db, "library_import_item.bulk_approved", "import_item", item.Id);
+                        await db.Ado.CommitTranAsync();
+                    }
+                    catch
+                    {
+                        await db.Ado.RollbackTranAsync();
+                        throw;
+                    }
+                    success++;
+                    results.Add(new BulkReviewItemResultDto(item.Id, item.DisplayName, true, null));
+                }
+                else // reject
+                {
+                    if (!LibraryImportStateMachine.CanDiscard(item.Status))
+                    {
+                        results.Add(new BulkReviewItemResultDto(item.Id, item.DisplayName, false, "Item cannot be discarded in its current state."));
+                        continue;
+                    }
+                    item.Status = LibraryImportItemStatuses.IdentityRejected;
+                    item.UpdatedAtUtc = DateTime.UtcNow;
+                    await db.Ado.BeginTranAsync();
+                    try
+                    {
+                        await db.Updateable(item).ExecuteCommandAsync(cancellationToken);
+                        AdminAudit.Add(HttpContext, db, "library_import_item.identity_rejected", "import_item", item.Id,
+                            new { reason = request.Reason?.Trim() });
+                        await db.Ado.CommitTranAsync();
+                    }
+                    catch
+                    {
+                        await db.Ado.RollbackTranAsync();
+                        throw;
+                    }
+                    // 清理隔离区文件（与单条拒绝端点一致）。
+                    DeleteStorageKey(storagePaths, item.SourceStorageKey);
+                    if (item.TranscodedStorageKey is not null) DeleteStorageKey(storagePaths, item.TranscodedStorageKey);
+                    if (item.ArtworkStorageKey is not null) DeleteStorageKey(storagePaths, item.ArtworkStorageKey);
+                    await ImportPublishService.UpdateBatchStatusAsync(db, item.BatchId, cancellationToken);
+                    success++;
+                    results.Add(new BulkReviewItemResultDto(item.Id, item.DisplayName, true, null));
+                }
+            }
+            catch (Exception ex)
+            {
+                results.Add(new BulkReviewItemResultDto(item.Id, item.DisplayName, false, ex.Message));
+            }
+        }
+
+        return Results.Ok(new BulkReviewResultDto(distinctIds.Count, success, results.ToArray()));
+    }
+
     [HttpDelete("import-items/{itemId:guid}/song-request", Name = "UnlinkImportItemSongRequest")]
     public async Task<IResult> UnlinkSongRequest(
         Guid itemId,
@@ -670,6 +762,11 @@ public sealed class LibraryImportController : ControllerBase
         track.TrackNumber = item.TrackNumber;
         track.DiscNumber = item.DiscNumber;
         track.ReleaseYear = item.ReleaseYear;
+        track.ReleaseDate = item.ReleaseDate;
+        track.Isrc = item.Isrc;
+        track.AlbumArtistsJson = item.AlbumArtistsJson;
+        track.OriginalGenresJson = item.OriginalGenresJson;
+        track.MetadataAuditJson = item.MetadataAuditJson;
         track.DurationMs = item.DurationMs ?? track.DurationMs;
 
         // 歌词同步：审核中修改过歌词则以导入项为准（含来源与置信度）。

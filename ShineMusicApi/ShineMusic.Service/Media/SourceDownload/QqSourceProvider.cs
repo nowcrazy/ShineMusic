@@ -4,7 +4,7 @@
 //   2. 详情：c.y.qq.com/v8/fcg-bin/fcg_play_single_song.fcg —— 按 songmid 取单曲元数据；
 //   3. 下载地址：u.y.qq.com/cgi-bin/musicu.fcg（POST vkey.GetVkeyServer/CgiGetVkey）—— 返回 purl，
 //      拼 http://ws.stream.qqmusic.qq.com/{purl} 即直链；匿名态仅 128k m4a（C400 前缀），
-//      登录 Cookie 可至 320k（M500/M800）与无损 flac（F000）。
+//      质量前缀：M500=128k MP3、M800=320k MP3、F000=FLAC；是否可取由实际权限和资源决定。
 // 局限：
 //   - VIP 曲目匿名态 purl 为空 → 判定不可下载（抛 SourceUnavailableException，提示配置 Cookie 或换源）；
 //   - 2026-11 起匿名 vkey 对多数曲目统一返回 result=104003（空 purl，即使搜索标 pay=0），
@@ -116,11 +116,16 @@ public sealed class QqSourceProvider(
                 || data.ValueKind != JsonValueKind.Array || data.GetArrayLength() == 0)
                 return null;
             var track = data[0];
-            var title = GetString(track, "songname");
+            var title = GetString(track, "songname") ?? GetString(track, "name") ?? GetString(track, "title");
             if (string.IsNullOrWhiteSpace(title))
                 return null;
             var album = GetString(track, "albumname");
             var albumMid = GetString(track, "albummid");
+            if (track.TryGetProperty("album", out var albumObject) && albumObject.ValueKind == JsonValueKind.Object)
+            {
+                album ??= GetString(albumObject, "name") ?? GetString(albumObject, "title");
+                albumMid ??= GetString(albumObject, "mid");
+            }
             long? durationMs = null;
             if (track.TryGetProperty("interval", out var interval) && interval.ValueKind == JsonValueKind.Number
                 && interval.TryGetInt64(out var seconds) && seconds > 0)
@@ -138,7 +143,9 @@ public sealed class QqSourceProvider(
                 null,
                 SourceQualities.Standard,
                 IsLosslessAvailable: false,
-                ReleaseYear: SourceReleaseYearParser.FromJson(track, "pubtime", "year"));
+                ReleaseYear: SourceReleaseYearParser.FromJson(track, "pubtime", "year", "time_public")
+                    ?? (track.TryGetProperty("album", out var releaseAlbum) && releaseAlbum.ValueKind == JsonValueKind.Object
+                        ? SourceReleaseYearParser.FromJson(releaseAlbum, "time_public") : null));
         }
         catch (JsonException)
         {
@@ -152,7 +159,7 @@ public sealed class QqSourceProvider(
     {
         var vkey = await ResolveVkeyAsync(providerTrackId, cancellationToken);
         if (vkey is null || string.IsNullOrWhiteSpace(vkey.Value.Purl))
-            throw new SourceUnavailableException("QQ音乐匿名态仅 VIP 曲目试听，需配置 Cookie 或换源。");
+            throw new SourceUnavailableException("QQ音乐取流未返回地址，可能为匿名取流限制、权限或平台风控；需验证登录态或换源。");
         return vkey.Value.ToDownloadInfo(StreamBase + vkey.Value.Purl);
     }
 
@@ -179,7 +186,7 @@ public sealed class QqSourceProvider(
 
     /// <summary>
     /// 调 musicu.fcg vkey 接口取播放地址：POST JSON body，匿名 uin=0。
-    /// 返回 purl 与 filename（C400=128k m4a / M500=320k mp3 / M800=320k m4a / F000=flac）；接口失败返回 null。
+    /// 返回 purl 与 filename（M500=128k MP3 / M800=320k MP3 / F000=FLAC）；接口失败返回 null。
     /// </summary>
     private async Task<VkeyResult?> ResolveVkeyAsync(string songMid, CancellationToken cancellationToken)
     {
@@ -249,7 +256,7 @@ public sealed class QqSourceProvider(
     {
         /// <summary>
         /// 按文件名前缀/扩展名判定容器与音质：
-        /// F000/.flac=无损，M500/M800=320k 高音质，C400=128k 标准（匿名态封顶）。
+        /// F000/.flac=无损声明，M800=320k MP3，M500=128k MP3，C400=低码率AAC，未知不推断。
         /// </summary>
         public SourceDownloadInfo ToDownloadInfo(string url)
         {
@@ -257,13 +264,13 @@ public sealed class QqSourceProvider(
             if (name.StartsWith("F000", StringComparison.OrdinalIgnoreCase)
                 || name.EndsWith(".flac", StringComparison.OrdinalIgnoreCase))
                 return new SourceDownloadInfo(url, "flac", IsLossless: true, BitrateKbps: null, SourceQualities.Lossless);
-            if (name.StartsWith("M500", StringComparison.OrdinalIgnoreCase)
-                || name.StartsWith("M800", StringComparison.OrdinalIgnoreCase))
-            {
-                var container = name.EndsWith(".m4a", StringComparison.OrdinalIgnoreCase) ? "m4a" : "mp3";
-                return new SourceDownloadInfo(url, container, IsLossless: false, BitrateKbps: 320, SourceQualities.High);
-            }
-            return new SourceDownloadInfo(url, "m4a", IsLossless: false, BitrateKbps: 128, SourceQualities.Standard);
+            if (name.StartsWith("M800", StringComparison.OrdinalIgnoreCase))
+                return new SourceDownloadInfo(url, "mp3", IsLossless: false, BitrateKbps: 320, SourceQualities.High);
+            if (name.StartsWith("M500", StringComparison.OrdinalIgnoreCase))
+                return new SourceDownloadInfo(url, "mp3", IsLossless: false, BitrateKbps: 128, SourceQualities.Standard);
+            if (name.StartsWith("C400", StringComparison.OrdinalIgnoreCase))
+                return new SourceDownloadInfo(url, "m4a", IsLossless: false, BitrateKbps: null, SourceQualities.Standard);
+            return new SourceDownloadInfo(url, string.Empty, IsLossless: false, BitrateKbps: null, SourceQualities.Standard);
         }
     }
 }
