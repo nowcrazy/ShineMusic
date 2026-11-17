@@ -18,6 +18,9 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using ShineMusic.Api.Services;
 using ShineMusic.Model.Entities;
+using ShineMusic.Repository.Data;
+using Microsoft.Extensions.Logging.Abstractions;
+using System.Reflection;
 using SqlSugar;
 using Xunit;
 
@@ -71,6 +74,51 @@ public sealed class RealDatabaseStartupTests : IClassFixture<RealApiFactory>
         using var document = JsonDocument.Parse(await catalog.Content.ReadAsStringAsync());
         Assert.True(document.RootElement.TryGetProperty("total", out _),
             "曲库端点未返回分页结构，可能没走到真实数据库查询");
+    }
+
+    [Fact]
+    public void Every_mapped_entity_column_exists_after_startup()
+    {
+        _factory.EnsureHost();
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ISqlSugarClient>();
+        var missing = new List<string>();
+        foreach (var type in typeof(ApplicationUser).Assembly.GetTypes()
+                     .Where(type => type.GetCustomAttribute<SugarTable>() is not null))
+        {
+            var entity = db.EntityMaintenance.GetEntityInfo(type);
+            var columns = db.DbMaintenance.GetColumnInfosByTableName(entity.DbTableName, false)
+                .Select(column => column.DbColumnName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var column in entity.Columns.Where(column => !column.IsIgnore))
+                if (!columns.Contains(column.DbColumnName))
+                    missing.Add($"{entity.DbTableName}.{column.DbColumnName}");
+        }
+        Assert.True(missing.Count == 0, "Missing mapped columns: " + string.Join(", ", missing));
+    }
+
+    [Fact]
+    public void Retention_patch_is_additive_and_idempotent_for_legacy_assets()
+    {
+        _factory.EnsureHost();
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ISqlSugarClient>();
+        db.Ado.BeginTran();
+        try
+        {
+            // A transaction-local table shadows the live table; no production rows are changed.
+            db.Ado.ExecuteCommand("CREATE TEMP TABLE media_assets (id integer PRIMARY KEY, storage_path text NOT NULL) ON COMMIT DROP");
+            db.Ado.ExecuteCommand("INSERT INTO media_assets VALUES (1, repeat('x', 512))");
+            SqlSugarSchemaBootstrap.EnsureMediaAssetRetentionColumn(db, NullLogger.Instance);
+            Assert.Equal(1, db.Ado.GetInt("SELECT count(*) FROM media_assets WHERE retain_until_utc IS NULL AND length(storage_path) = 512"));
+            db.Ado.ExecuteCommand("UPDATE media_assets SET retain_until_utc = TIMESTAMPTZ '2030-01-01 00:00:00+00'");
+            SqlSugarSchemaBootstrap.EnsureMediaAssetRetentionColumn(db, NullLogger.Instance);
+            Assert.Equal(1, db.Ado.GetInt("SELECT count(*) FROM media_assets WHERE retain_until_utc = TIMESTAMPTZ '2030-01-01 00:00:00+00' AND length(storage_path) = 512"));
+            Assert.Equal("timestamp with time zone", db.Ado.GetString("SELECT data_type FROM information_schema.columns WHERE table_schema LIKE 'pg_temp_%' AND table_name = 'media_assets' AND column_name = 'retain_until_utc'"));
+        }
+        finally
+        {
+            db.Ado.RollbackTran();
+        }
     }
 
     [Fact]

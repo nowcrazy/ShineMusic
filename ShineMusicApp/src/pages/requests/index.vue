@@ -569,4 +569,12 @@ function formatCount(n: number): string {
   .form-sheet { max-width: 720px; margin: 0 auto; }
 }
 /* #endif */
+.head-title { font-size: 48rpx; letter-spacing: -.03em; }
+.head-sub, .field-label { font-size: 24rpx; }
+.tabs { flex-wrap: wrap; }
+.request-card { padding: 32rpx; }
+.form-sheet { max-height: 88vh; overflow-y: auto; }
+.field-input { min-height: 48px; font-size: 16px; }
+.action-btn, .timeline-toggle { min-height: 36px; display: inline-flex; align-items: center; font-size: 22rpx; }
+@media (min-width: 960px) { .request-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 24px; } .form-mask { align-items: center; } .form-sheet { max-width: 560px; border-radius: 24px; padding: 32px; } .fab { right: max(32px, calc((100vw - 1040px) / 2)); } }
 </style>

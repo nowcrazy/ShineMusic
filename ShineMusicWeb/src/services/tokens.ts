@@ -12,11 +12,13 @@
  * 内存副本用于收敛读写入口，供 http 鉴权头注入逻辑同步取用。
  * 安全约束：密码与明文令牌不得写入日志或发送到非后端域名。
  */
+import { shallowRef } from 'vue'
+
 const ACCESS_TOKEN_KEY = 'shine.auth.accessToken'
 const REFRESH_TOKEN_KEY = 'shine.auth.refreshToken'
 
 // 进程内令牌缓存；'' 表示当前无令牌
-let accessToken = ''
+const accessToken = shallowRef('')
 let refreshToken = ''
 
 /**
@@ -24,7 +26,7 @@ let refreshToken = ''
  * 存储中不存在对应键时 uni.getStorageSync 返回 ''，此处以 ?? 兜底为空串。
  */
 export function restoreTokens() {
-  accessToken = uni.getStorageSync(ACCESS_TOKEN_KEY) ?? ''
+  accessToken.value = uni.getStorageSync(ACCESS_TOKEN_KEY) ?? ''
   refreshToken = uni.getStorageSync(REFRESH_TOKEN_KEY) ?? ''
 }
 
@@ -33,7 +35,7 @@ export function restoreTokens() {
  * @returns access token；未登录/未恢复时为 ''
  */
 export function getAccessToken() {
-  return accessToken
+  return accessToken.value
 }
 
 /**
@@ -49,7 +51,7 @@ export function getRefreshToken() {
  * @returns 存在 access 或 refresh 令牌即返回 true
  */
 export function hasSession() {
-  return Boolean(accessToken || refreshToken)
+  return Boolean(accessToken.value || refreshToken)
 }
 
 /**
@@ -58,7 +60,7 @@ export function hasSession() {
  * @param refresh 新的 refresh token（刷新轮换后可能与旧值不同）
  */
 export function saveTokens(access: string, refresh: string) {
-  accessToken = access
+  accessToken.value = access
   refreshToken = refresh
   uni.setStorageSync(ACCESS_TOKEN_KEY, access)
   uni.setStorageSync(REFRESH_TOKEN_KEY, refresh)
@@ -69,7 +71,7 @@ export function saveTokens(access: string, refresh: string) {
  * 副作用：登出、刷新失败、会话恢复失败时调用，调用方需同步重置用户状态。
  */
 export function clearTokens() {
-  accessToken = ''
+  accessToken.value = ''
   refreshToken = ''
   uni.removeStorageSync(ACCESS_TOKEN_KEY)
   uni.removeStorageSync(REFRESH_TOKEN_KEY)

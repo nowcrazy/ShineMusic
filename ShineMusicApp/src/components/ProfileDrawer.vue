@@ -38,6 +38,16 @@ const themeExpanded = ref(false)
 // 语言区块内嵌展开状态：点击「语言」行切换，展开后点选语言立即生效并持久化
 const langExpanded = ref(false)
 
+const settingsExpanded = ref(false)
+const adminExpanded = ref(false)
+const defaultServerLabel = computed(() => {
+  // #ifdef H5
+  return t('drawer.sameOrigin')
+  // #endif
+  // #ifndef H5
+  return t('drawer.notConfigured')
+  // #endif
+})
 // 退出请求进行中（防止 Modal 回调重复提交）
 const loggingOut = ref(false)
 
@@ -47,7 +57,7 @@ const serverBase = ref(currentApiBase())
 /** 修改服务器地址：弹窗输入 → 保存立即生效并持久化 → 测试连通性（与登录页共用同一实现） */
 function editServerBase() {
   promptServerBase((key) => t(key), (base) => {
-    serverBase.value = base
+    serverBase.value = currentApiBase()
   })
 }
 
@@ -137,10 +147,14 @@ function handleLogout() {
     },
   })
 }
+function goTheme() {
+  close()
+  uni.navigateTo({ url: '/pages/settings/theme' })
+}
 </script>
 
 <template>
-  <view class="drawer-root" :class="{ open: props.modelValue }">
+  <view v-if="props.modelValue" class="drawer-root open" @keydown.esc="close">
     <!-- 遮罩：点击关闭 -->
     <view class="drawer-mask" @tap="close"></view>
 
@@ -152,7 +166,7 @@ function handleLogout() {
           <view class="drawer-mark"><AudioLines :size="17" :stroke-width="2.7" /></view>
           <text class="drawer-brand-name">shine.</text>
         </view>
-        <view class="drawer-close" @tap="close"><X :size="19" /></view>
+        <button class="drawer-close" :aria-label="t('app.close')" @tap="close"><X :size="19" /></button>
       </view>
 
       <!-- 资料摘要 -->
@@ -181,30 +195,12 @@ function handleLogout() {
             <ChevronRight :size="16" class="drawer-item-chevron" />
           </view>
 
-          <!-- 主题外观：点击展开内嵌主题选择，选中即切换，不再跳转独立页面 -->
-          <view class="drawer-item" @tap="themeExpanded = !themeExpanded">
+          <button class="drawer-item drawer-toggle" :aria-expanded="settingsExpanded" @tap="settingsExpanded = !settingsExpanded"><text class="drawer-item-title">{{ t('homePage.settings') }}</text><ChevronRight :size="16" :class="{ rotated: settingsExpanded }" /></button>
+          <view v-if="settingsExpanded">
+          <view class="drawer-item" @tap="goTheme">
             <view class="drawer-icon theme-icon"><Palette :size="19" /></view>
             <text class="drawer-item-title">{{ t('drawer.theme') }}</text>
-            <ChevronRight :size="16" class="drawer-item-chevron" :class="{ rotated: themeExpanded }" />
-          </view>
-          <view v-if="themeExpanded" class="theme-inline">
-            <view
-              v-for="theme in THEMES"
-              :key="theme.id"
-              class="theme-chip"
-              :class="{ active: currentTheme === theme.id }"
-              @tap="selectTheme(theme.id)"
-            >
-              <view class="theme-chip-swatch" :style="{ background: theme.swatch.bg }">
-                <view class="theme-chip-dot" :style="{ background: theme.swatch.accent }"></view>
-                <view class="theme-chip-bar" :style="{ background: theme.swatch.text }"></view>
-              </view>
-              <view class="theme-chip-copy">
-                <text class="theme-chip-name">{{ t(theme.nameKey) }}</text>
-                <text class="theme-chip-tone">{{ t(theme.toneKey) }}</text>
-              </view>
-              <view v-if="currentTheme === theme.id" class="theme-chip-check"><Check :size="13" /></view>
-            </view>
+            <ChevronRight :size="16" class="drawer-item-chevron" />
           </view>
 
           <!-- 语言：点击展开内嵌语言切换（简体中文/English/日本語），选择立即生效并持久化 -->
@@ -217,14 +213,17 @@ function handleLogout() {
             <LanguageSwitcher :show-check="true" layout="fill" />
           </view>
 
+          <!-- #ifdef APP-PLUS -->
           <!-- 服务器地址：查看/修改后端地址（保存即生效；APK 端地址失联时自救） -->
           <view class="drawer-item" @tap="editServerBase">
             <view class="drawer-icon server-icon"><Server :size="19" /></view>
             <view class="drawer-item-copy">
               <text class="drawer-item-title">{{ t('drawer.serverAddress') }}</text>
-              <text class="drawer-item-sub">{{ serverBase || t('drawer.notConfigured') }}</text>
+              <text class="drawer-item-sub">{{ serverBase || defaultServerLabel }}</text>
             </view>
             <ChevronRight :size="16" class="drawer-item-chevron" />
+          </view>
+          <!-- #endif -->
           </view>
 
           <!-- 歌曲需求池：想听的歌提交需求并投票 -->
@@ -235,7 +234,8 @@ function handleLogout() {
           </view>
 
           <template v-if="isAdmin">
-            <text class="drawer-group">{{ t('drawer.admin') }}</text>
+            <button class="drawer-item drawer-toggle" :aria-expanded="adminExpanded" @tap="adminExpanded = !adminExpanded"><text class="drawer-item-title">{{ t('drawer.admin') }}</text><ChevronRight :size="16" :class="{ rotated: adminExpanded }" /></button>
+            <view v-if="adminExpanded">
             <view class="drawer-item" @tap="goRequestManagement">
             <view class="drawer-icon admin-icon"><Inbox :size="19" /></view>
             <text class="drawer-item-title">{{ t('drawer.requestManagement') }}</text>
@@ -266,6 +266,7 @@ function handleLogout() {
             <text class="drawer-item-title">{{ t('drawer.sourceDownload') }}</text>
             <ChevronRight :size="16" class="drawer-item-chevron" />
           </view>
+            </view>
           </template>
         </view>
       </scroll-view>
@@ -342,4 +343,18 @@ function handleLogout() {
 
 .drawer-foot { padding-top: 24rpx; }
 .drawer-logout { display: flex; align-items: center; justify-content: center; gap: 12rpx; height: 92rpx; border: 1rpx solid var(--sm-danger-soft-border); border-radius: 46rpx; background: var(--sm-danger-soft); color: var(--sm-danger); font-size: 20rpx; font-weight: 700; }
+.drawer-panel { width: min(88vw, 440px); background: var(--sm-bg-soft); border-right: 1px solid var(--sm-border); }
+.drawer-profile { padding: 32rpx 24rpx; border-radius: var(--sm-radius-card); }
+.drawer-item { padding: 20rpx 12rpx; margin-bottom: 8rpx; border-radius: var(--sm-radius-field); border-bottom: 0; }
+.drawer-item-title { font-size: 26rpx; }
+.drawer-item-sub { font-size: 22rpx; }
+.drawer-close { min-width: 40px; min-height: 40px; }
+.theme-inline { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (hover: hover) { .drawer-item:hover { background: var(--sm-surface); } }
+button { margin: 0; font: inherit; line-height: inherit; }
+button::after { border: 0; }
+button:focus-visible { outline: 2px solid var(--sm-accent); outline-offset: 3px; }
+.drawer-toggle { width: 100%; text-align: left; background: var(--sm-surface); }
+.rotated { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 </style>

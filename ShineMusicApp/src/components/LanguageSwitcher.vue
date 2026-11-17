@@ -56,8 +56,8 @@ function pick(value: Locale) {
 /* 语言切换 chip 组：视觉与 ProfileDrawer theme-chip 对齐，未选中=玻璃面，选中=主色描边 */
 .lang-switch { display: flex; flex-wrap: wrap; gap: 12rpx; }
 .lang-switch--inline { flex-wrap: nowrap; }
-.lang-chip { display: flex; flex: 1; min-width: 0; align-items: center; justify-content: center; gap: 8rpx; padding: 16rpx 18rpx; border: 1rpx solid var(--sm-border); border-radius: 999rpx; background: var(--sm-surface); color: var(--sm-text-2); font-size: 18rpx; font-weight: 600; transition: border-color .18s ease, color .18s ease, box-shadow .18s ease; }
-.lang-switch--inline .lang-chip { flex: none; padding: 12rpx 20rpx; font-size: 17rpx; }
+.lang-chip { display: flex; flex: 1; min-width: 0; min-height: 40px; align-items: center; justify-content: center; gap: 8rpx; padding: 16rpx 18rpx; border: 1px solid var(--sm-border); border-radius: var(--sm-radius-field); background: var(--sm-surface); color: var(--sm-text-2); font-size: 24rpx; font-weight: 600; transition: border-color 160ms var(--sm-ease), color 160ms var(--sm-ease); }
+.lang-switch--inline .lang-chip { flex: none; padding: 12rpx 20rpx; font-size: 22rpx; }
 .lang-chip.active { border-color: var(--sm-accent); color: var(--sm-accent); box-shadow: 0 0 0 2rpx var(--sm-accent-soft-border); background: var(--sm-accent-soft); }
 .lang-chip-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lang-chip-check { display: grid; flex: none; place-items: center; width: 26rpx; height: 26rpx; border-radius: 50%; background: var(--sm-accent); color: var(--sm-accent-ink); }

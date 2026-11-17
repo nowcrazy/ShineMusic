@@ -134,7 +134,7 @@ onLoad(() => void load())
 .follow-page { min-height: 100vh; padding: 24rpx 40rpx 60rpx; background: var(--sm-page-bg); box-sizing: border-box; }
 
 .follow-tabs { display: flex; gap: 12rpx; margin-bottom: 28rpx; padding: 8rpx; border-radius: 22rpx; background: var(--sm-surface-3); }
-.ftab { flex: 1; padding: 18rpx 0; border-radius: 16rpx; color: var(--sm-text-2); font-size: 21rpx; font-weight: 700; text-align: center; transition: all .15s ease; }
+.ftab { flex: 1; padding: 20rpx; border-radius: var(--sm-radius-field); color: var(--sm-text-2); font-size: 26rpx; font-weight: 700; text-align: center; transition: background 160ms var(--sm-ease), color 160ms var(--sm-ease); }
 .ftab.active { background: var(--sm-hero-ink-bg); color: var(--sm-hero-ink); }
 
 .page-state { padding: 100rpx 20rpx; color: var(--sm-text-2); font-size: 19rpx; text-align: center; }
@@ -146,4 +146,8 @@ onLoad(() => void load())
 .user-name { flex: 1; min-width: 0; overflow: hidden; color: var(--sm-text); font-size: 24rpx; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .user-action { flex: none; padding: 12rpx 26rpx; border-radius: 999rpx; border: 1rpx solid var(--sm-border-strong); color: var(--sm-text-2); font-size: 18rpx; font-weight: 700; }
 .page-bottom-spacer { height: 180rpx; }
+.user-item { min-height: 144rpx; padding: 24rpx; border: 1px solid var(--sm-border); background: var(--sm-surface); }
+.user-avatar { width: 88rpx; height: 88rpx; }
+.user-action { min-height: 40px; display: flex; align-items: center; }
+@media (min-width: 960px) { .follow-page { max-width: 800px; margin: auto; } }
 </style>

@@ -60,9 +60,9 @@ function handleAction() {
     <text class="empty-title">{{ props.title }}</text>
     <text v-if="props.hint" class="empty-hint">{{ props.hint }}</text>
 
-    <view v-if="hasAction" class="empty-action" hover-class="empty-action--hover" @tap="handleAction">
+    <button v-if="hasAction" class="empty-action" hover-class="empty-action--hover" @tap="handleAction">
       <text>{{ props.actionText }}</text>
-    </view>
+    </button>
   </view>
 </template>
 
@@ -73,7 +73,10 @@ function handleAction() {
   flex-direction: column;
   align-items: center;
   gap: 18rpx;
-  padding: 96rpx 48rpx;
+  padding: 72rpx 32rpx;
+  border: 1px dashed var(--sm-border-strong);
+  border-radius: var(--sm-radius-card);
+  background: var(--sm-surface-2);
   text-align: center;
 }
 
@@ -188,8 +191,8 @@ function handleAction() {
 
 .empty-hint {
   max-width: 480rpx;
-  color: var(--sm-text-3);
-  font-size: 17rpx;
+  color: var(--sm-text-2);
+  font-size: 24rpx;
   line-height: 1.6;
 }
 

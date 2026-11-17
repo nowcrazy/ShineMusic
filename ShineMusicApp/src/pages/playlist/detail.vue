@@ -10,6 +10,7 @@ import { useI18n } from 'vue-i18n'
 import { ListMusic, Loader, Pencil, Play, Plus, Trash2, X } from 'lucide-vue-next'
 import TrackRow from '@/components/TrackRow.vue'
 import PlayerBar from '@/components/PlayerBar.vue'
+import CoverArt from '@/components/CoverArt.vue'
 import {
   deletePlaylist,
   getPlaylist,
@@ -30,6 +31,7 @@ const tracks = ref<Track[]>([])
 const pendings = ref<ApiPlaylistPendingTrack[]>([])
 const loading = ref(true)
 const loadError = ref(false)
+const managing = ref(false)
 
 /** 列表行：正式曲目或待补齐条目（原歌单顺序合并渲染）。 */
 type Row = { kind: 'track'; track: Track } | { kind: 'pending'; pending: ApiPlaylistPendingTrack }
@@ -90,6 +92,7 @@ onLoad((options) => {
  */
 async function load(showLoading = true) {
   if (showLoading) loading.value = true
+  loadError.value = false
   try {
     const result = await getPlaylist(playlistId.value)
     detail.value = result.detail
@@ -173,6 +176,7 @@ async function handleRemove(track: Track) {
   try {
     await removePlaylistTrack(playlistId.value, track.id)
     tracks.value = tracks.value.filter((item) => item.id !== track.id) // 成功后本地移除
+    rows.value = rows.value.filter((row) => row.kind !== 'track' || row.track.id !== track.id)
   } catch {
     uni.showToast({ title: t('playlistPage.removeFailed'), icon: 'none' })
   }
@@ -207,23 +211,27 @@ async function handleRemovePending(pending: ApiPlaylistPendingTrack) {
   <scroll-view class="detail-page" scroll-y :show-scrollbar="false">
     <!-- 加载中 / 失败或不存在 的状态提示 -->
     <view v-if="loading" class="state-text">{{ t('playlistPage.loading') }}</view>
-    <view v-else-if="loadError || !detail" class="state-text">{{ t('playlistPage.notFound') }}</view>
+    <view v-else-if="loadError || !detail" class="state-text">{{ t('playlistPage.notFound') }}<button class="secondary-action" @tap="load()">{{ t('app.retry') }}</button></view>
     <template v-else>
       <!-- 歌单头部：封面、名称、简介与操作组（播放/添加/重命名/删除） -->
       <view class="detail-header">
         <view class="playlist-art">
-          <image v-if="detail.artworkUrl" class="playlist-image" :src="resolveUrl(detail.artworkUrl)" mode="aspectFill" />
-          <ListMusic v-else :size="46" />
+          <CoverArt :src="detail.artworkUrl ? resolveUrl(detail.artworkUrl) : ''" :seed="detail.name" :rounded="8" :icon-size="36" />
         </view>
         <text class="detail-title">{{ detail.name }}</text>
         <text v-if="detail.description" class="detail-sub">{{ detail.description }}</text>
         <text class="detail-meta">{{ t('catalog.trackCount', { count: rows.length }) }}</text>
         <view class="header-actions">
-          <view class="play-all" @tap="playAll"><Play :size="16" fill="currentColor" /><text>{{ t('playlistPage.playAll') }}</text></view>
-          <view class="icon-action" @tap="goPickTracks"><Plus :size="20" /></view>
-          <view class="icon-action" @tap="handleRename"><Pencil :size="18" /></view>
-          <view class="icon-action danger" @tap="handleDelete"><Trash2 :size="18" /></view>
+          <button v-if="tracks.length" class="play-all" @tap="playAll"><Play :size="16" fill="currentColor" /><text>{{ t('playlistPage.playAll') }}</text></button>
+          <button class="secondary-action" @tap="goPickTracks"><Plus :size="18" />{{ t('playlistPage.addTracks') }}</button>
         </view>
+      </view>
+      <view class="management-bar">
+        <button class="secondary-action" :aria-expanded="managing" @tap="managing = !managing">{{ managing ? t('wallpaper.done') : t('app.edit') }}</button>
+        <template v-if="managing">
+          <button class="secondary-action" @tap="handleRename"><Pencil :size="16" />{{ t('playlistPage.renameTitle') }}</button>
+          <button class="secondary-action danger" @tap="handleDelete"><Trash2 :size="16" />{{ t('playlistPage.delete') }}</button>
+        </template>
       </view>
       <!-- 曲目列表：正式曲目与 pending 待补齐行按原歌单顺序合并；空歌单展示空态与添加入口 -->
       <view class="detail-list">
@@ -232,7 +240,7 @@ async function handleRemovePending(pending: ApiPlaylistPendingTrack) {
             <view class="row-main">
               <TrackRow :track="row.track" :index="index" :queue="tracks" />
             </view>
-            <view class="remove-button" @tap.stop="handleRemove(row.track)"><X :size="15" /></view>
+            <button v-if="managing" class="remove-button" :aria-label="t('playlistPage.delete')" @tap.stop="handleRemove(row.track)"><X :size="15" /></button>
           </view>
           <!-- pending 行：灰色不可播放，展示下载状态；发布完成后轮询自动转正 -->
           <view v-else class="removable-row">
@@ -249,7 +257,7 @@ async function handleRemovePending(pending: ApiPlaylistPendingTrack) {
                 </view>
               </view>
             </view>
-            <view class="remove-button" @tap.stop="handleRemovePending(row.pending)"><X :size="15" /></view>
+            <button v-if="managing" class="remove-button" :aria-label="t('playlistPage.delete')" @tap.stop="handleRemovePending(row.pending)"><X :size="15" /></button>
           </view>
         </template>
         <view v-if="!rows.length" class="empty-tip">
@@ -269,7 +277,7 @@ async function handleRemovePending(pending: ApiPlaylistPendingTrack) {
 /* 歌单详情（方向 B · 玻璃质感） */
 .detail-page { height: 100vh; padding: 32rpx 40rpx 0; box-sizing: border-box; background: var(--sm-page-bg); }
 .state-text { padding: 80rpx 20rpx; color: var(--sm-text-2); font-size: 19rpx; text-align: center; }
-.detail-header { display: flex; flex-direction: column; align-items: flex-start; padding: 12rpx 0 20rpx; }
+.detail-header { display: flex; flex-direction: column; align-items: flex-start; padding: 40rpx; background: var(--sm-surface); border: 1px solid var(--sm-border); border-radius: var(--sm-radius-card); }
 .playlist-art { display: grid; place-items: center; align-self: center; width: 260rpx; height: 260rpx; border: 1rpx solid var(--sm-border-strong); border-radius: 26rpx; background: var(--sm-cover-bg); color: var(--sm-cover-ink); box-shadow: 0 18rpx 44rpx var(--sm-art-shadow); }
 .playlist-image { width: 100%; height: 100%; border-radius: inherit; }
 .detail-title { margin-top: 28rpx; color: var(--sm-text); font-size: 38rpx; font-weight: 800; }
@@ -295,4 +303,21 @@ async function handleRemovePending(pending: ApiPlaylistPendingTrack) {
 .empty-tip { display: flex; flex-direction: column; align-items: center; gap: 22rpx; padding: 70rpx 0; color: var(--sm-text-2); font-size: 19rpx; }
 .add-button { display: flex; align-items: center; gap: 8rpx; padding: 14rpx 28rpx; border-radius: 40rpx; background: var(--sm-accent); color: var(--sm-accent-ink); font-size: 18rpx; font-weight: 700; }
 .page-bottom-spacer { height: 180rpx; }
+.header-actions, .management-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 16rpx; }
+.management-bar { justify-content: flex-end; margin-top: 24rpx; }
+.secondary-action { display: flex; align-items: center; gap: 10rpx; margin: 0; padding: 12rpx 20rpx; background: var(--sm-surface-2); color: var(--sm-text-2); font-size: 24rpx; border-radius: var(--sm-radius-pill); }
+.secondary-action.danger { color: var(--sm-danger); }
+.remove-button { margin: 0; padding: 0; min-width: 40px; min-height: 40px; }
+.pending-row { opacity: .7; }
+@media (min-width: 960px) { .detail-header { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 16px 40px; padding: 40px; } .playlist-art { grid-row: 1 / 6; width: 240px; height: 240px; } .detail-title { margin: 0; font-size: 36px; } .header-actions { flex-wrap: wrap; margin-top: 8px; } }
+.detail-page { padding: 28px 24px 0; max-width: 940px; margin: auto; }
+.detail-header { display: grid; grid-template-columns: 112px minmax(0,1fr); gap: 8px 20px; padding: 0; border: 0; background: transparent; }
+.playlist-art { grid-row: 1 / 4; width: 112px; height: 112px; border: 0; box-shadow: none; border-radius: 8px; }
+.detail-title { margin: 0; font-size: 24px; line-height: 1.3; overflow-wrap: anywhere; }
+.detail-sub, .detail-meta { margin: 0; font-size: 12px; }
+.header-actions { grid-column: 1 / -1; margin-top: 16px; gap: 12px; }
+.play-all, .secondary-action { margin: 0; font-size: 12px; line-height: 1.5; padding: 10px 16px; box-shadow: none; }
+button::after { border: 0; }
+.management-bar { margin-top: 24px; }
+@media(min-width:800px) { .detail-page { padding: 32px 32px 0; } .detail-header { grid-template-columns: 180px minmax(0,1fr); } .playlist-art { width: 180px; height: 180px; } .detail-title { font-size: 32px; } }
 </style>

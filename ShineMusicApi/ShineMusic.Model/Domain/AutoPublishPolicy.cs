@@ -14,6 +14,17 @@ public sealed record AutoPublishThresholds(
 /// <summary>自动发布策略：不感知数据库、不感知 HttpContext。</summary>
 public static class AutoPublishPolicy
 {
+    public static string? SourceRejectionReason(bool hasExpectedIdentity, bool matched,
+        bool complete, string? codec, int? bitrateKbps, bool requiredFieldsPresent, string? container = null)
+    {
+        if (!hasExpectedIdentity) return "identity_unverified";
+        if (!matched) return "identity_not_matched";
+        if (!complete) return "audio_incomplete";
+        if (!AudioAdmissionPolicy.IsAcceptable(codec, container, bitrateKbps))
+            return AudioAdmissionPolicy.GetRejectionReason(codec, container, bitrateKbps);
+        return requiredFieldsPresent ? null : "required_metadata_missing";
+    }
+
     /// <summary>
     /// 判断评分达标且对应来源的开关已开启。<paramref name="hasSourceProvider"/> 为 true 表示音源抓歌条目，
     /// 否则为管理员手动导入条目；null 分数永远不直通。

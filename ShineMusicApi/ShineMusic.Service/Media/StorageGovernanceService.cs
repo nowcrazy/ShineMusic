@@ -31,6 +31,43 @@ public sealed class StorageGovernanceService
         _logger = logger;
     }
 
+    public async Task CleanupRetiredAsync(ISqlSugarClient db, CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        var retired = await db.Queryable<MediaAsset>()
+            .Where(a => !a.IsPublished && !a.IsPrimary && a.RetainUntilUtc != null && a.RetainUntilUtc <= now)
+            .OrderBy(a => a.RetainUntilUtc).Take(100).ToListAsync(ct);
+        foreach (var asset in retired)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!_libraryPaths.TryResolve(asset.StorageKey, out var path)) continue;
+            try
+            {
+                await db.Ado.BeginTranAsync(System.Data.IsolationLevel.Serializable);
+                try
+                {
+                    // Claim the retired row before touching disk. A concurrent activation must
+                    // win this conditional write or wait until this transaction has finished.
+                    var claimed = await db.Deleteable<MediaAsset>()
+                        .Where(a => a.Id == asset.Id && !a.IsPublished && !a.IsPrimary
+                            && a.RetainUntilUtc != null && a.RetainUntilUtc <= now).ExecuteCommandAsync(ct);
+                    var referenced = await db.Queryable<MediaAsset>().AnyAsync(a => a.StorageKey == asset.StorageKey, ct)
+                        || await db.Queryable<Artwork>().AnyAsync(a => a.StorageKey == asset.StorageKey, ct);
+                    if (claimed != 1 || referenced)
+                    {
+                        await db.Ado.RollbackTranAsync();
+                        continue;
+                    }
+                    File.Delete(path);
+                    await db.Ado.CommitTranAsync();
+                }
+                catch { await db.Ado.RollbackTranAsync(); throw; }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            { _logger.LogWarning(ex, "Retired asset cleanup will retry {AssetId}", asset.Id); }
+        }
+    }
+
     /// <summary>
     /// 对账审计：汇总数据库引用的存储键与磁盘实际文件，输出孤儿/缺失/空目录明细，
     /// 并按曲目分组输出库内文件（音频 + 封面）供治理页关联查看。审计只读，不修改任何状态。
@@ -123,6 +160,7 @@ public sealed class StorageGovernanceService
     /// </summary>
     public async Task<StorageCleanupDto> CleanupAsync(ISqlSugarClient db, CancellationToken cancellationToken)
     {
+        await CleanupRetiredAsync(db, cancellationToken);
         var audit = await AuditAsync(db, cancellationToken);
         var deletedCount = 0;
         var deletedBytes = 0L;
@@ -136,6 +174,9 @@ public sealed class StorageGovernanceService
             }
             try
             {
+                if (File.Exists(path) && File.GetLastWriteTimeUtc(path) > DateTime.UtcNow.AddHours(-24)) continue;
+                if (await db.Queryable<MediaAsset>().AnyAsync(a => a.StorageKey == orphan.StorageKey, cancellationToken)
+                    || await db.Queryable<Artwork>().AnyAsync(a => a.StorageKey == orphan.StorageKey, cancellationToken)) continue;
                 if (!File.Exists(path))
                     continue;
                 File.Delete(path);

@@ -58,7 +58,9 @@ public sealed class ImportPublishService(
     IOptions<SongRequestFulfillmentOptions> fulfillmentOptions,
     QuarantineStoragePaths quarantinePaths,
     LibraryStoragePaths libraryPaths,
-    ILogger<ImportPublishService> logger)
+    ILogger<ImportPublishService> logger,
+    FfmpegMediaService mediaService,
+    Microsoft.Extensions.Configuration.IConfiguration configuration)
 {
     /// <summary>
     /// 发布单条「管理导入/音源抓歌」条目（用户上传转公开走控制器内的 PublishUserUploadAsync，不经本方法）。
@@ -72,10 +74,27 @@ public sealed class ImportPublishService(
         CancellationToken cancellationToken)
     {
         // 闸门与必填字段判定统一交给领域层，人工发布与后台自动发布共用同一份规则。
+        var expected = await ResolveExpectedIdentityAsync(item, cancellationToken);
+        var candidate = new TrackIdentity(item.Title ?? "", PublishGate.DeserializeList(item.ArtistsJson), item.DurationMs, item.AlbumTitle);
+        var decision = expected is null ? null : TrackIdentityMatcher.Evaluate(expected, candidate);
+        if (context.IsAutomatic && item.SourceProvider is not null)
+        {
+            var reason = AutoPublishPolicy.SourceRejectionReason(expected is not null,
+                decision?.Verdict == IdentityVerdict.Matched, item.TranscodeStatus == "succeeded",
+                item.Codec, item.BitrateKbps, PublishGate.MissingRequiredFields(item).Count == 0, item.Container);
+            if (MetadataMerge.HasBlockingConflicts(item)) reason = "identity_metadata_conflict";
+            if (reason is not null)
+            {
+                item.WarningsJson = AppendWarning(item.WarningsJson, reason);
+                item.ErrorMessage = reason;
+                await db.Updateable(item).ExecuteCommandAsync(cancellationToken);
+                return ImportPublishResult.Failure(ImportPublishErrorKind.Conflict, reason);
+            }
+        }
         if (!PublishGate.IsEligible(item))
             return ImportPublishResult.Failure(ImportPublishErrorKind.Conflict, "The item must be transcoded successfully and reviewed before publishing.");
-        if (context.IsAutomatic && MetadataMerge.HasConflicts(item))
-            return ImportPublishResult.Failure(ImportPublishErrorKind.Conflict, "Metadata conflicts require manual review.");
+        if (context.IsAutomatic && MetadataMerge.HasBlockingConflicts(item))
+            return ImportPublishResult.Failure(ImportPublishErrorKind.Conflict, "Identity metadata conflicts require manual review.");
 
         // 发布前完整性校验：歌名、艺人、时长缺一不可；歌词是可选内容
         // （用户上传往往没有歌词，缺失时播放器显示“暂无歌词”，不影响播放与上架）。
@@ -97,11 +116,60 @@ public sealed class ImportPublishService(
             && System.IO.File.Exists(sourcePath);
         if (!originalFileAvailable)
             sourcePath = transcodedPath;
+        if (context.IsAutomatic && item.SourceProvider is not null)
+        {
+            ProbedMedia measured;
+            try
+            {
+                await mediaService.ValidateCompleteAsync(sourcePath, cancellationToken);
+                measured = await mediaService.ProbeAsync(sourcePath, cancellationToken);
+            }
+            catch (Exception ex) when (ex is MediaProcessingException or IOException)
+            {
+                item.ErrorMessage = "audio_validation_failed";
+                item.WarningsJson = AppendWarning(item.WarningsJson, item.ErrorMessage);
+                await db.Updateable(item).ExecuteCommandAsync(cancellationToken);
+                return ImportPublishResult.Failure(ImportPublishErrorKind.Conflict, item.ErrorMessage);
+            }
+            var qualityReason = AutoPublishPolicy.SourceRejectionReason(true, true, measured.DurationMs is > 0,
+                measured.Codec, measured.BitrateKbps, true, measured.Container);
+            if (expected?.DurationMs is > 0 && measured.DurationMs < expected.DurationMs * 0.9)
+                qualityReason = "preview_fragment";
+            if (qualityReason is not null || !originalFileAvailable)
+            {
+                item.ErrorMessage = qualityReason ?? "original_unavailable";
+                item.WarningsJson = AppendWarning(item.WarningsJson, item.ErrorMessage);
+                await db.Updateable(item).ExecuteCommandAsync(cancellationToken);
+                return ImportPublishResult.Failure(ImportPublishErrorKind.Conflict, item.ErrorMessage);
+            }
+            item.Codec = measured.Codec;
+            item.Container = measured.Container;
+            item.BitrateKbps = measured.BitrateKbps;
+            item.DurationMs = measured.DurationMs;
+        }
+        Track? reuseTrack = null;
+        if (originalFileAvailable && expected is not null && decision?.Verdict == IdentityVerdict.Matched
+            && !string.IsNullOrWhiteSpace(item.Isrc))
+        {
+            var existing = await db.Queryable<Track>().FirstAsync(t => t.PublishedAt != null && t.Isrc == item.Isrc, cancellationToken);
+            if (existing is not null && existing.DurationMs is > 0 && item.DurationMs is > 0
+                && Math.Abs(existing.DurationMs.Value - item.DurationMs.Value) <= 2000
+                && NormalizeMetadata(existing.Title) == NormalizeMetadata(item.Title))
+            {
+                var existingArtists = await db.Queryable<TrackArtist, Artist>((link, artist) => link.ArtistId == artist.Id)
+                    .Where((link, artist) => link.TrackId == existing.Id)
+                    .Select((link, artist) => artist.Name).ToListAsync(cancellationToken);
+                if (TrackIdentityMatcher.Evaluate(new TrackIdentity(existing.Title, existingArtists, existing.DurationMs), candidate)
+                    .Verdict != IdentityVerdict.Matched)
+                    return ImportPublishResult.Failure(ImportPublishErrorKind.Conflict, "existing_identity_not_matched");
+                reuseTrack = existing;
+            }
+        }
 
         // 审计先暂存，随发布事务一并提交；发布失败返回时丢弃（与原「仅 SaveChanges 才落库」语义一致）。
         var pendingAudits = new List<AdminAuditEntry>();
 
-        if (await db.Queryable<MediaAsset>().AnyAsync(asset => asset.ContentHash == item.ContentHash, cancellationToken))
+        if (reuseTrack is null && await db.Queryable<MediaAsset>().AnyAsync(asset => asset.ContentHash == item.ContentHash, cancellationToken))
             return ImportPublishResult.Failure(ImportPublishErrorKind.Conflict, "This audio has already been published.");
 
         // 元数据级去重：标题 + 艺人 + 专辑均相同的已发布曲目视为同一首歌（非翻唱），
@@ -109,7 +177,7 @@ public sealed class ImportPublishService(
         var itemTitle = NormalizeMetadata(item.Title);
         var itemArtists = PublishGate.DeserializeList(item.ArtistsJson).Select(NormalizeMetadata).Where(v => v.Length > 0).ToList();
         var itemAlbum = NormalizeMetadata(item.AlbumTitle);
-        if (itemTitle.Length > 0 && itemArtists.Count > 0)
+        if (reuseTrack is null && itemTitle.Length > 0 && itemArtists.Count > 0)
         {
             var titleCandidates = await db.Queryable<Track>()
                 .Where(track => track.PublishedAt != null && track.Title.ToLower() == itemTitle)
@@ -199,6 +267,17 @@ public sealed class ImportPublishService(
                 }
             }
         }
+        if (reuseTrack is not null)
+        {
+            var hours = double.TryParse(configuration["MediaStorage:ReplacementRetentionHours"],
+                System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var configured)
+                && double.IsFinite(configured) ? Math.Clamp(configured, 0, 8760) : 24;
+            var result = await new AssetReplacementService(db, libraryPaths, mediaService, TimeSpan.FromHours(hours))
+                .ReplaceAsync(reuseTrack, item, sourcePath, cancellationToken,
+                    token => CompletePublicationAsync(item, reuseTrack, context, pendingAudits, token));
+            if (result.Succeeded) await FinishPublicationAsync(item);
+            return result;
+        }
 
         var track = new Track
         {
@@ -251,8 +330,12 @@ public sealed class ImportPublishService(
             }
             System.IO.File.Copy(sourcePath, finalOriginalPath, overwrite: false);
             copiedPaths.Add(finalOriginalPath);
-            System.IO.File.Copy(transcodedPath, finalPlaybackPath, overwrite: false);
-            copiedPaths.Add(finalPlaybackPath);
+            var keepCompatibility = originalFileAvailable && PlaybackMediaPolicy.NeedsCompatibilityCopy(item);
+            if (keepCompatibility)
+            {
+                System.IO.File.Copy(transcodedPath, finalPlaybackPath, overwrite: false);
+                copiedPaths.Add(finalPlaybackPath);
+            }
             // 艺人/专辑/流派：与导入流水线一致的查重建档（名称大小写不敏感；SqlSugar 不级联保存，需显式逐表写入）。
             var resolvedArtists = new List<Artist>();
             var newArtists = new List<Artist>();
@@ -326,18 +409,19 @@ public sealed class ImportPublishService(
             // 导致 320k MP3 / 无损 FLAC 下载下来后播放端仍按 192kbps 输出。
             // 现在由 PlaybackMediaPolicy 判定：原始文件存在、容器可流、且音质不低于转码副本时，
             // 让原始文件当播放主资产；转码副本保留为兼容副本。
-            var preferOriginal = PlaybackMediaPolicy.ShouldPreferOriginal(item, originalFileAvailable);
+            var preferOriginal = originalFileAvailable &&
+                (PlaybackMediaPolicy.CanReuseOriginal(item) || PlaybackMediaPolicy.ShouldPreferOriginal(item, true));
             var originalAsset = new MediaAsset
             {
                 Id = assetId,
                 TrackId = track.Id,
                 StorageKey = originalKey,
-                Container = item.Container ?? "unknown",
-                Codec = item.Codec ?? "unknown",
+                Container = originalFileAvailable ? item.Container ?? "unknown" : "m4a",
+                Codec = originalFileAvailable ? item.Codec ?? "unknown" : "aac",
                 ContentHash = item.ContentHash,
                 BitrateKbps = item.BitrateKbps,
                 IsPublished = true,
-                IsPrimary = preferOriginal
+                IsPrimary = preferOriginal || !keepCompatibility
             };
             var playbackAsset = new MediaAsset
             {
@@ -356,7 +440,7 @@ public sealed class ImportPublishService(
             // 失败直接阻断发布，不让低码率 / 错容器 / 身份不符的条目静默到达用户；
             // 不自动回滚到 192k 兼容副本（§5.4），也不改状态机（条目保持原状态可重试）。
             // 真实 HTTP 回读（L3a）留给 K5 启动引导接缝方案，见 docs 文档 §12.4。
-            var primaryStorageKey = preferOriginal ? originalKey : playbackKey;
+            var primaryStorageKey = preferOriginal || !keepCompatibility ? originalKey : playbackKey;
             var primarySourcePath = preferOriginal ? sourcePath : transcodedPath;
             var primaryContainer = preferOriginal ? item.Container : "m4a";
             var candidateArtists = PublishGate.DeserializeList(item.ArtistsJson);
@@ -364,7 +448,7 @@ public sealed class ImportPublishService(
             // V2.0 Phase 2：身份比对从「自评（Expected==Resolved）」改为真实候选 vs 期望。
             // 期望身份来源：ExternalDownloadTask 的快照（歌单导入时从 pending 行复制的原曲信息）。
             // 无关联任务时回退为自评（Expected==Candidate），身份维度给 Matched。
-            var expectedIdentity = await ResolveExpectedIdentityAsync(item, cancellationToken);
+            var expectedIdentity = expected ?? new TrackIdentity("", [], null);
             var identityDecision = TrackIdentityMatcher.Evaluate(expectedIdentity, candidateIdentity);
             var contract = new DeliveryContract(
                 item.Id,
@@ -417,20 +501,7 @@ public sealed class ImportPublishService(
             // 回填曲目关联：管理员发布路径也记录 PublishedTrackId，供音源任务列表反查歌词有无/预览回退等场景使用。
             item.PublishedTrackId = track.Id;
             item.UpdatedAtUtc = DateTime.UtcNow;
-            SongRequestRecord? request = null;
-            string? previousRequestStatus = null;
-            if (item.SongRequestId.HasValue)
-            {
-                request = await db.Queryable<SongRequestRecord>().FirstAsync(candidate => candidate.Id == item.SongRequestId.Value, cancellationToken);
-                if (request is not null)
-                {
-                    previousRequestStatus = request.Status;
-                    request.Status = SongRequestStatuses.Fulfilled;
-                    request.MatchedTrackId = track.Id;
-                    request.UpdatedAtUtc = DateTime.UtcNow;
-                }
-            }
-            AddAudit(pendingAudits, context, context.IsAutomatic ? "track.auto_published" : "track.published", "track", track.Id, new { importItemId = item.Id });
+            // Shared transactional fulfillment applies equally to new tracks and reuse/upgrades.
 
             // 曲目创建链路（封面/专辑/艺人/流派/媒体资产/歌词/条目/点歌联动/审计）同事务提交，
             // 等价原先单次 SaveChanges 的原子性。
@@ -494,26 +565,13 @@ public sealed class ImportPublishService(
                         .AsInsertable.ExecuteCommandAsync(cancellationToken);
                 }
                 await db.Insertable(originalAsset).ExecuteCommandAsync(cancellationToken);
-                await db.Insertable(playbackAsset).ExecuteCommandAsync(cancellationToken);
+                if (keepCompatibility)
+                    await db.Insertable(playbackAsset).ExecuteCommandAsync(cancellationToken);
                 if (lyric is not null)
                     await db.Insertable(lyric).ExecuteCommandAsync(cancellationToken);
                 await db.Updateable(item).ExecuteCommandAsync(cancellationToken);
 
-                if (request is not null)
-                {
-                    await db.Updateable(request).ExecuteCommandAsync(cancellationToken);
-                    // 时间线 + 站内信：让提交人知道「这首歌已经上架了」。
-                    SongRequestEvents.Add(db, request, SongRequestEventKinds.Fulfilled, previousRequestStatus, SongRequestStatuses.Fulfilled,
-                        context.ActorUserId == Guid.Empty ? null : context.ActorUserId,
-                        context.IsAutomatic ? SongRequestActorKinds.System : SongRequestActorKinds.Admin, $"通过上传《{track.Title}》满足");
-                    NotificationWriter.Push(db, request.CreatedByUserId, NotificationKinds.SongRequestFulfilled,
-                        $"你想要的《{request.Title}》已入库",
-                        "现在可以在曲库里找到并播放了。",
-                        NotificationWriter.RequestsPageUrl, "song_request", request.Id.ToString());
-                }
-
-                foreach (var audit in pendingAudits)
-                    await db.Insertable(audit).ExecuteCommandAsync(cancellationToken);
+                await CompletePublicationAsync(item, track, context, pendingAudits, cancellationToken);
                 await db.Ado.CommitTranAsync();
             }
             catch
@@ -521,11 +579,9 @@ public sealed class ImportPublishService(
                 await db.Ado.RollbackTranAsync();
                 throw;
             }
-            await UpdateBatchStatusAsync(db, item.BatchId, cancellationToken);
-            TryDelete(sourcePath);
-            TryDelete(transcodedPath);
-            if (item.ArtworkStorageKey is not null && quarantinePaths.TryResolve(item.ArtworkStorageKey, out var artworkPath))
-                TryDelete(artworkPath);
+            // The transaction is durable: later housekeeping failure must never remove live assets.
+            copiedPaths.Clear();
+            await FinishPublicationAsync(item);
             return ImportPublishResult.Success(track.Id, item.Status);
         }
         // DbException 覆盖 Npgsql 的数据层异常（如内容哈希唯一冲突），与原先 DbUpdateException 的处理范围一致。
@@ -537,10 +593,61 @@ public sealed class ImportPublishService(
         }
     }
 
-    /// <summary>
-    /// 批次状态收口：批次内所有条目均到达终态时，把批次标记为 completed / completed_with_errors。
-    /// 同时被管理端点（删除条目）与发布流程复用。
-    /// </summary>
+    private async Task CompletePublicationAsync(LibraryImportItem item, Track track, ImportPublishContext context,
+        List<AdminAuditEntry> audits, CancellationToken ct)
+    {
+        if (item.SongRequestId is { } requestId)
+        {
+            var request = await db.Queryable<SongRequestRecord>().FirstAsync(r => r.Id == requestId, ct)
+                ?? throw new InvalidOperationException("linked_request_missing");
+            var previous = request.Status;
+            if (previous != SongRequestStatuses.Fulfilled || request.MatchedTrackId != track.Id)
+            {
+                request.Status = SongRequestStatuses.Fulfilled;
+                request.MatchedTrackId = track.Id;
+                request.UpdatedAtUtc = DateTime.UtcNow;
+                await db.Updateable(request).ExecuteCommandAsync(ct);
+                SongRequestEvents.Add(db, request, SongRequestEventKinds.Fulfilled, previous, SongRequestStatuses.Fulfilled,
+                    context.ActorUserId == Guid.Empty ? null : context.ActorUserId,
+                    context.IsAutomatic ? SongRequestActorKinds.System : SongRequestActorKinds.Admin, $"通过发布《{track.Title}》满足");
+                NotificationWriter.Push(db, request.CreatedByUserId, NotificationKinds.SongRequestFulfilled,
+                    $"你想要的《{request.Title}》已入库", "现在可以在曲库里找到并播放了。",
+                    NotificationWriter.RequestsPageUrl, "song_request", request.Id.ToString());
+            }
+        }
+        AddAudit(audits, context, context.IsAutomatic ? "track.auto_published" : "track.published", "track", track.Id,
+            new { importItemId = item.Id });
+        foreach (var audit in audits) await db.Insertable(audit).ExecuteCommandAsync(ct);
+        await db.Updateable<LibraryImportItem>().SetColumns(i => i.ErrorCode == "publication_housekeeping_pending")
+            .Where(i => i.Id == item.Id).ExecuteCommandAsync(ct);
+    }
+
+    // Committed publication stays successful; pending housekeeping is persisted in the same transaction.
+    public async Task FinishPublicationAsync(LibraryImportItem item)
+    {
+        try
+        {
+            await UpdateBatchStatusAsync(db, item.BatchId, CancellationToken.None);
+            foreach (var key in new[] { item.SourceStorageKey, item.TranscodedStorageKey, item.ArtworkStorageKey }.Distinct())
+                if (key is not null && quarantinePaths.TryResolve(key, out var path)) File.Delete(path);
+            await db.Updateable<LibraryImportItem>().SetColumns(i => i.ErrorCode == (string?)null)
+                .Where(i => i.Id == item.Id && i.Status == LibraryImportItemStatuses.Published).ExecuteCommandAsync();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Publication housekeeping will retry for {ItemId}", item.Id);
+        }
+    }
+
+    public async Task RepairPublicationHousekeepingAsync(CancellationToken ct)
+    {
+        var items = await db.Queryable<LibraryImportItem>()
+            .Where(i => i.Status == LibraryImportItemStatuses.Published && i.ErrorCode == "publication_housekeeping_pending")
+            .OrderBy(i => i.UpdatedAtUtc).Take(100).ToListAsync(ct);
+        foreach (var item in items) await FinishPublicationAsync(item);
+    }
+
+    /// <summary>批次状态收口，供发布和管理端复用。</summary>
     public static async Task UpdateBatchStatusAsync(ISqlSugarClient db, Guid batchId, CancellationToken cancellationToken)
     {
         var statuses = await db.Queryable<LibraryImportItem>()
@@ -631,7 +738,7 @@ public sealed class ImportPublishService(
     /// 期望身份来源：ExternalDownloadTask 的 Title/ArtistsJson/DurationMs（歌单导入时从 pending 行复制的原曲信息）。
     /// 无关联任务或快照缺失时回退为导入条目自身的身份（自评 Matched）。
     /// </summary>
-    private async Task<TrackIdentity> ResolveExpectedIdentityAsync(
+    private async Task<TrackIdentity?> ResolveExpectedIdentityAsync(
         LibraryImportItem item, CancellationToken cancellationToken)
     {
         var taskSnapshot = await db.Queryable<ExternalDownloadTask>()
@@ -647,8 +754,6 @@ public sealed class ImportPublishService(
                     taskSnapshot.ExpectedTitle is not null ? taskSnapshot.ExpectedDurationMs : taskSnapshot.DurationMs,
                     taskSnapshot.ExpectedAlbumTitle);
         }
-        // 回退：无期望身份时用候选身份自评（Matched）。
-        var fallbackArtists = PublishGate.DeserializeList(item.ArtistsJson);
-        return new TrackIdentity(item.Title ?? string.Empty, fallbackArtists, item.DurationMs);
+        return null;
     }
 }

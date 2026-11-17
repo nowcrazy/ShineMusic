@@ -1,11 +1,4 @@
-// 职责：Phase 6 验收测试——QualityGate 降级策略。
-// 验收标准：
-//   - SQ 失效可尝试 HQ（无损不可用时降级到 320K）
-//   - HQ 失效不自动降级到 128K（Below320K 不在允许链中）
-//   - AllowLossyFallback=false 时 Below320K 被拒绝
-//   - AllowLossyFallback=true 时 Below320K 进入允许链
-
-using Microsoft.Extensions.Options;
+using ShineMusic.Model.Domain;
 using ShineMusic.Model.Options;
 using ShineMusic.Service.SourceDownload;
 using ShineMusic.Service.SourceProviders.Abstractions;
@@ -15,114 +8,74 @@ namespace ShineMusic.Tests.Rules;
 
 public class QualityGateTests
 {
-    private static IOptions<SourceDownloadOptions> Wrap(SourceDownloadOptions options) =>
-        Microsoft.Extensions.Options.Options.Create(options);
-
-    private static SourceDownloadOptions DefaultOptions(Action<SourceDownloadOptions>? configure = null)
+    private static QualityGate Create(string minimum = "192K", bool fallback = true)
     {
         var options = new SourceDownloadOptions();
-        configure?.Invoke(options);
-        return options;
+        options.ProviderFramework.QualityPolicy.MinimumQuality = minimum;
+        options.ProviderFramework.QualityPolicy.AllowLossyFallback = fallback;
+        return new QualityGate(Microsoft.Extensions.Options.Options.Create(options));
     }
 
     [Fact]
-    public void Default_chain_is_lossless_then_320k()
+    public void Default_chain_targets_320_first_and_retains_lossless()
     {
-        // 验收：默认降级链为 [Lossless, High320K]
-        var gate = new QualityGate(Wrap(DefaultOptions()));
-        var chain = gate.GetAllowedQualityChain();
-
-        Assert.Equal(2, chain.Count);
-        Assert.Equal(AudioQualityLevel.Lossless, chain[0]);
-        Assert.Equal(AudioQualityLevel.High320K, chain[1]);
+        Assert.Equal([AudioQualityLevel.High320K, AudioQualityLevel.Lossless, AudioQualityLevel.Below320K],
+            Create().GetAllowedQualityChain());
+        Assert.False(Create().IsPreviewAllowed);
     }
 
-    [Fact]
-    public void Below320k_is_never_in_default_chain()
+    [Theory]
+    [InlineData("mp3", "mp3", 192, true)]
+    [InlineData("mp3", "mp3", 256, true)]
+    [InlineData("mp3", "mp3", 320, true)]
+    [InlineData("aac", "m4a", 192, true)]
+    [InlineData("aac", "aac", 256, true)]
+    [InlineData("aac", "m4a", 320, true)]
+    [InlineData("flac", "flac", null, true)]
+    [InlineData("alac", "m4a", null, true)]
+    [InlineData("pcm_s16le", "wav", null, true)]
+    [InlineData("mp3", "mp3", 128, false)]
+    [InlineData("aac", "m4a", 191, false)]
+    [InlineData("aac", "m4a", null, false)]
+    [InlineData("aac", "m4a", 0, false)]
+    [InlineData("unknown", "flac", 1411, false)]
+    [InlineData(null, "wav", 1411, false)]
+    [InlineData("opus", "ogg", 320, false)]
+    [InlineData("mp3", "flac", 320, false)]
+    public void Shared_policy_and_gate_use_measured_codec_and_bitrate(string? codec, string container, int? bitrate, bool accepted)
     {
-        // 验收：HQ 失效不自动降级到 128K
-        var gate = new QualityGate(Wrap(DefaultOptions()));
-        var chain = gate.GetAllowedQualityChain();
-
-        Assert.DoesNotContain(AudioQualityLevel.Below320K, chain);
+        Assert.Equal(accepted, AudioAdmissionPolicy.IsAcceptable(codec, container, bitrate));
+        Assert.Equal(accepted, Create().IsAcceptableForLibrary(codec, container, bitrate));
+        Assert.Equal(accepted, AudioAdmissionPolicy.GetRejectionReason(codec, container, bitrate) is null);
     }
 
-    [Fact]
-    public void Lossless_is_allowed_by_default()
-    {
-        var gate = new QualityGate(Wrap(DefaultOptions()));
-        Assert.True(gate.IsQualityAllowed(AudioQualityLevel.Lossless));
-    }
+    [Theory]
+    [InlineData(AudioQualityLevel.Unknown)]
+    [InlineData(AudioQualityLevel.Below320K)]
+    [InlineData(AudioQualityLevel.High320K)]
+    [InlineData(AudioQualityLevel.Lossless)]
+    public void Display_level_alone_never_proves_admission(AudioQualityLevel level) =>
+        Assert.False(Create().IsAcceptableForLibrary(level));
 
-    [Fact]
-    public void High320k_is_allowed_by_default()
-    {
-        var gate = new QualityGate(Wrap(DefaultOptions()));
-        Assert.True(gate.IsQualityAllowed(AudioQualityLevel.High320K));
-    }
+    [Theory]
+    [InlineData(128, false)]
+    [InlineData(192, true)]
+    [InlineData(256, true)]
+    [InlineData(320, true)]
+    [InlineData(null, true)]
+    public void Candidate_prefilter_keeps_qualified_and_unknown_candidates(int? bitrate, bool allowed) =>
+        Assert.Equal(allowed, Create().IsCandidateAllowed(false, bitrate));
 
-    [Fact]
-    public void Below320k_is_rejected_by_default()
+    [Theory]
+    [InlineData("320K", true)]
+    [InlineData("128K", true)]
+    [InlineData("Below320K", true)]
+    [InlineData("192K", false)]
+    [InlineData("Lossless", true)]
+    public void Configuration_cannot_open_the_whole_below320_bucket(string minimum, bool fallback)
     {
-        // 验收：128K 不在允许链中，IsQualityAllowed 返回 false
-        var gate = new QualityGate(Wrap(DefaultOptions()));
-        Assert.False(gate.IsQualityAllowed(AudioQualityLevel.Below320K));
-    }
-
-    [Fact]
-    public void Unknown_quality_is_not_blocked_by_gate()
-    {
-        // 未知质量不拦截，由 AudioValidator 下载后实测判定
-        var gate = new QualityGate(Wrap(DefaultOptions()));
-        Assert.True(gate.IsQualityAllowed(AudioQualityLevel.Unknown));
-    }
-
-    [Fact]
-    public void AllowLossyFallback_adds_below320k_to_chain()
-    {
-        // 验收：AllowLossyFallback=true 时 Below320K 进入允许链
-        var gate = new QualityGate(Wrap(DefaultOptions(options =>
-            options.ProviderFramework.QualityPolicy.AllowLossyFallback = true)));
-        var chain = gate.GetAllowedQualityChain();
-
-        Assert.Contains(AudioQualityLevel.Below320K, chain);
-        Assert.True(gate.IsQualityAllowed(AudioQualityLevel.Below320K));
-    }
-
-    [Fact]
-    public void Lossless_passes_acceptable_threshold()
-    {
-        var gate = new QualityGate(Wrap(DefaultOptions()));
-        Assert.True(gate.IsAcceptableForLibrary(AudioQualityLevel.Lossless));
-    }
-
-    [Fact]
-    public void High320k_passes_acceptable_threshold()
-    {
-        var gate = new QualityGate(Wrap(DefaultOptions()));
-        Assert.True(gate.IsAcceptableForLibrary(AudioQualityLevel.High320K));
-    }
-
-    [Fact]
-    public void Below320k_fails_acceptable_threshold_by_default()
-    {
-        // 验收：128K 不达到入库门槛
-        var gate = new QualityGate(Wrap(DefaultOptions()));
-        Assert.False(gate.IsAcceptableForLibrary(AudioQualityLevel.Below320K));
-    }
-
-    [Fact]
-    public void Preview_is_not_allowed_by_default()
-    {
-        var gate = new QualityGate(Wrap(DefaultOptions()));
-        Assert.False(gate.IsPreviewAllowed);
-    }
-
-    [Fact]
-    public void Preview_can_be_allowed_via_config()
-    {
-        var gate = new QualityGate(Wrap(DefaultOptions(options =>
-            options.ProviderFramework.QualityPolicy.AllowPreview = true)));
-        Assert.True(gate.IsPreviewAllowed);
+        var gate = Create(minimum, fallback);
+        Assert.False(gate.IsAcceptableForLibrary("mp3", "mp3", 128));
+        Assert.False(gate.IsAcceptableForLibrary("mp3", "mp3", 192));
     }
 }

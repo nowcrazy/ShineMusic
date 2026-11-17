@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 单曲详情页：大封面 + 标题/艺人 + 播放入口 + 评论区（CommentSection）。
+ * 单曲详情页：紧凑曲目信息、专辑入口与评论区（CommentSection）。
  * 路由：/pages/track/detail?id={trackId}
  * 曲目不存在（404，或私有曲目无权访问）时展示空态。
  */
@@ -40,6 +40,10 @@ function play() {
   if (track.value) playTrack(track.value)
 }
 
+function goAlbum() {
+  if (track.value?.albumId) uni.navigateTo({ url: `/pages/catalog/album?id=${encodeURIComponent(track.value.albumId)}` })
+}
+
 onLoad((query) => {
   const id = (query as Record<string, string>).id
   if (id) {
@@ -61,13 +65,16 @@ onLoad((query) => {
     <template v-else>
       <view class="detail-hero">
         <view class="detail-cover"><CoverArt :src="track.cover" :seed="track.title" :rounded="28" :icon-size="44" /></view>
+        <view class="detail-copy">
         <text class="detail-title">{{ track.title }}</text>
         <text class="detail-artist">{{ track.artist }}</text>
-        <view v-if="track.album" class="detail-meta">
-          <text class="detail-meta-item">{{ track.album }}</text>
+        <view class="detail-meta">
+          <button v-if="track.albumId" class="album-link" @tap="goAlbum">{{ track.album || t('nav.album') }}</button>
+          <text v-else-if="track.album" class="detail-meta-item">{{ track.album }}</text>
           <text v-if="track.duration" class="detail-meta-item">{{ formatTime(track.duration) }}</text>
         </view>
-        <view class="detail-play" @tap="play"><Play :size="20" fill="currentColor" /><text>{{ t('trackDetail.play') }}</text></view>
+        <button class="detail-play" @tap="play"><Play :size="16" fill="currentColor" /><text>{{ t('trackDetail.play') }}</text></button>
+        </view>
       </view>
 
       <CommentSection :track-id="track.id" />
@@ -82,12 +89,16 @@ onLoad((query) => {
 .track-detail { min-height: 100vh; padding: 24rpx 36rpx 60rpx; background: var(--sm-page-bg); box-sizing: border-box; }
 .detail-state { padding: 120rpx 20rpx; color: var(--sm-text-2); font-size: 19rpx; text-align: center; }
 
-.detail-hero { display: flex; flex-direction: column; align-items: center; gap: 16rpx; padding: 40rpx 28rpx 34rpx; border-radius: var(--sm-radius-card); background: var(--sm-surface-3); border: 1rpx solid var(--sm-border-strong); box-shadow: 0 16rpx 40rpx var(--sm-art-shadow); }
-.detail-cover { width: 320rpx; height: 320rpx; border-radius: 28rpx; overflow: hidden; box-shadow: 0 18rpx 44rpx var(--sm-art-shadow); }
-.detail-title { margin-top: 10rpx; color: var(--sm-text); font-size: 36rpx; font-weight: 800; text-align: center; }
-.detail-artist { color: var(--sm-text-2); font-size: 22rpx; }
-.detail-meta { display: flex; gap: 16rpx; margin-top: 4rpx; }
-.detail-meta-item { padding: 6rpx 18rpx; border-radius: 999rpx; background: var(--sm-surface); color: var(--sm-text-3); font-size: 17rpx; }
-.detail-play { display: flex; align-items: center; gap: 10rpx; margin-top: 18rpx; padding: 18rpx 58rpx; border-radius: 999rpx; background: var(--sm-hero-ink-bg); color: var(--sm-hero-ink); font-size: 21rpx; font-weight: 800; }
+.detail-hero { display: flex; align-items: flex-start; gap: 24rpx; padding: 28rpx; border-radius: var(--sm-radius-card); background: var(--sm-surface); border: 1px solid var(--sm-border); }
+.detail-cover { flex: none; width: 144rpx; height: 144rpx; border-radius: 20rpx; overflow: hidden; }
+.detail-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 10rpx; }
+.detail-title { color: var(--sm-text); font-size: 32rpx; font-weight: 800; overflow-wrap: anywhere; }
+.detail-artist { color: var(--sm-text-2); font-size: 24rpx; }
+.detail-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 12rpx; }
+.detail-meta-item { color: var(--sm-text-3); font-size: 22rpx; }
+.album-link { margin: 0; padding: 0; background: transparent; color: var(--sm-accent); font-size: 24rpx; text-align: left; line-height: 1.6; }
+.album-link::after { border: 0; }
+.detail-play { display: flex; align-self: flex-start; align-items: center; gap: 10rpx; margin: 8rpx 0 0; padding: 8rpx 24rpx; border-radius: var(--sm-radius-pill); background: var(--sm-accent); color: var(--sm-accent-ink); font-size: 24rpx; }
+@media (min-width: 960px) { .detail-cover { width: 112px; height: 112px; } }
 .page-bottom-spacer { height: 180rpx; }
 </style>

@@ -2,7 +2,7 @@
 /**
  * 管理后台主布局：左侧固定导航 + 顶部访问标签条与账号菜单 + 右侧内容区。
  */
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import {
@@ -37,6 +37,15 @@ import { changePassword, deleteAvatar, updateDisplayName, uploadAvatar } from '@
 const route = useRoute()
 const router = useRouter()
 const store = useAdminStore()
+const compactQuery = typeof window === 'undefined' ? null : window.matchMedia('(max-width: 768px)')
+function adaptSidebar() {
+  if (compactQuery?.matches) store.sidebarCollapsed = true
+}
+onMounted(() => {
+  adaptSidebar()
+  compactQuery?.addEventListener('change', adaptSidebar)
+})
+onUnmounted(() => compactQuery?.removeEventListener('change', adaptSidebar))
 
 const menuGroups = [
   {

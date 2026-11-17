@@ -1,12 +1,8 @@
 <script setup lang="ts">
 /**
- * 首页：应用主框架页，内含“为你 / 发现 / 曲库 / 我的”四个自定义 tab（非 tabBar 页面，底部为自绘 tabbar，
- * 中间为凸起的「消息」按钮，带未读角标，点击进入消息中心）。
- * 进入参数：无 onLoad query。
- * - 为你：首页 Feed（精选专题大卡、专题横滑、风格筛选、最近加入曲目）；
- * - 发现：风格浏览 + 关键词搜索（防抖）；
- * - 曲库：我的曲库（上传/引用曲目，含私有与公开），支持播放、移除引用、上传入口；
- * - 我的：登录后展示个人资料卡、快捷设置（主题/管理入口）、我的歌单、喜欢的音乐，未登录展示登录引导。
+ * 主框架：为你推荐歌单、发现站内榜单、曲库默认公开曲目、我的管理个人歌单。
+ * 每日推荐与精选歌单仅使用真实数据，搜索独立于公开曲目分页。
+ * 账号与管理入口收于头像抽屉，底部四项导航与播放器分离。
  * 对应后端接口：services/catalog（getHomeFeed / getGenres / searchTracks）、
  * services/library（loadFavorites / getPlaylists / createPlaylist）、services/user-library（loadMyLibrary / removeFromLibrary）、
  * services/recommend、services/player、services/capabilities 功能开关、services/session。
@@ -37,14 +33,16 @@ import {
 import TrackRow from '@/components/TrackRow.vue'
 import PlayerBar from '@/components/PlayerBar.vue'
 import CoverArt from '@/components/CoverArt.vue'
+import ChartBrowser from '@/components/ChartBrowser.vue'
 import ProfileDrawer from '@/components/ProfileDrawer.vue'
 import { getGenres, getHomeFeed, getTracks, peekGenresCache, peekHomeFeedCache, searchTracks } from '@/services/catalog'
 import { resolveUrl } from '@/services/http'
 import { getDailyRecommendations, peekDailyCache } from '@/services/recommend'
-import { playQueue, playTrack, playerExpanded, usePlayer } from '@/services/player'
+import { playTrack, playQueue, usePlayer } from '@/services/player'
+import { favoriteTracks, favoritesTotal } from '@/services/library'
+import { loadSavedCollections, savedCollections, savedCollectionsTotal, savedCollectionsLoading, savedCollectionsError, savingCollectionIds, toggleSavedCollection } from '@/services/saved-collections'
 import {
   createPlaylist,
-  favoriteTracks,
   getPlaylists,
   loadFavorites,
 } from '@/services/library'
@@ -82,10 +80,6 @@ function tabLabel(tab: string) {
 const { state: playerState } = usePlayer()
 const unreadLabel = computed(() => (unreadCount.value > 99 ? '99+' : String(unreadCount.value)))
 
-/** 点击 tabbar 中间黑胶：展开全屏播放器（未登录也可看，播放器本身不要求登录） */
-function openNowPlaying() {
-  playerExpanded.value = true
-}
 
 /** 点击顶栏铃铛：未登录先引导登录，已登录进消息中心 */
 function onBellTap() {
@@ -102,12 +96,8 @@ function goPage(url: string) {
 }
 
 // —— “为你”Feed 数据：精选曲目、最近加入、专题列表、头图专题、风格、错误态 ——
-const featured = ref<Track | null>(null)
-const recentTracks = ref<Track[]>([])
 const collections = ref<readonly ApiCollectionSummary[]>([])
-const heroCollection = ref<ApiCollectionSummary | null>(null)
 const genres = ref<readonly string[]>([])
-const selectedGenre = ref('全部') // 风格 chips 当前选中项（本地过滤最近加入）
 const loadError = ref(false)
 
 // —— “发现”搜索状态：关键词 / 结果 / 加载中 / 是否已发起过搜索 / 防抖计时器 ——
@@ -120,6 +110,33 @@ let searchTimer: ReturnType<typeof setTimeout> | undefined
 // —— “收藏 / 我的”页数据：我的歌单与加载态（收藏曲目来自 library 全局 favoriteTracks） ——
 const myPlaylists = ref<readonly ApiPlaylistSummary[]>([])
 const libraryLoading = ref(false)
+const favoritesLoading = ref(false)
+const favoritesError = ref(false)
+const personalError = ref(false)
+const onlyFavorites = ref(false)
+const visibleFavorites = computed(() => {
+  const items = favoriteTracks.value.filter(track => (publicLibraryGenre.value === '全部' || track.genres.includes(publicLibraryGenre.value)) && `${track.title} ${track.artist} ${track.album}`.toLowerCase().includes(query.value.trim().toLowerCase()))
+  return publicLibrarySort.value === 'title' ? items.sort((a, b) => a.title.localeCompare(b.title)) : items
+})
+async function refreshFavorites() {
+  if (!isAuthenticated.value) return
+  favoritesLoading.value = true
+  favoritesError.value = false
+  try { await loadFavorites(true) } catch { favoritesError.value = true } finally { favoritesLoading.value = false }
+}
+async function refreshPersonal() {
+  personalError.value = false
+  try { await loadMyLibrary(true) } catch { personalError.value = true }
+}
+async function refreshSaved() { try { await loadSavedCollections(true) } catch { /* inline retry */ } }
+async function unsaveCollection(item: ApiCollectionSummary) {
+  try { await toggleSavedCollection(item) } catch { uni.showToast({ title: t('homePage.operationFailed'), icon: 'none' }) }
+}
+function selectFavorites() {
+  if (!isAuthenticated.value) { goLogin(); return }
+  onlyFavorites.value = !onlyFavorites.value
+  if (onlyFavorites.value) void refreshFavorites()
+}
 
 // —— 新建歌单弹层（受控 Vue 弹层，替代 uni.showModal 的 editable 模式）——
 // uni.showModal({editable:true}) 在 H5 首次关闭后无法再次打开（模态框 DOM 残留），
@@ -141,6 +158,13 @@ const capabilities = useCapabilities()
 // —— “曲库”页匿名态：公开曲库（GET /tracks 匿名可读，后端只返回已发布曲目） ——
 // 未登录也能浏览并播放，收藏/歌单/评论等互动仍由各组件的 requireLogin() 拦截。
 const publicLibraryItems = ref<Track[]>([])
+const libraryScope = ref<'public' | 'personal'>('public')
+function selectLibraryScope(scope: 'public' | 'personal') {
+  libraryScope.value = scope
+  if (scope === 'public') { if (!publicLibraryItems.value.length) void loadPublicLibrary(true) }
+  else if (isAuthenticated.value) void refreshPersonal()
+}
+function browsePublic() { libraryScope.value = 'public'; query.value = ''; setTab('曲库') }
 const publicLibraryPage = ref(1)
 const publicLibraryTotal = ref(0)
 const publicLibraryLoading = ref(false)
@@ -149,19 +173,20 @@ const publicLibraryGenre = ref('全部')
 const publicLibrarySort = ref<'recent' | 'title'>('recent')
 // 请求序号：切风格/排序时丢弃过期响应，避免旧页数据覆盖新筛选结果
 let publicLibrarySeq = 0
+const filteredSearch = computed(() => searchResults.value.filter(track => publicLibraryGenre.value === '全部' || track.genres.includes(publicLibraryGenre.value)))
 
 /**
- * 加载公开曲库（仅未登录时生效，20 条/页追加）。
+ * 加载公开曲库（登录前后均可用，20 条/页追加）。
  * @param reset true 表示从第一页重新拉取（切换风格/排序）
  */
 async function loadPublicLibrary(reset = false) {
-  if (isAuthenticated.value) return
   if (!reset && (publicLibraryLoading.value || publicLibraryFinished.value)) return
   const seq = ++publicLibrarySeq
   if (reset) {
     publicLibraryPage.value = 1
     publicLibraryFinished.value = false
   }
+  publicLibraryError.value = false
   publicLibraryLoading.value = true
   try {
     const result = await getTracks({
@@ -180,6 +205,7 @@ async function loadPublicLibrary(reset = false) {
     if (!publicLibraryFinished.value) publicLibraryPage.value += 1
   } catch {
     if (seq === publicLibrarySeq) {
+      publicLibraryError.value = true
       uni.showToast({ title: t('homePage.publicLibraryLoadFailed'), icon: 'none' })
     }
   } finally {
@@ -201,21 +227,18 @@ function selectPublicSort(sort: 'recent' | 'title') {
   void loadPublicLibrary(true)
 }
 
-/** 页面滚动触底：仅匿名曲库 tab 需要继续分页 */
+/** 公开曲目浏览触底时继续分页；搜索结果不触发分页。 */
 function onScrollLower() {
-  if (activeTab.value === '曲库' && !isAuthenticated.value) void loadPublicLibrary()
+  if (activeTab.value === '曲库' && libraryScope.value === 'public' && !onlyFavorites.value && !query.value.trim()) void loadPublicLibrary()
 }
 
-// 登录态变化：匿名公开曲库与「我的曲库」互斥，清空匿名列表避免切换时闪现旧数据
-// 在「曲库」tab 退出登录时立即拉取公开曲库（登出发生在同一页，不会触发 onShow）
+// 退出登录回到公开曲目；登录不改变已选公开视图。
 watch(isAuthenticated, (authed) => {
-  publicLibrarySeq += 1
-  publicLibraryItems.value = []
-  publicLibraryPage.value = 1
-  publicLibraryTotal.value = 0
-  publicLibraryFinished.value = false
-  publicLibraryLoading.value = false
-  if (!authed && activeTab.value === '曲库') void loadPublicLibrary(true)
+  if (!authed) libraryScope.value = 'public'
+  if (activeTab.value === '曲库') {
+    if (libraryScope.value === 'public' && !publicLibraryItems.value.length) void loadPublicLibrary(true)
+    else if (authed && libraryScope.value === 'personal') void refreshPersonal()
+  }
 })
 
 /**
@@ -284,20 +307,15 @@ function goUpload() {
 const drawerVisible = ref(false)
 
 /**
- * 点击头像：未登录跳登录页；已登录滑出个人抽屉（顶部头像与“我的”tab 资料卡共用）。
+ * 点击头像打开通用设置抽屉；账号操作在执行时检查登录。
  */
 function onAvatarTap() {
-  if (!isAuthenticated.value) {
-    uni.navigateTo({ url: '/pages/auth/login' })
-    return
-  }
   drawerVisible.value = true
 }
 
 // 风格 chips：在服务端风格前补一个“全部”。后端空集合时回退到默认风格列表，避免空状态
 // 仅剩“全部”而显得页面不完整
 // chips 值同时用于 track.genres 过滤匹配，必须保留原中文；展示层经 GENRE_LABEL_KEYS 映射走 i18n
-const DEFAULT_GENRES = ['华语', '欧美', '日语', '电子', '民谣', '摇滚', 'R&B', '古风']
 const GENRE_LABEL_KEYS: Record<string, string> = {
   '全部': 'home.genres',
   '华语': 'homePage.genreHuayu',
@@ -314,77 +332,30 @@ function genreLabel(genre: string) {
   return key ? t(key) : genre
 }
 const genreChips = computed(() => {
-  const list = genres.value.length ? genres.value : DEFAULT_GENRES
+  const list = genres.value
   return ['全部', ...list]
 })
 
-// 静态兜底精选合集：后端无数据时仍用于填满「精选专题 / 编辑精选」区块，避免页面空白。
-// 点击默认合集（id 以 default- 开头）跳转对应风格浏览页，而非不存在的合集详情。
-const DEFAULT_COLLECTIONS: ApiCollectionSummary[] = [
-  { id: 'default-huayu', title: '华语流行精选', description: '最懂华语情怀的旋律', artworkUrl: null, trackCount: 50 },
-  { id: 'default-oumei', title: '欧美金曲', description: 'Billboard 热歌精选', artworkUrl: null, trackCount: 50 },
-  { id: 'default-dianzi', title: '电子律动', description: '深夜节拍不间断', artworkUrl: null, trackCount: 50 },
-  { id: 'default-minyao', title: '民谣故事', description: '一把吉他一杯酒', artworkUrl: null, trackCount: 50 },
-]
-// 内置兜底合集的展示 key：title 同时作为跳风格页的 genre 参数（逻辑值），展示层经此映射走 i18n
-const DEFAULT_COLLECTION_LABEL_KEYS: Record<string, { titleKey: string; descKey: string }> = {
-  'default-huayu': { titleKey: 'homePage.defaultHuayu', descKey: 'homePage.defaultHuayuDesc' },
-  'default-oumei': { titleKey: 'homePage.defaultOumei', descKey: 'homePage.defaultOumeiDesc' },
-  'default-dianzi': { titleKey: 'homePage.defaultDianzi', descKey: 'homePage.defaultDianziDesc' },
-  'default-minyao': { titleKey: 'homePage.defaultMinyao', descKey: 'homePage.defaultMinyaoDesc' },
-}
-/** 合集标题展示：内置兜底合集走 i18n，真实合集用后端数据 */
-function collectionTitle(collection: ApiCollectionSummary) {
-  const keys = DEFAULT_COLLECTION_LABEL_KEYS[collection.id]
-  return keys ? t(keys.titleKey) : collection.title
-}
-/** 合集描述展示：内置兜底合集走 i18n，真实合集用后端数据 */
-function collectionDesc(collection: ApiCollectionSummary) {
-  const keys = DEFAULT_COLLECTION_LABEL_KEYS[collection.id]
-  return keys ? t(keys.descKey) : collection.description
-}
-// 精选专题：只展示后端真实合集。早期用 4 个内置「50 首」假专题兜底，
-// 空库时会被误读为真实曲库（P3-1），改为如实显示空态。
-const displayCollections = computed<readonly ApiCollectionSummary[]>(() => collections.value)
-// 编辑精选大卡：优先真实头图专题 / 精选曲目；仅当曲库确有合集时才用内置风格入口兜底，
-// 避免空库凭空出现一个「华语流行精选」。
-const effectiveFeatured = computed<ApiCollectionSummary | Track | null>(() =>
-  heroCollection.value ?? featured.value ?? (collections.value.length ? DEFAULT_COLLECTIONS[0] : null),
-)
-const featuredCollection = computed(() =>
-  effectiveFeatured.value && 'trackCount' in effectiveFeatured.value
-    ? (effectiveFeatured.value as ApiCollectionSummary)
-    : null,
-)
-const featuredTrack = computed(() =>
-  effectiveFeatured.value && !('trackCount' in effectiveFeatured.value)
-    ? (effectiveFeatured.value as Track)
-    : null,
-)
-// 最近加入列表：选中“全部”时原样展示，否则按风格本地过滤
-const visibleRecent = computed(
-  () =>
-    selectedGenre.value === '全部'
-    ? recentTracks.value
-    : recentTracks.value.filter((track) => track.genres.includes(selectedGenre.value)),
-)
+const displayCollections = computed(() => collections.value.filter((item) => item.trackCount > 0))
 // 头像首字母：取显示名首字符大写，缺省回退为 L
-const avatarLetter = computed(() => currentUser.value?.displayName?.slice(0, 1).toUpperCase() || 'L')
+const avatarLetter = computed(() => currentUser.value?.displayName?.slice(0, 1).toUpperCase() || 'S')
+const today = new Date().getDate()
 
 /**
  * 加载“为你”首页 Feed（精选曲目/最近加入/专题）
  * 关键副作用：失败时置 loadError，页面展示曲库连接失败提示
  */
+const homeLoading = ref(false)
 async function loadHome() {
+  homeLoading.value = true
   loadError.value = false
   try {
     const home = await getHomeFeed()
-    featured.value = home.featured
-    recentTracks.value = home.recentlyAdded
     collections.value = home.collections
-    heroCollection.value = home.collections[0] ?? null
   } catch {
     loadError.value = true
+  } finally {
+    homeLoading.value = false
   }
 }
 
@@ -399,8 +370,8 @@ async function retryHome() {
 // —— 每日推荐数据：为「今日灵感」提供主封面与堆叠预览 ——
 const dailyTracks = ref<Track[]>([])
 const dailyLoading = ref(false)
+const dailyError = ref(false)
 // 卡片右侧的 3 张迷你封面预览（堆叠进今日灵感）
-const dailyPreview = computed(() => dailyTracks.value.slice(0, 3))
 
 // —— 「今日灵感」时间驱动个性化 ——
 /** 当前时段（hour-based）：决定问候语、氛围标签、首选曲目风格（展示层走 i18n key，逻辑不依赖文案） */
@@ -419,35 +390,21 @@ const greetingText = computed(() =>
     name: isAuthenticated.value ? currentUser.value?.displayName ?? t('homePage.friend') : t('homePage.friend'),
   }),
 )
-/** 时段氛围标签 — 搭配灵感卡片副标题（time/mood 原中文值保留给匹配逻辑，展示走 *Key） */
-const moodTag = computed(() => {
-  if (nowHour < 6) return { time: '深夜', timeKey: 'homePage.moodLateNight', mood: '安静', moodKey: 'homePage.moodQuiet' }
-  if (nowHour < 11) return { time: '清晨', timeKey: 'homePage.moodEarlyMorning', mood: '轻快', moodKey: 'homePage.moodBrisk' }
-  if (nowHour < 14) return { time: '午后', timeKey: 'homePage.moodNoon', mood: '松弛', moodKey: 'homePage.moodRelaxed' }
-  if (nowHour < 18) return { time: '下午', timeKey: 'homePage.moodAfternoon', mood: '松弛', moodKey: 'homePage.moodRelaxed' }
-  return { time: '夜晚', timeKey: 'homePage.moodNight', mood: '温柔', moodKey: 'homePage.moodGentle' }
-})
-/** 灵感主卡曲目：优先取每日推荐中匹配时段 mood 的曲目，否则 fallback 到第一首 */
-const inspirationTrack = computed<Track | null>(() => {
-  const mood = moodTag.value.mood
-  if (dailyTracks.value.length) {
-    const matched = dailyTracks.value.find((t) => t.mood === mood || t.genres.some((g) => g.includes(mood)))
-    return matched ?? dailyTracks.value[0] ?? null
-  }
-  return featured.value ?? recentTracks.value[0] ?? null
-})
+const isHome = computed(() => activeTab.value === tabs[0])
+const publicLibraryError = ref(false)
 
 /**
  * 加载每日推荐（登录后为个性化结果，未登录为热度/最新兜底）。
- * 失败时以“最近加入”兜底，保证卡片始终有内容可点。
+ * 失败单独展示重试；空结果不渲染推荐卡。
  */
 async function loadDaily() {
   dailyLoading.value = true
+  dailyError.value = false
   try {
     const result = await getDailyRecommendations()
     dailyTracks.value = result.tracks
   } catch {
-    dailyTracks.value = recentTracks.value.slice(0, 30)
+    dailyError.value = true
   } finally {
     dailyLoading.value = false
   }
@@ -458,27 +415,22 @@ function goDaily() {
   uni.navigateTo({ url: '/pages/recommend/daily' })
 }
 
-/** 播放「今日灵感」主打曲目 */
-function playInspiration() {
-  if (inspirationTrack.value) {
-    // 以每日推荐列表为队列、灵感曲目为起点
-    const queue = dailyTracks.value.length ? dailyTracks.value : (featured.value ? [featured.value] : recentTracks.value)
-    playTrack(inspirationTrack.value, queue)
-  } else {
-    goDaily()
-  }
-}
 
 /**
  * 加载风格 chips
  * 后端没有风格标签时保持空集合（仅剩“全部”），页面展示“曲库中还没有风格标签。”
  */
+const genresLoading = ref(false)
+const genresError = ref(false)
 async function loadGenreChips() {
+  genresLoading.value = true
+  genresError.value = false
   try {
     genres.value = await getGenres()
   } catch {
-    // 接口异常：保持空集合，不做演示数据兜底
-    genres.value = []
+    genresError.value = true
+  } finally {
+    genresLoading.value = false
   }
 }
 
@@ -486,30 +438,35 @@ async function loadGenreChips() {
  * 监听搜索框输入：仅在“发现”tab 生效，280ms 防抖后调用搜索接口
  * 关键词清空时立即重置结果；每次输入先清掉上一个防抖定时器
  */
-watch(query, (value) => {
-  if (activeTab.value !== '发现') return
+const searchError = ref(false)
+let searchSeq = 0
+function runSearch(value = query.value) {
+  const seq = ++searchSeq
   if (searchTimer) clearTimeout(searchTimer)
   const keyword = value.trim()
+  searchError.value = false
+  searched.value = false
   if (!keyword) {
     searchResults.value = []
-    searched.value = false
     searchPending.value = false
     return
   }
   searchPending.value = true
-  // 防抖：停顿 280ms 后才真正发起搜索请求
   searchTimer = setTimeout(async () => {
     try {
-      searchResults.value = await searchTracks(keyword)
+      const result = await searchTracks(keyword)
+      if (seq !== searchSeq) return
+      searchResults.value = result
       searched.value = true
     } catch {
-      searchResults.value = []
-      searched.value = true
+      if (seq !== searchSeq) return
+      searchError.value = true
     } finally {
-      searchPending.value = false
+      if (seq === searchSeq) searchPending.value = false
     }
   }, 280)
-})
+}
+watch(query, (value) => runSearch(value))
 
 /**
  * 切换底部 tab；切到“我的”时按需拉取我的歌单，切到“曲库”时按需拉取曲库引用
@@ -519,28 +476,31 @@ function setTab(tab: string) {
   activeTab.value = tab
   if (tab === '我的') void loadLibrary()
   if (tab === '曲库') {
-    if (isAuthenticated.value) void loadMyLibrary(true)
+    if (libraryScope.value === 'personal' && isAuthenticated.value) void refreshPersonal()
     else if (!publicLibraryItems.value.length) void loadPublicLibrary(true)
   }
 }
 
-/** 点击顶部搜索框：聚焦即跳到“发现”tab（搜索词仍由输入框双向绑定） */
-function goSearch() {
-  activeTab.value = '发现'
-}
+
 
 /**
  * 加载“我的”页数据（收藏列表 + 我的歌单）
  * 前置条件：已登录、未在加载中、后端开放了 userCollections 能力，否则直接跳过
  */
+const libraryError = ref(false)
 async function loadLibrary() {
-  if (!isAuthenticated.value || libraryLoading.value || !capabilities.capabilities.userCollections) return
+  if (!isAuthenticated.value || libraryLoading.value) return
+  void refreshFavorites()
+  if (capabilities.capabilities.editorialCollections) void refreshSaved()
+  if (!capabilities.capabilities.userCollections) return
+  const userId = currentUser.value?.id
   libraryLoading.value = true
+  libraryError.value = false
   try {
-    const [, playlists] = await Promise.all([loadFavorites(true), getPlaylists()])
-    myPlaylists.value = playlists.items
+    const playlists = await getPlaylists()
+    if (userId === currentUser.value?.id) myPlaylists.value = playlists.items
   } catch {
-    // 忽略：收藏页展示错误提示即可
+    libraryError.value = true
   } finally {
     libraryLoading.value = false
   }
@@ -551,7 +511,7 @@ async function loadLibrary() {
 onShow(() => {
   if (activeTab.value === '我的') void loadLibrary()
   if (activeTab.value === '曲库') {
-    if (isAuthenticated.value) void loadMyLibrary(true)
+    if (libraryScope.value === 'personal' && isAuthenticated.value) void refreshPersonal()
     else if (!publicLibraryItems.value.length) void loadPublicLibrary(true)
   }
   void refreshUnreadCount() // 从消息页返回/登录返回时刷新角标；未登录时内部静默失败
@@ -567,10 +527,7 @@ onMounted(() => {
   // 它们内部会走 stale-while-revalidate 静默刷新。
   const cachedHome = peekHomeFeedCache()
   if (cachedHome) {
-    featured.value = cachedHome.featured
-    recentTracks.value = cachedHome.recentlyAdded
     collections.value = cachedHome.collections
-    heroCollection.value = cachedHome.collections[0] ?? null
   }
   const cachedGenres = peekGenresCache()
   if (cachedGenres) genres.value = cachedGenres
@@ -583,40 +540,25 @@ onMounted(() => {
   void loadDaily()
   if (isAuthenticated.value) void loadLibrary()
 })
+watch(() => currentUser.value?.id, () => {
+  myPlaylists.value = []
+  onlyFavorites.value = false
+  dailyTracks.value = []
+  void loadDaily()
+  if (activeTab.value === '我的') void loadLibrary()
+})
 
-/**
- * 点击头图大卡：有头图专题则进入专题详情（默认合集跳风格页），否则直接播放精选曲目
- */
-function tapHero() {
-  if (featuredCollection.value) {
-    if (featuredCollection.value.id.startsWith('default-')) goGenre(featuredCollection.value.title)
-    else uni.navigateTo({ url: `/pages/catalog/collection?id=${featuredCollection.value.id}` })
-    return
-  }
-  if (featuredTrack.value) playTrack(featuredTrack.value, recentTracks.value)
-}
 
 /**
  * 点击精选专题卡：真实合集进入详情，内置兜底合集（default-）跳对应风格浏览页
  * @param collection 专题摘要
  */
 function tapCollection(collection: ApiCollectionSummary) {
-  if (collection.id.startsWith('default-')) {
-    goGenre(collection.title)
-    return
-  }
   goCollection(collection)
 }
 
-/** 播放“最近加入”当前可见列表（按风格过滤后的结果）整体入队 */
-function playAllRecent() {
-  if (visibleRecent.value.length) playQueue(visibleRecent.value)
-}
 
-/** 播放全部喜欢的音乐（「我的」页横幅卡播放按钮） */
-function playAllFavorites() {
-  if (favoriteTracks.value.length) playQueue(favoriteTracks.value)
-}
+
 
 /**
  * 进入精选专题详情
@@ -626,13 +568,7 @@ function goCollection(collection: ApiCollectionSummary) {
   uni.navigateTo({ url: `/pages/catalog/collection?id=${collection.id}` })
 }
 
-/**
- * 进入某风格的曲目列表页（genre 与导航栏标题均通过 query 透传）
- * @param genre 风格名
- */
-function goGenre(genre: string) {
-  uni.navigateTo({ url: `/pages/catalog/tracks?genre=${encodeURIComponent(genre)}&title=${encodeURIComponent(genre)}` })
-}
+
 
 /** 进入歌曲需求池；功能开关关闭时 toast 拦截 */
 function goRequests() {
@@ -718,308 +654,109 @@ function coverOf(collection: ApiCollectionSummary) {
       <!-- 顶部品牌栏：Logo + 消息铃铛（未读角标）+ 头像（点击滑出个人抽屉） -->
       <view class="topbar">
         <view class="brand-lockup">
-          <view class="brand-mark"><AudioLines :size="19" :stroke-width="2.7" /></view>
-          <text class="brand-name">shine.</text>
+          <text class="brand-name">shine<text class="brand-dot">.</text></text>
         </view>
         <view class="topbar-actions">
-          <view class="bell-wrap" @tap="onBellTap">
+          <button class="bell-wrap" :aria-label="$t('nav.notifications')" @tap="onBellTap">
             <Bell :size="19" />
             <text v-if="unreadCount > 0" class="bell-badge">{{ unreadLabel }}</text>
-          </view>
-          <view class="avatar" @tap="onAvatarTap">{{ avatarLetter }}</view>
+          </button>
+          <button class="avatar" :aria-label="$t('homePage.settings')" @tap="onAvatarTap">{{ avatarLetter }}</button>
         </view>
       </view>
 
-      <!-- 问候标题 + 今日灵感卡（横屏下两者并排，避免卡片被横向拉伸出大片留白） -->
-      <view class="hero-row">
-        <view class="page-heading">
-          <view>
-            <text class="eyebrow">SHINE MUSIC</text>
-            <text class="greeting">{{ greetingText }}</text>
-            <text class="greeting-sub">{{ $t(timeGreeting.toneKey) }}</text>
-          </view>
-        </view>
-
-        <!-- 今日灵感卡片：时间驱动 + 氛围标签 + 主打曲目 + 播放按钮 + 更多入口 -->
-        <view v-if="activeTab === '为你'" class="inspiration-card" @tap="goDaily">
-        <view class="inspiration-left">
-          <view class="inspiration-badge">
-            <Sparkles :size="13" />
-            <text>{{ $t(moodTag.timeKey) }} · {{ $t(moodTag.moodKey) }}</text>
-          </view>
-          <text class="inspiration-title">{{ $t('homePage.inspirationTitle') }}</text>
-          <view v-if="inspirationTrack" class="inspiration-track">
-            <text class="inspiration-name">{{ inspirationTrack.title }}</text>
-            <text class="inspiration-artist">{{ inspirationTrack.artist }}</text>
-          </view>
-          <text v-else class="inspiration-empty">{{ $t('homePage.picking') }}</text>
-          <view class="inspiration-actions">
-            <view class="inspiration-play" @tap.stop="playInspiration">
-              <Play :size="16" fill="currentColor" /><text>{{ $t('homePage.play') }}</text>
-            </view>
-            <view class="inspiration-more">
-              <text>{{ $t('homePage.more') }}</text><ChevronRight :size="14" />
-            </view>
-          </view>
-        </view>
-        <view class="inspiration-right">
-          <view v-if="inspirationTrack?.cover" class="inspiration-cover">
-            <CoverArt :src="inspirationTrack.cover" :rounded="26" :icon-size="46" />
-          </view>
-          <view v-else class="inspiration-cover inspiration-cover-empty">
-            <view class="inspiration-cover-pattern"></view>
-            <Music2 :size="52" :stroke-width="1.6" />
-            <text class="inspiration-cover-hint">♪</text>
-          </view>
-          <view v-if="dailyPreview.length > 1" class="inspiration-stack">
-            <CoverArt :src="dailyPreview[1].cover" :rounded="16" :icon-size="22" />
-          </view>
-          <view v-if="dailyPreview.length > 2" class="inspiration-stack-2">
-            <CoverArt :src="dailyPreview[2].cover" :rounded="14" :icon-size="18" />
-          </view>
-        </view>
-        </view>
+      <view v-if="activeTab !== tabs[3]" class="page-heading">
+        <text class="eyebrow">{{ $t(isHome ? 'homePage.recommendEyebrow' : activeTab === '发现' ? 'homePage.discoverEyebrow' : 'homePage.libraryEyebrow') }}</text>
+        <text class="greeting">{{ $t(isHome ? 'homePage.recommendHeading' : activeTab === '发现' ? 'homePage.discoverHeading' : 'homePage.publicLibraryTitle') }}</text>
       </view>
-
-      <!-- 搜索入口：点击/聚焦切到“发现”tab -->
-      <view class="search-box" @tap="goSearch">
-        <Search :size="19" :stroke-width="2" />
-        <input v-model="query" confirm-type="search" :placeholder="$t('homePage.searchPlaceholder')" @focus="goSearch" />
+      <view v-if="isHome" class="recommend-content">
+        <view v-if="homeLoading && !displayCollections.length" class="inline-error" role="status">{{ $t('homePage.loading') }}</view>
+        <button v-else-if="loadError" class="state-retry" @tap="retryHome">{{ $t('app.error') }} · {{ $t('app.retry') }}</button>
+        <view v-else-if="!displayCollections.length" class="recommend-empty">{{ $t('homePage.collectionsEmpty') }}</view>
+        <button v-if="displayCollections[0]" class="editorial-hero" @tap="tapCollection(displayCollections[0])">
+          <view class="hero-art"><CoverArt :src="coverOf(displayCollections[0])" :seed="displayCollections[0].title" :rounded="12" :icon-size="72" /></view>
+          <view class="hero-shade" />
+          <text class="hero-badge">{{ $t('homePage.leadCollection') }}</text>
+          <view class="hero-copy"><text class="hero-title">{{ displayCollections[0].title }}</text><text v-if="displayCollections[0].description" class="hero-description">{{ displayCollections[0].description }}</text><text class="hero-meta">{{ $t('homePage.trackCount', { count: displayCollections[0].trackCount }) }}</text></view>
+          <view class="hero-arrow"><ChevronRight :size="22" /></view>
+        </button>
+        <view v-if="dailyLoading && !dailyTracks.length" class="inline-error" role="status">{{ $t('nav.recommendDaily') }} · {{ $t('homePage.loading') }}</view>
+        <button v-else-if="dailyError" class="state-retry" @tap="loadDaily">{{ $t('nav.recommendDaily') }} · {{ $t('app.retry') }}</button>
+        <button v-else-if="dailyTracks.length" class="daily-card" @tap="goDaily"><text class="calendar">{{ today }}</text><view class="daily-copy"><text class="daily-title">{{ $t('nav.recommendDaily') }}</text><text class="muted">{{ $t('homePage.dailyCaption') }} · {{ $t('homePage.trackCount', { count: dailyTracks.length }) }}</text></view><ChevronRight :size="18" /></button>
+        <view v-else class="inline-error">{{ $t('homePage.dailyEmpty') }}</view>
+        <view class="section-heading"><text class="section-title">{{ $t('homePage.collectionShelf') }}</text><button class="text-action" @tap="browsePublic">{{ $t('homePage.tabLibrary') }} ↗</button></view>
+        <view v-if="displayCollections.length > 1" class="collection-shelf">
+          <button v-for="collection in displayCollections.slice(1)" :key="collection.id" class="shelf-card" @tap="tapCollection(collection)"><view class="shelf-cover"><CoverArt :src="coverOf(collection)" :seed="collection.title" :rounded="8" :icon-size="32" /></view><text class="shelf-title">{{ collection.title }}</text><text class="muted">{{ $t('homePage.trackCount', { count: collection.trackCount }) }}</text></button>
+        </view>
+        <view v-else class="inline-error">{{ $t('homePage.moreCollectionsEmpty') }}</view>
       </view>
-
-      <!-- 为你 -->
-      <template v-if="activeTab === '为你'">
-        <!-- 编辑精选（弱化大卡）：紧凑横卡，优先展示专题，无专题时播放精选曲目 -->
-        <view class="feature-section">
-          <view class="section-heading feature-title-row">
-            <view>
-              <text class="section-kicker">YOUR DAILY SPARK</text>
-              <text class="section-title">{{ $t('homePage.discoverForYou') }}</text>
-            </view>
-          </view>
-          <view v-if="effectiveFeatured" class="featured-card" @tap="tapHero">
-            <view class="featured-thumb">
-              <CoverArt :src="featuredCollection ? coverOf(featuredCollection) : featuredTrack?.cover ?? ''" :rounded="16" :icon-size="34" />
-            </view>
-            <view class="featured-info">
-              <view class="feature-label"><Sparkles :size="13" /><text>{{ $t('homePage.editorialPick') }}</text></view>
-              <text class="featured-name">{{ featuredCollection ? collectionTitle(featuredCollection) : featuredTrack?.title }}</text>
-              <text v-if="featuredCollection?.description" class="featured-caption">{{ collectionDesc(featuredCollection) }}</text>
-              <view class="feature-play"><Music2 :size="16" /><text>{{ featuredCollection ? $t('homePage.viewCollection') : $t('homePage.playNow') }}</text></view>
-            </view>
-            <view v-if="featuredCollection" class="feature-count">
-              <Music2 :size="13" /><text>{{ $t('homePage.trackCount', { count: featuredCollection.trackCount }) }}</text>
-            </view>
-          </view>
-          <view v-else class="recommend-empty">
-            <text class="recommend-empty-title">{{ $t('homePage.noTracksTitle') }}</text>
-            <text class="recommend-empty-sub">{{ $t('homePage.noTracksSub') }}</text>
-          </view>
-        </view>
-
-        <!-- 最近加入曲目：主内容区（含网络错误 / 空数据 / 列表三种状态） -->
-        <view class="recommend-section">
-          <view class="section-heading recommend-heading">
-            <view><text class="section-kicker">RECENTLY ADDED</text><text class="section-title">{{ $t('homePage.recentlyAdded') }}</text></view>
-            <view class="round-action" @tap="playAllRecent"><Music2 :size="17" /></view>
-          </view>
-          <view v-if="loadError" class="recommend-empty" @tap="retryHome">
-            <text class="recommend-empty-title">{{ $t('homePage.feedErrorTitle') }}</text>
-            <text class="recommend-empty-sub">{{ $t('homePage.feedErrorSub') }}</text>
-          </view>
-          <view v-else-if="!visibleRecent.length" class="recommend-empty">
-            <text class="recommend-empty-title">{{ $t('homePage.noTracksTitle') }}</text>
-            <text class="recommend-empty-sub">{{ $t('homePage.noTracksSub') }}</text>
-          </view>
-          <view v-else class="track-list">
-            <TrackRow
-              v-for="(track, index) in visibleRecent"
-              :key="track.id"
-              :track="track"
-              :index="index"
-              :queue="visibleRecent"
-            />
-          </view>
-        </view>
-
-        <!-- 精选专题横滑列表（次要区块，空库时不展示，避免假专题误导） -->
-        <view v-if="displayCollections.length" class="collection-section">
-          <view class="section-heading">
-            <view><text class="section-kicker">EDITORIAL PICKS</text><text class="section-title">{{ $t('home.collections') }}</text></view>
-          </view>
-          <scroll-view class="collection-scroll" scroll-x :show-scrollbar="false">
-            <view class="collection-list">
-              <view
-                v-for="collection in displayCollections"
-                :key="collection.id"
-                class="collection-card"
-                @tap="tapCollection(collection)"
-              >
-                <view class="collection-cover"><CoverArt :src="coverOf(collection)" :rounded="20" :icon-size="24" /></view>
-                <text class="collection-title">{{ collectionTitle(collection) }}</text>
-                <text class="collection-meta">{{ $t('homePage.trackCount', { count: collection.trackCount }) }}</text>
-              </view>
-            </view>
-          </scroll-view>
-        </view>
-
-        <!-- 风格 chips（次要区块）：选中后本地过滤上方“最近加入” -->
-        <view class="mood-section">
-          <view class="section-heading">
-            <view><text class="section-kicker">PICK YOUR GENRE</text><text class="section-title">{{ $t('homePage.byGenre') }}</text></view>
-          </view>
-          <scroll-view class="mood-scroll" scroll-x :show-scrollbar="false">
-            <view class="mood-list">
-              <view
-                v-for="(genre, index) in genreChips"
-                :key="genre"
-                class="mood-chip"
-                :class="[`mood-${index % 5}`, { selected: selectedGenre === genre }]"
-                @tap="selectedGenre = genre"
-              >
-                <text class="mood-dot"></text><text>{{ genreLabel(genre) }}</text>
-              </view>
-            </view>
-          </scroll-view>
-        </view>
-      </template>
-
-      <!-- 发现 -->
-      <template v-else-if="activeTab === '发现'">
-        <!-- 未输入关键词：精选歌单（首个大卡 + 其余横滑）+ 风格宫格浏览 -->
-        <view v-if="!query.trim()" class="discover-section">
-          <view v-if="collections.length" class="discover-block">
-            <view class="section-heading">
-              <view>
-                <text class="section-kicker">PLAYLISTS</text>
-                <text class="section-title">{{ $t('homePage.recommendedPlaylists') }}</text>
-              </view>
-            </view>
-
-            <!-- 首个歌单：大卡（歌单封面 + 推荐语 + 曲目数），点击进入歌单详情 -->
-            <view class="playlist-hero" @tap="goCollection(collections[0])">
-              <view class="playlist-hero-cover">
-                <CoverArt :src="coverOf(collections[0])" :rounded="18" :icon-size="26" />
-              </view>
-              <view class="playlist-hero-copy">
-                <text class="playlist-hero-title">{{ collections[0].title }}</text>
-                <text class="playlist-hero-desc">{{ collections[0].description || $t('homePage.editorialPick') }}</text>
-                <text class="playlist-hero-meta">{{ $t('homePage.trackCount', { count: collections[0].trackCount }) }}</text>
-              </view>
-            </view>
-
-            <!-- 其余歌单：横滑小卡 -->
-            <scroll-view v-if="collections.length > 1" class="collection-scroll" scroll-x :show-scrollbar="false">
-              <view class="collection-list">
-                <view
-                  v-for="collection in collections.slice(1)"
-                  :key="collection.id"
-                  class="collection-card"
-                  @tap="goCollection(collection)"
-                >
-                  <view class="collection-cover"><CoverArt :src="coverOf(collection)" :rounded="20" :icon-size="24" /></view>
-                  <text class="collection-title">{{ collection.title }}</text>
-                  <text class="collection-meta">{{ $t('homePage.trackCount', { count: collection.trackCount }) }}</text>
-                </view>
-              </view>
-            </scroll-view>
-          </view>
-
-          <view class="discover-block">
-            <view class="section-heading">
-              <view><text class="section-kicker">BROWSE GENRES</text><text class="section-title">{{ $t('homePage.browseGenres') }}</text></view>
-            </view>
-            <view class="genre-grid">
-              <view v-for="genre in genreChips.filter((item) => item !== '全部')" :key="genre" class="genre-chip" @tap="goGenre(genre)">
-                <text>{{ genreLabel(genre) }}</text>
-                <ChevronRight :size="15" />
-              </view>
-              <view v-if="genreChips.length === 1" class="inline-error">{{ $t('homePage.noGenres') }}</view>
-            </view>
-          </view>
-        </view>
-
-        <!-- 有关键词：防抖搜索结果，空结果时引导登录用户去歌曲需求池 -->
-        <view v-else class="recommend-section search-results">
-          <view class="section-heading recommend-heading">
-            <view>
-              <text class="section-kicker">SEARCH RESULTS</text>
-              <text class="section-title">{{ $t('homePage.searchResultsFor', { query: query.trim() }) }}</text>
-            </view>
-          </view>
-          <view v-if="searchPending" class="inline-error">{{ $t('homePage.searching') }}</view>
-          <view v-else-if="searched && !searchResults.length" class="no-results">
-            <text>{{ $t('homePage.noMatch') }}</text>
-            <view v-if="isAuthenticated" class="request-link" @tap="goRequests">
-              <Inbox :size="15" /><text>{{ $t('homePage.tellAdmins') }}</text>
-            </view>
-          </view>
-          <view v-else class="track-list">
-            <TrackRow
-              v-for="(track, index) in searchResults"
-              :key="track.id"
-              :track="track"
-              :index="index"
-              :queue="searchResults"
-            />
-          </view>
-        </view>
-      </template>
+      <ChartBrowser v-else-if="activeTab === '发现'" />
 
       <!-- 曲库：匿名态为公开曲库（可听歌），登录后为我的上传/引用曲目（含私有与公开） -->
       <template v-else-if="activeTab === '曲库'">
         <view class="library-wrap">
+          <view class="library-segments">
+            <button :class="{ selected: libraryScope === 'public' }" :aria-pressed="libraryScope === 'public'" @tap="selectLibraryScope('public')">{{ $t('homePage.publicTab') }}</button>
+            <button :class="{ selected: libraryScope === 'personal' }" :aria-pressed="libraryScope === 'personal'" @tap="selectLibraryScope('personal')">{{ $t('homePage.personalTab') }}</button>
+          </view>
           <!-- 未登录：温和登录提示 + 公开曲库列表（互动操作由各组件的 requireLogin 拦截） -->
-          <template v-if="!isAuthenticated">
-            <view class="public-hint">
+          <template v-if="libraryScope === 'public'">
+            <view v-if="!isAuthenticated" class="public-hint">
               <text class="public-hint-title">{{ $t('homePage.publicLibraryHint') }}</text>
-              <view class="public-hint-action" @tap="goLogin">
+              <button class="public-hint-action" @tap="goLogin">
                 <text>{{ $t('homePage.publicLibraryLoginAction') }}</text>
-              </view>
+              </button>
             </view>
+            <view class="search-box"><Search :size="19" /><input v-model="query" confirm-type="search" :placeholder="$t('homePage.searchPlaceholder')" :aria-label="$t('homePage.searchPlaceholder')" /></view>
+            <button class="favorite-filter" :class="{ selected: onlyFavorites }" :aria-pressed="onlyFavorites" @tap="selectFavorites"><Heart :size="16" />{{ $t('homePage.favoritesFilter') }}</button>
+            <view v-if="genresLoading" class="muted" role="status">{{ $t('homePage.loading') }}</view>
+            <button v-else-if="genresError" class="state-retry" @tap="loadGenreChips">{{ $t('homePage.genreLoadFailed') }} · {{ $t('app.retry') }}</button>
+            <scroll-view class="public-chips" scroll-x :show-scrollbar="false"><view class="public-chips-row"><button v-for="genre in genreChips" :key="genre" class="public-chip" :class="{ on: publicLibraryGenre === genre }" :aria-pressed="publicLibraryGenre === genre" @tap="selectPublicGenre(genre)">{{ genreLabel(genre) }}</button></view></scroll-view>
+            <template v-if="onlyFavorites">
+              <view v-if="favoritesLoading" class="inline-error" role="status">{{ $t('homePage.loading') }}</view>
+              <button v-else-if="favoritesError" class="state-retry" @tap="refreshFavorites">{{ $t('app.error') }} · {{ $t('app.retry') }}</button>
+              <view v-else-if="!visibleFavorites.length" class="inline-error">{{ $t('homePage.noMatch') }}</view>
+              <view v-else><TrackRow v-for="track in visibleFavorites" :key="track.id" :track="track" :queue="visibleFavorites" /></view>
+            </template>
+            <view v-else-if="query.trim()" class="search-results">
+              <text class="section-title">{{ $t('homePage.searchResultsFor', { query: query.trim() }) }}</text>
+              <view v-if="searchPending" class="inline-error">{{ $t('homePage.searching') }}</view>
+              <button v-else-if="searchError" class="state-retry" @tap="runSearch()">{{ $t('app.error') }} · {{ $t('app.retry') }}</button>
+              <view v-else-if="searched && !filteredSearch.length" class="no-results"><text>{{ $t('homePage.noMatch') }}</text><button v-if="isAuthenticated && capabilities.capabilities.songRequests" class="state-retry" @tap="goRequests">{{ $t('homePage.tellAdmins') }}</button></view>
+              <view v-else class="track-list"><TrackRow v-for="track in filteredSearch" :key="track.id" :track="track" :queue="filteredSearch" /></view>
+            </view>
+            <template v-else>
 
             <view class="section-heading public-heading">
               <view>
-                <text class="section-kicker">PUBLIC LIBRARY</text>
-                <text class="section-title">{{ $t('homePage.publicLibraryTitle') }}</text>
+                <text class="section-title">{{ $t(publicLibrarySort === 'recent' ? 'homePage.recentlyAdded' : 'homePage.publicLibraryTitle') }}</text>
               </view>
               <text class="library-count">{{ $t('homePage.publicLibraryTotal', { count: publicLibraryTotal }) }}</text>
             </view>
 
-            <!-- 风格筛选 -->
-            <scroll-view class="public-chips" scroll-x :show-scrollbar="false">
-              <view class="public-chips-row">
-                <view
-                  v-for="genre in genreChips"
-                  :key="genre"
-                  class="public-chip"
-                  :class="{ on: publicLibraryGenre === genre }"
-                  @tap="selectPublicGenre(genre)"
-                >
-                  <text>{{ genreLabel(genre) }}</text>
-                </view>
-              </view>
-            </scroll-view>
+            <text v-if="!genresLoading && !genresError && !genres.length" class="muted">{{ $t('homePage.genresEmpty') }}</text>
 
             <!-- 排序切换 -->
             <view class="public-sort">
-              <view
+              <button
                 class="public-sort-item"
                 :class="{ on: publicLibrarySort === 'recent' }"
                 @tap="selectPublicSort('recent')"
               >
                 <text>{{ $t('homePage.publicLibrarySortRecent') }}</text>
-              </view>
-              <view
+              </button>
+              <button
                 class="public-sort-item"
                 :class="{ on: publicLibrarySort === 'title' }"
                 @tap="selectPublicSort('title')"
               >
                 <text>{{ $t('homePage.publicLibrarySortTitle') }}</text>
-              </view>
+              </button>
             </view>
+            <button v-if="publicLibraryItems.length" class="play-list" :disabled="publicLibraryLoading" @tap="playQueue(publicLibraryItems)"><Play :size="16" />{{ $t('catalogPage.playAll') }}</button>
 
             <view v-if="publicLibraryLoading && !publicLibraryItems.length" class="inline-error">{{ $t('homePage.loading') }}</view>
+            <button v-else-if="publicLibraryError" class="state-retry" @tap="loadPublicLibrary(true)">{{ $t('homePage.publicLibraryLoadFailed') }} · {{ $t('app.retry') }}</button>
             <view v-else-if="!publicLibraryItems.length" class="empty-state">
               <view class="empty-icon"><Library :size="23" /></view>
               <text class="empty-title">{{ $t('homePage.publicLibraryEmpty') }}</text>
@@ -1036,14 +773,16 @@ function coverOf(collection: ApiCollectionSummary) {
               </view>
               <view v-if="publicLibraryLoading" class="public-more">{{ $t('homePage.loading') }}</view>
               <view v-else-if="publicLibraryFinished" class="public-more">{{ $t('homePage.publicLibraryFinished') }}</view>
+              <button v-else class="state-retry" @tap="loadPublicLibrary()">{{ $t('homePage.more') }}</button>
+            </template>
             </template>
           </template>
 
           <!-- 已登录：标题行（上传入口受开关控制）/ 加载 / 空态 / 列表 -->
+          <view v-else-if="!isAuthenticated" class="empty-state"><text class="empty-title">{{ $t('homePage.libraryLoginTitle') }}</text><text class="empty-copy">{{ $t('homePage.libraryLoginCopy') }}</text><button class="state-retry" @tap="goLogin">{{ $t('homePage.loginOrRegister') }}</button></view>
           <template v-else>
             <view class="section-heading">
               <view>
-                <text class="section-kicker">MY LIBRARY</text>
                 <text class="section-title">{{ $t('homePage.myLibraryTitle') }}</text>
               </view>
               <view v-if="canUserUpload" class="create-playlist" @tap="goUpload">
@@ -1053,6 +792,7 @@ function coverOf(collection: ApiCollectionSummary) {
             </view>
 
             <view v-if="myLibraryLoading && !myLibraryItems.length" class="inline-error">{{ $t('homePage.loading') }}</view>
+            <button v-else-if="personalError" class="state-retry" @tap="refreshPersonal">{{ $t('app.error') }} · {{ $t('app.retry') }}</button>
             <view v-else-if="!myLibraryItems.length" class="empty-state">
               <view class="empty-icon"><Library :size="23" /></view>
               <text class="empty-title">{{ $t('homePage.libraryEmptyTitle') }}</text>
@@ -1097,111 +837,53 @@ function coverOf(collection: ApiCollectionSummary) {
       <!-- 我的（内容为中心的个人页：资料 / 快捷入口 / 歌单宫格 / 喜欢的音乐横幅） -->
       <template v-else>
         <view class="library-wrap">
-          <!-- 已登录：资料卡（点击进个人资料编辑页，账号设置类入口统一收进头像抽屉） -->
           <template v-if="isAuthenticated">
-            <view class="profile-card" @tap="goPage('/pages/profile/index')">
-              <view class="profile-avatar">{{ avatarLetter }}</view>
-              <view class="profile-copy">
-                <text class="profile-name">{{ currentUser?.displayName }}</text>
-                <text class="profile-email">{{ currentUser?.email }}</text>
-              </view>
-              <text class="profile-edit">{{ $t('homePage.editProfile') }}</text>
-              <ChevronRight :size="18" class="profile-chevron" />
-            </view>
 
-            <!-- 快捷入口：圆形图标行（消息带未读角标） -->
+            <button class="profile-card" @tap="goPage('/pages/profile/index')"><text class="profile-avatar">{{ avatarLetter }}</text><view class="profile-copy"><text class="profile-name">{{ currentUser?.displayName }}</text><text class="profile-email">{{ $t('homePage.profileCaption') }}</text></view><ChevronRight :size="20" /></button>
+            <button class="favorites-banner" @tap="goPage('/pages/library/favorites')"><view class="favorite-icon"><Heart :size="26" fill="currentColor" /></view><view class="favorites-copy"><text class="favorites-name">{{ $t('homePage.favoriteMusic') }}</text><text class="favorites-meta">{{ favoritesLoading ? $t('homePage.loading') : favoritesError ? $t('app.error') : $t('homePage.trackCount', { count: favoritesTotal }) }}</text></view><ChevronRight :size="18" /></button>
+            <button v-if="favoritesError" class="state-retry" @tap="refreshFavorites">{{ $t('app.retry') }}</button>
             <view class="quick-circles">
-              <view class="quick-circle" @tap="goPage('/pages/notifications/index')">
-                <view class="qc-icon qc-notify"><Bell :size="20" /></view>
-                <text v-if="unreadCount > 0" class="qc-badge">{{ unreadLabel }}</text>
-                <text class="qc-label">{{ $t('nav.notifications') }}</text>
-              </view>
-              <view class="quick-circle" @tap="goPage('/pages/library/favorites')">
-                <view class="qc-icon qc-favorite"><Heart :size="20" /></view>
-                <text class="qc-label">{{ $t('nav.favorites') }}</text>
-              </view>
-              <view class="quick-circle" @tap="goPage('/pages/history/index')">
-                <view class="qc-icon qc-history"><History :size="20" /></view>
-                <text class="qc-label">{{ $t('nav.playHistory') }}</text>
-              </view>
-              <view class="quick-circle" @tap="goPage('/pages/social/follow')">
-                <view class="qc-icon qc-follow"><UserRound :size="20" /></view>
-                <text class="qc-label">{{ $t('nav.followers') }}</text>
-              </view>
+              <button class="quick-circle" @tap="goPage('/pages/history/index')"><History :size="18" /><text>{{ $t('nav.playHistory') }}</text></button>
+              <button v-if="canUserUpload" class="quick-circle" @tap="goUpload"><Upload :size="18" /><text>{{ $t('homePage.upload') }}</text></button>
+              <button class="quick-circle" @tap="onAvatarTap"><UserRound :size="18" /><text>{{ $t('homePage.settings') }}</text></button>
             </view>
 
             <!-- 我的歌单：2 列封面宫格（宽视口 3 列） -->
             <view v-if="capabilities.capabilities.userCollections" class="library-block">
               <view class="section-heading">
-                <view><text class="section-kicker">MY PLAYLISTS</text><text class="section-title">{{ $t('homePage.myPlaylists') }}</text></view>
+                <view><text class="section-title">{{ $t('homePage.myPlaylists') }}</text></view>
                 <view class="playlist-heading-actions">
-                  <view class="create-playlist" @tap="goPlaylistImport"><Download :size="17" /><text>{{ $t('homePage.import') }}</text></view>
-                  <view class="create-playlist" @tap="openCreatePlaylist"><Plus :size="17" /><text>{{ $t('homePage.create') }}</text></view>
+                  <button class="create-playlist" @tap="goPlaylistImport"><Download :size="17" /><text>{{ $t('homePage.import') }}</text></button>
+                  <button class="create-playlist" @tap="openCreatePlaylist"><Plus :size="17" /><text>{{ $t('homePage.create') }}</text></button>
                 </view>
               </view>
-              <view v-if="!myPlaylists.length" class="inline-error">{{ $t('homePage.noPlaylists') }}</view>
+              <view v-if="libraryLoading" class="inline-error">{{ $t('homePage.loading') }}</view>
+              <view v-else-if="libraryError" class="inline-error"><button class="state-retry" @tap="loadLibrary">{{ $t('homePage.feedErrorTitle') }} · {{ $t('app.retry') }}</button></view>
+              <view v-else-if="!myPlaylists.length" class="inline-error">{{ $t('homePage.noPlaylists') }}</view>
               <view v-else class="playlist-grid">
-                <view
+                <button
                   v-for="playlist in myPlaylists"
                   :key="playlist.id"
                   class="playlist-tile"
                   @tap="goPlaylist(playlist)"
                 >
                   <view class="playlist-tile-cover">
-                    <image v-if="playlist.artworkUrl" class="playlist-thumbnail" :src="resolveUrl(playlist.artworkUrl)" mode="aspectFill" />
-                    <ListMusic v-else :size="28" />
+                    <CoverArt :src="playlist.artworkUrl ? resolveUrl(playlist.artworkUrl) : ''" :seed="playlist.name" :rounded="8" :icon-size="26" />
                   </view>
                   <text class="playlist-tile-name">{{ playlist.name }}</text>
                   <text class="playlist-tile-meta">{{ $t('homePage.trackCount', { count: playlist.trackCount }) }}</text>
-                </view>
+                </button>
               </view>
             </view>
             <view v-else class="inline-error">{{ $t('homePage.collectionsUnavailable') }}</view>
-
-            <!-- 喜欢的音乐：横幅大卡（封面堆叠 + 播放全部）+ 曲目列表 -->
-            <view class="library-block">
-              <view class="section-heading">
-                <view><text class="section-kicker">YOUR COLLECTION</text><text class="section-title">{{ $t('homePage.favoriteMusic') }}</text></view>
-                <text class="library-count">{{ $t('homePage.trackCount', { count: favoriteTracks.length }) }}</text>
-              </view>
-              <view v-if="!favoriteTracks.length" class="empty-state">
-                <view class="empty-icon"><Heart :size="23" /></view>
-                <text class="empty-title">{{ $t('homePage.favEmptyTitle') }}</text>
-                <text class="empty-copy">{{ $t('homePage.favEmptyCopy') }}</text>
-              </view>
-              <template v-else>
-                <view class="favorites-banner">
-                  <view class="favorites-covers">
-                    <CoverArt
-                      v-for="(track, index) in favoriteTracks.slice(0, 3)"
-                      :key="track.id"
-                      class="favorites-cover"
-                      :class="[`fav-cover-${index}`]"
-                      :src="track.cover"
-                      :seed="track.title"
-                      :rounded="14"
-                      :icon-size="22"
-                    />
-                  </view>
-                  <view class="favorites-copy">
-                    <text class="favorites-name">{{ $t('homePage.favoriteMusic') }}</text>
-                    <text class="favorites-meta">{{ $t('homePage.trackCount', { count: favoriteTracks.length }) }}</text>
-                  </view>
-                  <view class="favorites-play" @tap.stop="playAllFavorites">
-                    <Play :size="15" fill="currentColor" /><text>{{ $t('homePage.playAllFavorites') }}</text>
-                  </view>
-                </view>
-                <view class="track-list">
-                  <TrackRow
-                    v-for="(track, index) in favoriteTracks"
-                    :key="track.id"
-                    :track="track"
-                    :index="index"
-                    :queue="favoriteTracks"
-                  />
-                </view>
-              </template>
+            <view v-if="capabilities.capabilities.editorialCollections" class="library-block">
+              <view class="section-heading"><text class="section-title">{{ $t('homePage.savedCollections') }}</text><text v-if="!savedCollectionsLoading && !savedCollectionsError" class="muted">{{ savedCollectionsTotal }}</text></view>
+              <view v-if="savedCollectionsLoading" class="inline-error" role="status">{{ $t('homePage.loading') }}</view>
+              <button v-else-if="savedCollectionsError" class="state-retry" @tap="refreshSaved">{{ $t('app.error') }} · {{ $t('app.retry') }}</button>
+              <view v-else-if="!savedCollections.length" class="inline-error">{{ $t('homePage.savedEmpty') }}</view>
+              <view v-for="collection in savedCollections" :key="collection.id" class="saved-row"><button class="saved-link" @tap="goCollection(collection)"><view class="saved-cover"><CoverArt :src="coverOf(collection)" :seed="collection.title" :rounded="8" :icon-size="24" /></view><view class="saved-copy"><text class="shelf-title">{{ collection.title }}</text><text class="muted">{{ $t('homePage.trackCount', { count: collection.trackCount }) }} · {{ $t('catalogPage.editorialPicks') }}</text></view><ChevronRight :size="16" /></button><button class="unsave" :disabled="savingCollectionIds.size > 0 || savedCollectionsLoading" :aria-label="$t('homePage.unsaveCollection') + ' ' + collection.title" @tap="unsaveCollection(collection)"><Heart :size="18" fill="currentColor" /></button></view>
             </view>
+
           </template>
 
           <!-- 未登录：登录引导卡（本地缓存的喜欢的音乐仍可展示） -->
@@ -1210,25 +892,13 @@ function coverOf(collection: ApiCollectionSummary) {
               <view class="login-icon"><AudioLines :size="22" /></view>
               <text class="login-title">{{ $t('homePage.loginTitle') }}</text>
               <text class="login-copy">{{ $t('homePage.loginSyncCopy') }}</text>
-              <view class="login-button" @tap="goLogin"><text>{{ $t('homePage.loginOrRegister') }}</text></view>
-            </view>
-            <view v-if="favoriteTracks.length" class="library-block">
-              <view class="section-heading">
-                <view><text class="section-kicker">YOUR COLLECTION</text><text class="section-title">{{ $t('homePage.favoriteMusic') }}</text></view>
-              </view>
-              <TrackRow
-                v-for="(track, index) in favoriteTracks"
-                :key="track.id"
-                :track="track"
-                :index="index"
-                :queue="favoriteTracks"
-              />
+              <button class="login-button" @tap="goLogin"><text>{{ $t('homePage.loginOrRegister') }}</text></button>
             </view>
           </template>
         </view>
       </template>
 
-      <view class="bottom-spacer"></view>
+      <view class="bottom-spacer" :class="{ 'has-player': playerState.currentTrack }"></view>
     </scroll-view>
 
     <!-- 全局迷你播放器（有当前曲目时内部自行显示） -->
@@ -1239,49 +909,13 @@ function coverOf(collection: ApiCollectionSummary) {
 
     <!-- 底部自定义 tabbar：为你 / 发现 / [正在播放黑胶凸起] / 曲库 / 我的 -->
     <view class="tabbar">
-      <view
-        v-for="tab in tabs.slice(0, 2)"
-        :key="tab"
-        class="tab-item"
-        :class="{ active: activeTab === tab }"
-        @tap="setTab(tab)"
-      >
-        <view class="tab-dot"></view>
+      <button v-for="tab in tabs" :key="tab" class="tab-item" :class="{ active: activeTab === tab }" :aria-current="activeTab === tab ? 'page' : undefined" @tap="setTab(tab)">
         <Sparkles v-if="tab === '为你'" :size="20" />
-        <Compass v-else :size="20" />
-        <text>{{ tabLabel(tab) }}</text>
-      </view>
-
-      <!-- 中间凸起黑胶：有曲目时旋转展示封面，无曲目显示音符占位；点击展开全屏播放器 -->
-      <view class="tab-disc" :class="{ idle: !playerState.currentTrack }" @tap="openNowPlaying">
-        <view class="disc-spin" :class="{ playing: playerState.isPlaying }">
-          <CoverArt
-            v-if="playerState.currentTrack?.cover"
-            :src="playerState.currentTrack.cover"
-            :seed="playerState.currentTrack.title"
-            :rounded="0"
-            :icon-size="22"
-          />
-          <view v-else class="disc-empty"><Music2 :size="20" /></view>
-        </view>
-        <view class="disc-state">
-          <Pause v-if="playerState.isPlaying" :size="10" fill="currentColor" />
-          <Play v-else :size="10" fill="currentColor" />
-        </view>
-      </view>
-
-      <view
-        v-for="tab in tabs.slice(2)"
-        :key="tab"
-        class="tab-item"
-        :class="{ active: activeTab === tab }"
-        @tap="setTab(tab)"
-      >
-        <view class="tab-dot"></view>
-        <Library v-if="tab === '曲库'" :size="20" />
+        <Compass v-else-if="tab === tabs[1]" :size="20" />
+        <Library v-else-if="tab === '曲库'" :size="20" />
         <UserRound v-else :size="20" />
         <text>{{ tabLabel(tab) }}</text>
-      </view>
+      </button>
     </view>
 
     <!-- 新建歌单弹层（受控 Dialog，替代 uni.showModal editable） -->
@@ -1299,248 +933,131 @@ function coverOf(collection: ApiCollectionSummary) {
           @confirm="confirmCreatePlaylist"
         />
         <view class="sheet-actions">
-          <view class="sheet-btn ghost" @tap="closeCreatePlaylist">{{ $t('homePage.cancel') }}</view>
-          <view class="sheet-btn primary" :class="{ disabled: creatingPlaylist }" @tap="confirmCreatePlaylist">
+          <button class="sheet-btn ghost" :disabled="creatingPlaylist" @tap="closeCreatePlaylist">{{ $t('homePage.cancel') }}</button>
+          <button class="sheet-btn primary" :disabled="creatingPlaylist || !newPlaylistName.trim()" @tap="confirmCreatePlaylist">
             {{ creatingPlaylist ? $t('homePage.creating') : $t('homePage.createBtn') }}
-          </view>
+          </button>
         </view>
       </view>
     </view>
   </view>
 </template>
 
-<style lang="scss">
-/* 首页（方向 B · 玻璃质感）：完整页面背景（自定义主题下为壁纸）+ 彩色光晕 + 毛玻璃卡片 */
-.app-shell { position: relative; width: 100%; min-height: 100vh; background: var(--sm-page-bg); overflow: hidden; }
-.page-scroll { position: relative; z-index: 1; height: 100vh; }
-.topbar { display: flex; align-items: center; justify-content: space-between; padding: calc(env(safe-area-inset-top) + 30rpx) 44rpx 0; }
-.brand-lockup { display: flex; align-items: center; gap: 11rpx; }
-.brand-mark { display: grid; place-items: center; width: 40rpx; height: 40rpx; border-radius: 13rpx; background: var(--sm-surface-3); border: 1rpx solid var(--sm-border-strong); color: var(--sm-accent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
-.brand-name { font-family: 'Manrope', sans-serif; font-size: 36rpx; line-height: 1; font-weight: 800; color: var(--sm-text); }
-.brand-name span { color: var(--sm-accent); }
-.topbar-actions { display: flex; align-items: center; gap: 16rpx; }
-/* 顶栏消息铃铛：未读角标贴右上角 */
-.bell-wrap { position: relative; display: grid; place-items: center; width: 68rpx; height: 68rpx; border: 1rpx solid var(--sm-border-strong); border-radius: 50%; background: var(--sm-surface-3); color: var(--sm-text); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
-.bell-badge { position: absolute; top: -6rpx; right: -8rpx; min-width: 30rpx; padding: 0 8rpx; border: 2rpx solid var(--sm-bg); border-radius: 20rpx; background: var(--sm-danger); color: #ffffff; font-size: 15rpx; font-weight: 800; line-height: 28rpx; text-align: center; box-sizing: border-box; }
-.avatar { display: grid; place-items: center; width: 68rpx; height: 68rpx; border: 1rpx solid var(--sm-border-strong); border-radius: 50%; background: var(--sm-surface-3); color: var(--sm-text); font-family: 'DM Sans', sans-serif; font-size: 25rpx; font-weight: 700; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); box-shadow: 0 4rpx 14rpx var(--sm-art-shadow); }
-.hero-row { display: block; }
-.page-heading { display: flex; align-items: end; padding: 50rpx 44rpx 0; }
-.eyebrow, .section-kicker { display: block; color: var(--sm-accent); font-family: 'DM Sans', sans-serif; font-size: 17rpx; font-weight: 700; letter-spacing: 1.2rpx; }
-.greeting { display: block; margin-top: 11rpx; font-size: 42rpx; line-height: 1.25; font-weight: 700; color: var(--sm-text); }
-.greeting-emphasis { color: var(--sm-accent); }
-.greeting-sub { display: block; margin-top: 8rpx; color: var(--sm-text-2); font-size: 18rpx; }
-
-/* 今日灵感卡片（Hero 大卡） */
-.inspiration-card { display: flex; align-items: stretch; gap: 30rpx; margin: 40rpx 40rpx 0; padding: 36rpx 34rpx 36rpx 38rpx; border: 1rpx solid var(--sm-border-strong); border-radius: 34rpx; background: linear-gradient(135deg, var(--sm-cover-bg), rgba(0, 0, 0, .12)); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); box-shadow: 0 26rpx 60rpx var(--sm-art-shadow); transition: transform .2s ease; }
-.inspiration-card:active { transform: scale(.985); }
-.inspiration-left { display: flex; flex: 1; min-width: 0; flex-direction: column; justify-content: space-between; gap: 16rpx; }
-.inspiration-badge { display: inline-flex; align-items: center; gap: 6rpx; width: fit-content; padding: 6rpx 16rpx; border-radius: 30rpx; background: var(--sm-accent-soft); color: var(--sm-accent); font-size: 16rpx; font-weight: 700; letter-spacing: 1rpx; }
-.inspiration-title { color: var(--sm-text); font-size: 30rpx; font-weight: 800; letter-spacing: .5rpx; }
-.inspiration-track { display: flex; flex-direction: column; gap: 6rpx; }
-.inspiration-name { overflow: hidden; color: var(--sm-text); font-size: 34rpx; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
-.inspiration-artist { overflow: hidden; color: var(--sm-text-2); font-size: 19rpx; text-overflow: ellipsis; white-space: nowrap; }
-.inspiration-empty { color: var(--sm-text-3); font-size: 18rpx; }
-.inspiration-actions { display: flex; align-items: center; gap: 18rpx; margin-top: 8rpx; }
-.inspiration-play { display: flex; align-items: center; gap: 9rpx; padding: 14rpx 30rpx; border-radius: 40rpx; background: var(--sm-hero-ink-bg); color: var(--sm-hero-ink); font-size: 19rpx; font-weight: 700; box-shadow: 0 8rpx 24rpx var(--sm-accent-glow); }
-.inspiration-more { display: inline-flex; align-items: center; gap: 4rpx; color: var(--sm-text-2); font-size: 17rpx; }
-.inspiration-right { position: relative; flex: none; width: 244rpx; height: 244rpx; }
-.inspiration-cover { position: relative; width: 100%; height: 100%; border-radius: 28rpx; border: 2rpx solid var(--sm-border-strong); box-shadow: 0 18rpx 44rpx var(--sm-art-shadow); overflow: hidden; background: var(--sm-cover-bg); }
-.inspiration-cover .cover-art { width: 100%; height: 100%; border-radius: inherit; border: none; box-shadow: none; }
-.inspiration-cover-empty { display: grid; place-items: center; background: linear-gradient(135deg, var(--sm-accent) 0%, var(--sm-accent-2) 100%); color: rgba(255, 255, 255, .92); }
-.inspiration-cover-pattern { position: absolute; inset: 0; background: radial-gradient(circle at 28% 24%, rgba(255, 255, 255, .28) 0%, transparent 55%), radial-gradient(circle at 78% 82%, rgba(255, 255, 255, .18) 0%, transparent 50%), repeating-linear-gradient(45deg, rgba(255, 255, 255, .05) 0 8rpx, transparent 8rpx 16rpx); }
-.inspiration-cover-hint { position: absolute; right: 18rpx; bottom: 14rpx; font-size: 44rpx; font-weight: 700; color: rgba(255, 255, 255, .55); font-family: Georgia, serif; }
-.inspiration-stack { position: absolute; top: -18rpx; right: -38rpx; width: 96rpx; height: 96rpx; border-radius: 18rpx; border: 2rpx solid var(--sm-border-strong); box-shadow: 0 8rpx 22rpx var(--sm-art-shadow); overflow: hidden; background: var(--sm-surface-3); transform: rotate(8deg); }
-.inspiration-stack-2 { position: absolute; bottom: -20rpx; left: -36rpx; width: 74rpx; height: 74rpx; border-radius: 16rpx; border: 2rpx solid var(--sm-border-strong); box-shadow: 0 6rpx 18rpx var(--sm-art-shadow); overflow: hidden; background: var(--sm-surface-3); transform: rotate(-10deg); }
-.inspiration-stack .cover-art, .inspiration-stack-2 .cover-art { width: 100%; height: 100%; border-radius: inherit; border: none; box-shadow: none; }
-.search-box { display: flex; align-items: center; gap: 18rpx; height: 90rpx; margin: 44rpx 40rpx 0; padding: 0 25rpx; border: 1rpx solid var(--sm-border); border-radius: 23rpx; background: var(--sm-surface); color: var(--sm-text-2); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
-.search-box input { flex: 1; min-width: 0; height: 100%; color: var(--sm-text); font-size: 23rpx; }
-.search-box input::placeholder { color: var(--sm-text-3); }
-.feature-section, .mood-section, .recommend-section, .collection-section, .library-wrap, .discover-section { padding: 0 40rpx; }
-.feature-section { margin-top: 64rpx; }
-.collection-section, .discover-block { margin-top: 72rpx; }
-.section-heading { display: flex; align-items: end; justify-content: space-between; }
-.section-title { display: block; margin-top: 9rpx; color: var(--sm-text); font-size: 32rpx; line-height: 1.2; font-weight: 700; }
-.round-action { display: grid; place-items: center; width: 61rpx; height: 61rpx; border: 1rpx solid var(--sm-border); border-radius: 50%; background: var(--sm-surface-3); color: var(--sm-text); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
-/* 编辑精选（弱化大卡）：紧凑横卡 */
-.featured-card { display: flex; align-items: center; gap: 24rpx; margin-top: 20rpx; padding: 22rpx 24rpx; border: 1rpx solid var(--sm-border); border-radius: 22rpx; background: var(--sm-surface); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); box-shadow: 0 8rpx 22rpx var(--sm-art-shadow); }
-.featured-thumb { flex: none; width: 156rpx; height: 156rpx; border-radius: 16rpx; overflow: hidden; background: var(--sm-surface-3); }
-.featured-thumb .cover-art { width: 100%; height: 100%; border-radius: inherit; border: none; box-shadow: none; }
-.featured-info { display: flex; flex: 1; min-width: 0; flex-direction: column; align-items: flex-start; gap: 10rpx; }
-.feature-label { display: flex; align-items: center; gap: 8rpx; padding: 5rpx 13rpx; border-radius: 30rpx; background: var(--sm-accent-soft); color: var(--sm-accent); font-size: 15rpx; font-weight: 700; letter-spacing: 1rpx; }
-.featured-name { overflow: hidden; color: var(--sm-text); font-size: 27rpx; line-height: 1.25; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
-.featured-caption { overflow: hidden; color: var(--sm-text-2); font-size: 17rpx; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.feature-play { display: flex; align-items: center; gap: 9rpx; margin-top: 4rpx; padding: 11rpx 20rpx; border-radius: 40rpx; background: var(--sm-hero-ink-bg); color: var(--sm-hero-ink); font-size: 17rpx; font-weight: 700; }
-.feature-count { flex: none; display: flex; align-items: center; gap: 7rpx; padding: 6rpx 14rpx; border-radius: 30rpx; background: var(--sm-surface-3); color: var(--sm-text-2); font-size: 16rpx; }
-/* 最近加入 · 友好空/错状态（不显示生硬错误，引导用户去逛精选） */
-.recommend-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 8rpx; padding: 30rpx 32rpx; border: 1rpx solid var(--sm-border); border-radius: 22rpx; background: var(--sm-surface); }
-.recommend-empty-title { color: var(--sm-text); font-size: 26rpx; font-weight: 700; }
-.recommend-empty-sub { color: var(--sm-text-2); font-size: 18rpx; }
-.collection-scroll { width: calc(100% + 40rpx); margin-top: 28rpx; }
-.collection-list { display: flex; gap: 18rpx; padding-right: 40rpx; }
-.collection-card { width: 220rpx; flex: none; }
-.collection-cover { width: 220rpx; height: 220rpx; border-radius: 20rpx; overflow: hidden; background: var(--sm-surface-3); border: 1rpx solid var(--sm-border); }
-.collection-title { display: block; overflow: hidden; margin-top: 14rpx; color: var(--sm-text); font-size: 21rpx; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
-.collection-meta { display: block; margin-top: 5rpx; color: var(--sm-text-2); font-size: 16rpx; }
-/* 精选歌单大卡（发现页首个歌单）：封面 + 推荐语 + 曲目数 */
-.playlist-hero { display: flex; align-items: center; gap: 26rpx; margin-top: 26rpx; padding: 24rpx; border: 1rpx solid var(--sm-border); border-radius: var(--sm-radius-card); background: var(--sm-surface); -webkit-backdrop-filter: blur(var(--sm-blur)); backdrop-filter: blur(var(--sm-blur)); box-shadow: var(--sm-shadow-sm); transition: transform .2s ease; }
-.playlist-hero:active { transform: scale(.985); }
-.playlist-hero-cover { flex: none; width: 200rpx; height: 200rpx; }
-.playlist-hero-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 10rpx; }
-.playlist-hero-title { overflow: hidden; color: var(--sm-text); font-size: 28rpx; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
-.playlist-hero-desc { display: -webkit-box; overflow: hidden; color: var(--sm-text-2); font-size: 18rpx; line-height: 1.55; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.playlist-hero-meta { color: var(--sm-text-3); font-size: 16rpx; }
-.mood-section { margin-top: 72rpx; }
-.mood-scroll { width: calc(100% + 40rpx); margin-top: 28rpx; }
-.mood-list { display: flex; gap: 13rpx; padding-right: 40rpx; }
-.mood-chip { display: flex; flex: none; align-items: center; gap: 10rpx; height: 67rpx; padding: 0 22rpx; border: 1rpx solid var(--sm-border); border-radius: 36rpx; background: var(--sm-surface); color: var(--sm-text-2); font-size: 20rpx; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); transition: all .2s ease; }
-.mood-chip.selected { border-color: transparent; background: var(--sm-accent); color: var(--sm-accent-ink); font-weight: 700; }
-.mood-dot { width: 13rpx; height: 13rpx; border-radius: 50%; background: var(--sm-accent); }
-.mood-0 .mood-dot { background: var(--sm-accent); }.mood-1 .mood-dot { background: var(--sm-accent-2); }.mood-2 .mood-dot { background: var(--sm-accent-3); }.mood-3 .mood-dot { background: var(--sm-warn); }.mood-4 .mood-dot { background: var(--sm-danger); }
-.recommend-section { margin-top: 72rpx; }
-.recommend-heading { margin-bottom: 20rpx; }
-.track-list { padding: 4rpx 0; }
-.no-results, .inline-error { padding: 38rpx 0; color: var(--sm-text-2); font-size: 19rpx; text-align: center; }
-.request-link { display: flex; align-items: center; justify-content: center; gap: 8rpx; margin-top: 18rpx; color: var(--sm-accent); font-size: 18rpx; }
-.bottom-spacer { height: 245rpx; }
-.genre-grid { display: flex; flex-wrap: wrap; gap: 16rpx; margin-top: 23rpx; }
-.genre-chip { display: flex; align-items: center; justify-content: space-between; width: calc(50% - 8rpx); height: 84rpx; padding: 0 24rpx; border: 1rpx solid var(--sm-border); border-radius: 18rpx; background: var(--sm-surface); color: var(--sm-text); font-size: 21rpx; font-weight: 600; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
-.genre-chip :deep(svg), .genre-chip :deep(.lucide-shim) { color: var(--sm-text-3); }
-.search-results { margin-top: 40rpx; }
-.library-wrap { padding-top: 40rpx; }
-/* 曲库 tab · 匿名态：温和登录提示条 + 风格/排序筛选 + 公开曲目列表 */
-.public-hint { display: flex; align-items: center; gap: 18rpx; margin-top: 4rpx; padding: 20rpx 24rpx; border: 1rpx solid var(--sm-border); border-radius: 20rpx; background: var(--sm-surface); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); }
-.public-hint-title { flex: 1; min-width: 0; color: var(--sm-text-2); font-size: 18rpx; line-height: 1.5; }
-.public-hint-action { flex: none; padding: 10rpx 22rpx; border-radius: 30rpx; background: var(--sm-accent-soft); color: var(--sm-accent); font-size: 18rpx; font-weight: 700; }
-.public-heading { margin-top: 34rpx; }
-.public-chips { width: calc(100% + 40rpx); margin-top: 24rpx; }
-.public-chips-row { display: flex; gap: 13rpx; padding-right: 40rpx; }
-.public-chip { display: flex; flex: none; align-items: center; height: 62rpx; padding: 0 22rpx; border: 1rpx solid var(--sm-border); border-radius: 34rpx; background: var(--sm-surface); color: var(--sm-text-2); font-size: 19rpx; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
-.public-chip.on { border-color: transparent; background: var(--sm-accent); color: var(--sm-accent-ink); font-weight: 700; }
-.public-sort { display: flex; gap: 12rpx; margin: 22rpx 0 20rpx; padding: 5rpx; border: 1rpx solid var(--sm-border); border-radius: 18rpx; background: var(--sm-surface); }
-.public-sort-item { display: flex; flex: 1; align-items: center; justify-content: center; height: 58rpx; border-radius: 14rpx; color: var(--sm-text-2); font-size: 18rpx; }
-.public-sort-item.on { background: var(--sm-surface-3); color: var(--sm-text); font-weight: 700; }
-.public-more { padding: 30rpx 0 10rpx; color: var(--sm-text-3); font-size: 17rpx; text-align: center; }
-.library-block { margin-top: 44rpx; }
-.profile-card, .login-card { display: flex; align-items: center; gap: 17rpx; margin-top: 12rpx; padding: 24rpx 26rpx; border: 1rpx solid var(--sm-border); border-radius: 20rpx; background: var(--sm-surface); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); }
-.profile-avatar { display: grid; flex: none; place-items: center; width: 80rpx; height: 80rpx; border-radius: 50%; background: var(--sm-avatar-bg); color: var(--sm-cover-ink); font-size: 28rpx; font-weight: 700; }
-.profile-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 7rpx; }
-.profile-name { color: var(--sm-text); font-size: 24rpx; font-weight: 700; }
-.profile-email { overflow: hidden; color: var(--sm-text-2); font-size: 17rpx; text-overflow: ellipsis; white-space: nowrap; }
-.profile-edit { flex: none; color: var(--sm-accent); font-size: 18rpx; font-weight: 600; }
-.profile-chevron { flex: none; color: var(--sm-text-3); }
-.create-playlist { display: flex; align-items: center; gap: 6rpx; padding-bottom: 4rpx; color: var(--sm-accent); font-size: 19rpx; font-weight: 700; }
-.playlist-heading-actions { display: flex; align-items: center; gap: 28rpx; }
-/* 我的歌单：2 列封面宫格（宽视口自动 3 列） */
-.playlist-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20rpx; margin-top: 20rpx; }
-.playlist-tile { padding: 16rpx; border: 1rpx solid var(--sm-border); border-radius: var(--sm-radius-card); background: var(--sm-surface); -webkit-backdrop-filter: blur(var(--sm-blur)); backdrop-filter: blur(var(--sm-blur)); transition: transform .15s ease; }
-.playlist-tile:active { transform: scale(.97); }
-.playlist-tile-cover { display: grid; place-items: center; width: 100%; aspect-ratio: 1; border-radius: 16rpx; overflow: hidden; background: var(--sm-accent-grad); color: var(--sm-cover-ink); }
-.playlist-tile-cover .playlist-thumbnail { width: 100%; height: 100%; }
-.playlist-tile-name { display: block; overflow: hidden; margin-top: 14rpx; color: var(--sm-text); font-size: 21rpx; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
-.playlist-tile-meta { display: block; margin-top: 4rpx; color: var(--sm-text-2); font-size: 16rpx; }
-/* 喜欢的音乐横幅卡：封面斜叠 + 播放全部 */
-.favorites-banner { display: flex; align-items: center; gap: 22rpx; margin-top: 20rpx; padding: 24rpx 26rpx; border: 1rpx solid var(--sm-border-strong); border-radius: var(--sm-radius-card); background: linear-gradient(135deg, var(--sm-danger-soft), var(--sm-accent-3-soft)); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); }
-.favorites-covers { position: relative; flex: none; width: 150rpx; height: 116rpx; }
-.favorites-cover { position: absolute; border: 2rpx solid var(--sm-bg); box-shadow: 0 6rpx 18rpx var(--sm-art-shadow); }
-.fav-cover-0 { top: 0; left: 0; width: 92rpx; height: 92rpx; transform: rotate(-8deg); z-index: 3; }
-.fav-cover-1 { top: 6rpx; left: 46rpx; width: 80rpx; height: 80rpx; transform: rotate(5deg); z-index: 2; opacity: .9; }
-.fav-cover-2 { top: 14rpx; left: 84rpx; width: 62rpx; height: 62rpx; transform: rotate(14deg); z-index: 1; opacity: .75; }
-.favorites-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 6rpx; }
-.favorites-name { color: var(--sm-text); font-size: 25rpx; font-weight: 800; }
-.favorites-meta { color: var(--sm-text-2); font-size: 17rpx; }
-.favorites-play { display: flex; flex: none; align-items: center; gap: 8rpx; padding: 13rpx 26rpx; border-radius: 38rpx; background: var(--sm-hero-ink-bg); color: var(--sm-hero-ink); font-size: 18rpx; font-weight: 700; box-shadow: 0 8rpx 22rpx var(--sm-accent-glow); }
-.favorites-play:active { opacity: .85; }
-/* 新建歌单受控弹层：居中 Dialog + 半透明遮罩 */
-.sheet-mask { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; padding: 40rpx; background: var(--sm-mask); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
-.sheet-dialog { width: 100%; max-width: 560rpx; padding: 40rpx 36rpx 32rpx; border-radius: 28rpx; background: var(--sm-surface-3); border: 1rpx solid var(--sm-border-strong); box-shadow: var(--sm-shadow); }
-.sheet-title { display: block; color: var(--sm-text); font-size: 28rpx; font-weight: 800; }
-.sheet-input { width: 100%; height: 88rpx; margin-top: 26rpx; padding: 0 24rpx; border: 1rpx solid var(--sm-border); border-radius: 16rpx; background: var(--sm-surface); color: var(--sm-text); font-size: 22rpx; box-sizing: border-box; }
-.sheet-input::placeholder { color: var(--sm-text-3); }
-.sheet-actions { display: flex; gap: 18rpx; margin-top: 32rpx; }
-.sheet-btn { display: flex; flex: 1; align-items: center; justify-content: center; height: 82rpx; border-radius: 41rpx; font-size: 21rpx; font-weight: 700; }
-.sheet-btn.ghost { border: 1rpx solid var(--sm-border); background: var(--sm-surface); color: var(--sm-text-2); }
+<style lang="scss" scoped>
+.app-shell { position: relative; width: 100%; min-height: 100vh; background: var(--sm-page-bg); color: var(--sm-text); }
+.page-scroll { position: relative; height: 100vh; height: 100dvh; }
+button { margin: 0; padding: 0; font: inherit; line-height: 1.5; background: transparent; color: inherit; text-align: left; border-radius: 8px; }
+button::after { border: 0; }
+button:hover { opacity: .88; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--sm-accent); outline-offset: 3px; }
+.topbar { display: flex; justify-content: space-between; align-items: center; padding: calc(env(safe-area-inset-top) + 20px) 24px 0; }
+.brand-name { font-size: 24px; font-weight: 850; letter-spacing: -1px; }
+.brand-dot { color: var(--sm-accent); }
+.topbar-actions { display: flex; align-items: center; gap: 12px; }
+.avatar, .bell-wrap { position: relative; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; }
+.avatar { background: var(--sm-avatar-bg); color: var(--sm-cover-ink); font-size: 13px; font-weight: 700; }
+.bell-badge { position: absolute; top: -4px; right: -4px; padding: 0 4px; border-radius: 12px; font-size: 10px; background: var(--sm-danger); color: var(--sm-accent-ink); }
+.page-heading { display: flex; flex-direction: column; align-items: flex-start; padding: 28px 24px 24px; gap: 8px; }
+.eyebrow { color: var(--sm-accent); font-size: 11px; letter-spacing: 2px; font-weight: 700; }
+.greeting { font-size: clamp(28px, 5vw, 36px); font-weight: 800; letter-spacing: -1px; line-height: 1.25; }
+.recommend-content, .library-wrap { padding: 0 24px; }
+.library-wrap { padding-top: 8px; }
+.editorial-hero { position: relative; isolation: isolate; display: flex; align-items: flex-end; min-height: 290px; width: 100%; padding: 80px 24px 24px; box-sizing: border-box; border-radius: 12px; background: var(--sm-hero-bg); color: #fff; }
+.hero-art, .hero-shade { position: absolute; inset: 0; z-index: -1; border-radius: inherit; }
+.hero-shade { background: var(--sm-hero-shade); }
+.hero-badge { position: absolute; top: 24px; left: 24px; border: 1px solid #ffffff70; padding: 4px 8px; font-size: 10px; letter-spacing: 2px; }
+.hero-copy { min-width: 0; flex: 1; padding-right: 16px; }
+.hero-title { display: block; font-size: clamp(28px, 5vw, 36px); font-weight: 800; line-height: 1.25; overflow-wrap: anywhere; }
+.hero-description { display: block; margin-top: 12px; font-size: 12px; line-height: 1.6; }
+.hero-meta { display: block; margin-top: 12px; font-size: 11px; opacity: .85; }
+.hero-arrow { display: grid; place-items: center; flex: none; width: 44px; height: 44px; border-radius: 50%; background: #faf9f5; color: #252521; }
+.daily-card { display: flex; width: 100%; gap: 16px; align-items: center; padding: 20px 0; border-bottom: 1px solid var(--sm-divider); border-radius: 0; }
+.calendar { display: grid; place-items: center; flex: none; width: 48px; height: 52px; background: var(--sm-accent-soft); color: var(--sm-accent); border-radius: 8px; font: 28px Georgia, serif; }
+.daily-copy { flex: 1; min-width: 0; }
+.daily-title { display: block; font-size: 14px; font-weight: 700; margin-bottom: 4px; }
+.muted { display: block; color: var(--sm-text-2); font-size: 11px; line-height: 1.6; }
+.section-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 28px 0 16px; }
+.section-title { font-size: 19px; font-weight: 750; }
+.text-action { font-size: 12px; color: var(--sm-text-2); }
+.collection-shelf { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.shelf-card { min-width: 0; width: 100%; align-self: start; }
+.shelf-cover { width: 100%; aspect-ratio: 1; }
+.shelf-title { display: block; margin: 8px 0 4px; font-size: 12px; font-weight: 650; overflow-wrap: anywhere; }
+.library-segments { display: flex; gap: 8px; margin-bottom: 16px; }
+.library-segments button { padding: 8px 16px; font-size: 12px; color: var(--sm-text-2); border-radius: 24px; }
+.library-segments .selected, .favorite-filter.selected { color: var(--sm-accent); background: var(--sm-accent-soft); }
+.public-hint { display: flex; align-items: center; gap: 12px; padding: 8px 0; font-size: 11px; color: var(--sm-text-2); }
+.public-hint-title { flex: 1; }
+.public-hint-action { color: var(--sm-accent); }
+.search-box { display: flex; align-items: center; gap: 12px; padding: 12px 16px; margin-top: 12px; border-radius: 8px; background: var(--sm-surface); color: var(--sm-text-2); }
+.search-box input { flex: 1; min-width: 0; font-size: 13px; color: var(--sm-text); }
+.favorite-filter { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 24px; margin-top: 16px; background: var(--sm-surface); color: var(--sm-text-2); font-size: 12px; }
+.public-chips { width: 100%; margin: 16px 0; }
+.public-chips-row { display: flex; gap: 8px; padding: 4px; }
+.public-chip { flex: none; padding: 8px 16px; border-radius: 24px; white-space: nowrap; background: var(--sm-surface); color: var(--sm-text-2); font-size: 12px; }
+.public-chip.on { background: var(--sm-text); color: var(--sm-bg); }
+.public-sort { display: flex; gap: 16px; flex-wrap: wrap; margin: 16px 0; }
+.public-sort-item { padding: 8px 0; font-size: 12px; color: var(--sm-text-2); }
+.public-sort-item.on { color: var(--sm-text); font-weight: 700; }
+.play-list { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; font-size: 13px; padding: 8px 0; }
+.public-more, .library-count, .lib-count { font-size: 12px; color: var(--sm-text-2); padding: 12px 0; }
+.inline-error, .no-results, .recommend-empty, .empty-state { padding: 24px 0; color: var(--sm-text-2); font-size: 13px; line-height: 1.7; }
+.state-retry { padding: 12px 16px; margin: 12px 0; background: var(--sm-surface); color: var(--sm-accent); font-size: 13px; }
+.empty-state { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.empty-title { color: var(--sm-text); font-weight: 650; }
+.profile-card { display: flex; align-items: center; gap: 16px; width: 100%; margin: 24px 0; }
+.profile-avatar { display: grid; place-items: center; width: 64px; height: 64px; flex: none; border-radius: 50%; background: var(--sm-avatar-bg); color: var(--sm-cover-ink); font-size: 24px; }
+.profile-copy { min-width: 0; flex: 1; }
+.profile-name { display: block; font-size: 24px; font-weight: 750; overflow-wrap: anywhere; }
+.profile-email { display: block; margin-top: 4px; color: var(--sm-text-2); font-size: 11px; }
+.favorites-banner { display: flex; align-items: center; gap: 16px; width: 100%; padding: 20px; box-sizing: border-box; background: var(--sm-accent-soft); border-radius: 12px; }
+.favorite-icon { display: grid; place-items: center; width: 52px; height: 52px; flex: none; border-radius: 8px; background: var(--sm-accent); color: var(--sm-accent-ink); transform: rotate(-5deg); }
+.favorites-copy { flex: 1; min-width: 0; }
+.favorites-name { display: block; font-size: 17px; font-weight: 700; }
+.favorites-meta { display: block; font-size: 11px; margin-top: 6px; color: var(--sm-text-2); }
+.quick-circles { display: flex; justify-content: space-around; flex-wrap: wrap; gap: 8px; padding: 20px 0; border-bottom: 1px solid var(--sm-divider); }
+.quick-circle { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 8px 0; }
+.playlist-heading-actions { display: flex; gap: 16px; }
+.create-playlist { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--sm-text-2); }
+.playlist-grid { display: flex; flex-direction: column; gap: 8px; }
+.playlist-tile { display: grid; grid-template-columns: 64px minmax(0, 1fr); column-gap: 16px; align-items: center; width: 100%; padding: 8px 0; }
+.playlist-tile-cover { width: 64px; height: 64px; grid-row: span 2; }
+.playlist-tile-name { font-size: 13px; font-weight: 650; align-self: end; overflow-wrap: anywhere; }
+.playlist-tile-meta { font-size: 11px; color: var(--sm-text-2); align-self: start; margin-top: 4px; }
+.saved-row { display: flex; align-items: center; gap: 8px; }
+.saved-link { display: flex; align-items: center; gap: 16px; flex: 1; min-width: 0; padding: 8px 0; }
+.saved-cover { width: 64px; height: 64px; flex: none; }
+.saved-copy { flex: 1; min-width: 0; }
+.unsave { display: grid; place-items: center; width: 40px; height: 40px; flex: none; color: var(--sm-accent); }
+.login-card { display: flex; flex-direction: column; gap: 16px; padding: 32px 0; }
+.login-title { font-size: 24px; font-weight: 750; }
+.login-copy { font-size: 13px; color: var(--sm-text-2); }
+.login-button { background: var(--sm-accent); color: var(--sm-accent-ink); border-radius: 24px; padding: 12px 20px; font-size: 14px; text-align: center; }
+.lib-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--sm-divider); }
+.lib-cover { width: 48px; height: 48px; flex: none; }
+.lib-copy { flex: 1; min-width: 0; }
+.lib-title-row { display: flex; align-items: center; gap: 8px; }
+.lib-title { font-size: 13px; overflow-wrap: anywhere; }
+.lib-badge, .lib-artist, .lib-duration { font-size: 10px; color: var(--sm-text-2); }
+.lib-badge { flex: none; padding: 2px 4px; background: var(--sm-surface); border-radius: 4px; }
+.lib-meta { display: flex; align-items: center; gap: 8px; }
+.lib-remove { padding: 8px; color: var(--sm-text-2); }
+.is-removing { opacity: .5; pointer-events: none; }
+.tabbar { position: fixed; z-index: 3; bottom: 0; left: 0; right: 0; display: flex; align-items: center; height: 56px; padding: 0 16px env(safe-area-inset-bottom); background: var(--sm-tabbar-bg); backdrop-filter: blur(16px); }
+.tab-item { position: relative; display: flex; align-items: center; flex-direction: column; gap: 4px; flex: 1; min-width: 0; font-size: 10px; color: var(--sm-text-3); padding: 8px; }
+.tab-item.active { color: var(--sm-accent); font-weight: 700; }
+.tab-item.active::before { content: ''; position: absolute; bottom: 2px; width: 3px; height: 3px; background: currentColor; border-radius: 50%; }
+.bottom-spacer { height: calc(80px + env(safe-area-inset-bottom)); }
+.bottom-spacer.has-player { height: calc(156px + env(safe-area-inset-bottom)); }
+.sheet-mask { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--sm-mask); }
+.sheet-dialog { width: 100%; max-width: 440px; max-height: 80vh; overflow-y: auto; padding: 24px; border-radius: 12px; background: var(--sm-bg-soft); }
+.sheet-title { display: block; font-size: 20px; font-weight: 750; }
+.sheet-input { box-sizing: border-box; height: 48px; margin-top: 20px; padding: 0 12px; background: var(--sm-surface); border: 1px solid var(--sm-border); border-radius: 8px; font-size: 14px; }
+.sheet-actions { display: flex; gap: 12px; margin-top: 24px; }
+.sheet-btn { flex: 1; padding: 12px; text-align: center; font-size: 14px; }
+.sheet-btn.ghost { background: var(--sm-surface); }
 .sheet-btn.primary { background: var(--sm-accent); color: var(--sm-accent-ink); }
-.sheet-btn.disabled { opacity: .6; }
-.playlist-thumbnail { width: 100%; height: 100%; }
-.library-count { padding-bottom: 4rpx; color: var(--sm-text-2); font-size: 18rpx; }
-/* 曲库 tab：条目行（私有/已公开徽章 + 移除引用） */
-.lib-head { padding: 6rpx 0 18rpx; }
-.lib-count { color: var(--sm-text-2); font-size: 18rpx; }
-.lib-row { display: flex; align-items: center; min-height: 106rpx; gap: 18rpx; border-bottom: 1rpx solid var(--sm-divider); }
-.lib-row.is-removing { opacity: .5; pointer-events: none; }
-.lib-cover { flex: none; width: 76rpx; height: 76rpx; border-radius: 14rpx; overflow: hidden; background: var(--sm-surface-3); }
-.lib-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 7rpx; }
-.lib-title-row { display: flex; align-items: center; gap: 12rpx; min-width: 0; }
-.lib-title { overflow: hidden; color: var(--sm-text); font-size: 21rpx; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
-.lib-badge { flex: none; padding: 4rpx 12rpx; border-radius: 20rpx; font-size: 13rpx; font-weight: 700; }
-.lib-badge.private { border: 1rpx solid var(--sm-border); background: var(--sm-surface); color: var(--sm-text-2); }
-.lib-badge.public { border: 1rpx solid var(--sm-accent-soft-border); background: var(--sm-accent-soft); color: var(--sm-accent); }
-.lib-artist { overflow: hidden; color: var(--sm-text-2); font-size: 17rpx; text-overflow: ellipsis; white-space: nowrap; }
-.lib-meta { display: flex; flex: none; align-items: center; gap: 18rpx; }
-.lib-duration { color: var(--sm-text-2); font-family: 'DM Sans', sans-serif; font-size: 16rpx; }
-.lib-remove { display: grid; place-items: center; width: 44rpx; height: 42rpx; color: var(--sm-text-3); }
-.empty-upload { display: flex; align-items: center; gap: 8rpx; margin-top: 24rpx; padding: 14rpx 32rpx; border-radius: var(--sm-radius-pill); background: var(--sm-accent); color: var(--sm-accent-ink); font-size: 18rpx; font-weight: 700; }
-.empty-state { display: flex; flex-direction: column; align-items: center; padding: 70rpx 0 80rpx; }
-.empty-icon { display: grid; place-items: center; width: 83rpx; height: 83rpx; border-radius: 50%; background: var(--sm-accent-soft); color: var(--sm-accent); }
-.empty-title { margin-top: 20rpx; color: var(--sm-text); font-size: 23rpx; font-weight: 700; }
-.empty-copy { margin-top: 9rpx; color: var(--sm-text-2); font-size: 18rpx; }
-.login-card { flex-direction: column; align-items: flex-start; margin-top: 40rpx; padding: 40rpx 32rpx; }
-.login-icon { display: grid; place-items: center; width: 72rpx; height: 72rpx; border-radius: 20rpx; background: var(--sm-accent-soft); color: var(--sm-accent); }
-.login-title { margin-top: 22rpx; color: var(--sm-text); font-size: 27rpx; font-weight: 800; }
-.login-copy { margin-top: 12rpx; color: var(--sm-text-2); font-size: 18rpx; line-height: 1.6; }
-.login-button { display: flex; align-items: center; justify-content: center; align-self: stretch; margin-top: 26rpx; height: 84rpx; border-radius: 42rpx; background: var(--sm-accent); color: var(--sm-accent-ink); font-size: 21rpx; font-weight: 800; }
-/* 平台适配：固定底栏用 env(safe-area-inset-bottom) 避开 iPhone 底部安全区。
-   选中态为轻量范式（accent 图标 + 顶部小圆点），不再用 pill 背景。 */
-.tabbar { position: fixed; z-index: 3; right: 0; bottom: 0; left: 0; display: flex; align-items: flex-end; justify-content: space-around; padding: 14rpx 30rpx calc(env(safe-area-inset-bottom) + 18rpx); border-top: 1rpx solid var(--sm-surface-3); background: var(--sm-tabbar-bg); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); }
-.tab-item { position: relative; display: flex; min-width: 105rpx; flex-direction: column; align-items: center; gap: 5rpx; padding: 10rpx 0 2rpx; color: var(--sm-text-3); font-size: 16rpx; transition: color .2s ease; }
-.tab-item.active { color: var(--sm-accent); }
-.tab-item.active text { color: var(--sm-text); font-weight: 700; }
-.tab-dot { position: absolute; top: -2rpx; width: 7rpx; height: 7rpx; border-radius: 50%; background: var(--sm-accent); opacity: 0; transform: scale(.4); transition: opacity .2s ease, transform .2s ease; }
-.tab-item.active .tab-dot { opacity: 1; transform: scale(1); }
-.tab-item :deep(svg), .tab-item :deep(.lucide-shim) { transition: transform .18s ease, color .18s ease; }
-.tab-item.active :deep(svg), .tab-item.active :deep(.lucide-shim) { color: var(--sm-accent); transform: translateY(-2rpx) scale(1.1); }
-/* 中间凸起「正在播放」黑胶：当前曲目封面旋转，外圈 accent 播放/暂停角标；
-   无曲目时显示音符占位不旋转。点击展开全屏播放器。 */
-.tab-disc { position: relative; flex: none; width: 104rpx; height: 104rpx; margin-top: -46rpx; border: 5rpx solid var(--sm-bg); border-radius: 50%; background: var(--sm-bg-soft); box-shadow: 0 10rpx 26rpx var(--sm-art-shadow), 0 0 0 1rpx var(--sm-border-strong), 0 0 24rpx var(--sm-accent-glow); overflow: hidden; box-sizing: border-box; transition: transform .15s ease; }
-.tab-disc:active { transform: scale(.94); }
-.disc-spin { position: absolute; inset: 0; border-radius: 50%; overflow: hidden; animation: tab-disc-spin 16s linear infinite; animation-play-state: paused; }
-.disc-spin.playing { animation-play-state: running; }
-.tab-disc.idle .disc-spin { animation: none; }
-.disc-spin :deep(image), .disc-spin :deep(img) { width: 100%; height: 100%; }
-.disc-empty { display: grid; place-items: center; width: 100%; height: 100%; background: var(--sm-surface-3); color: var(--sm-text-3); }
-.disc-state { position: absolute; right: 0; bottom: 0; z-index: 2; display: grid; place-items: center; width: 34rpx; height: 34rpx; border-radius: 50%; background: var(--sm-accent); color: var(--sm-accent-ink); box-shadow: 0 4rpx 12rpx rgba(0, 0, 0, .4); }
-@keyframes tab-disc-spin { to { transform: rotate(360deg); } }
-/* 我的页：圆形快捷入口行（消息带未读角标） */
-.quick-circles { display: flex; justify-content: space-between; margin: 4rpx 0 30rpx; padding: 26rpx 34rpx; border: 1rpx solid var(--sm-border); border-radius: var(--sm-radius-card); background: var(--sm-surface); -webkit-backdrop-filter: blur(var(--sm-blur)); backdrop-filter: blur(var(--sm-blur)); }
-.quick-circle { position: relative; display: flex; flex-direction: column; align-items: center; gap: 10rpx; }
-.qc-icon { display: grid; place-items: center; width: 84rpx; height: 84rpx; border-radius: 50%; transition: transform .15s ease; }
-.quick-circle:active .qc-icon { transform: scale(.92); }
-.qc-notify { background: var(--sm-warn-soft); color: var(--sm-warn); }
-.qc-favorite { background: var(--sm-danger-soft); color: var(--sm-danger); }
-.qc-history { background: var(--sm-info-soft); color: var(--sm-accent-2); }
-.qc-follow { background: var(--sm-accent-3-soft); color: var(--sm-accent-3); }
-.qc-badge { position: absolute; top: -10rpx; right: -6rpx; min-width: 30rpx; padding: 0 8rpx; border: 2rpx solid var(--sm-bg); border-radius: 20rpx; background: var(--sm-danger); color: #ffffff; font-size: 15rpx; font-weight: 800; line-height: 28rpx; text-align: center; box-sizing: border-box; }
-.qc-label { color: var(--sm-text-2); font-size: 17rpx; }
-/* 横屏：内容栏与竖屏手机同宽居中（844x390 时两侧各留 62px），固定底栏同步对齐，
-   避免宽屏下卡片被横向拉伸、底栏比内容栏更宽 */
-@media (orientation: landscape) and (max-height: 820px) and (min-width: 560px),
-       (hover: none) and (pointer: coarse) and (min-width: 560px) and (min-aspect-ratio: 2/3) {
-  .app-shell { max-width: 720px; margin: 0 auto; border-right: 1rpx solid var(--sm-divider); border-left: 1rpx solid var(--sm-divider); }
-  .tabbar { right: max(0px, calc((100vw - 720px) / 2)); left: max(0px, calc((100vw - 720px) / 2)); }
-  /* 问候标题与今日灵感卡并排：横屏多出来的横向空间给卡片，避免拉伸后中间大片留白 */
-  .hero-row { display: flex; align-items: stretch; gap: 26rpx; }
-  .page-heading { flex: none; padding: 34rpx 0 0 44rpx; }
-  .inspiration-card { flex: 1; min-width: 0; margin: 30rpx 40rpx 0 0; }
-  /* 宽视口下歌单宫格改 3 列，利用横向空间少留白 */
-  .playlist-grid { grid-template-columns: repeat(3, 1fr); }
-  /* 宽视口下曲目列表双列（TrackRow 自身卡片化，直接进网格） */
-  .track-list { display: grid; grid-template-columns: 1fr 1fr; gap: 14rpx 20rpx; align-items: start; }
-}
-/* #ifdef H5 */
-/* 宽屏（桌面浏览器/平板浏览器）限宽居中；App 端始终铺满，避免手机/折叠屏被限宽 */
-@media (min-width: 700px) {
-  .app-shell { max-width: 720px; min-height: 100vh; margin: 0 auto; border-right: 1rpx solid var(--sm-divider); border-left: 1rpx solid var(--sm-divider); }
-  .tabbar { right: max(0px, calc((100vw - 720px) / 2)); left: max(0px, calc((100vw - 720px) / 2)); }
-}
-/* #endif */
+@media (min-width: 800px) { .app-shell { max-width: 940px; margin: auto; } .topbar { padding-left: 32px; padding-right: 32px; } .page-heading { padding: 28px 32px 24px; } .recommend-content, .library-wrap { padding-left: 32px; padding-right: 32px; } .editorial-hero { min-height: 340px; } .collection-shelf { gap: 20px; } .tabbar { left: max(0px, calc((100vw - 940px) / 2)); right: max(0px, calc((100vw - 940px) / 2)); } }
+@media (max-width: 360px) { .topbar, .page-heading, .recommend-content, .library-wrap { padding-left: 16px; padding-right: 16px; } .collection-shelf { gap: 8px; } .hero-title { font-size: 28px; } }
+@media (prefers-reduced-motion: no-preference) { .collection-shelf, .playlist-grid { animation: enter 260ms cubic-bezier(.2,.85,.25,1.05) both; } @keyframes enter { from { opacity: .4; transform: translateY(6px); } to { opacity: 1; transform: none; } } }
 </style>

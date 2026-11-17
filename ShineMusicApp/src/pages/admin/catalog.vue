@@ -550,4 +550,13 @@ async function removeLyric(lyric: ApiLyric) {
 .op-btn.danger { background: var(--sm-danger-soft); color: var(--sm-danger); }
 .op-btn:active { opacity: .7; }
 .lyric-preview { display: -webkit-box; overflow: hidden; color: var(--sm-text-2); font-size: 14rpx; line-height: 1.6; -webkit-line-clamp: 5; -webkit-box-orient: vertical; white-space: pre-wrap; }
+.heading-title { font-size: 40rpx; }
+.heading-subtitle, .form-field, .form-label, .track-meta { font-size: 24rpx; }
+.editor, .lyric-panel, .track-list { border-radius: var(--sm-radius-card); }
+.editor, .lyric-panel { padding: 32rpx; }
+.form-field input, .search-field { min-height: 48px; font-size: 16px; }
+.lyric-textarea { font-size: 14px; }
+.track-item { min-height: 112rpx; }
+.track-title { font-size: 26rpx; }
+@media (min-width: 960px) { .workspace { display: grid; grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr); align-items: start; gap: 24px; } .lyric-panel { grid-column: 1 / -1; } }
 </style>

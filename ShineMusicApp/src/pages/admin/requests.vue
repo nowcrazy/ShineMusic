@@ -275,4 +275,11 @@ function handleReopen(item: ApiSongRequest) {
 .act-btn.primary { border-color: transparent; background: var(--sm-accent); color: var(--sm-accent-ink); }
 .act-btn.danger { border-color: transparent; background: var(--sm-danger-soft); color: var(--sm-danger); }
 .bottom-space { height: 40rpx; }
+.heading-title { font-size: 40rpx; }
+.heading-subtitle, .card-artist { font-size: 24rpx; }
+.request-card { padding: 32rpx; border-radius: var(--sm-radius-card); }
+.card-title { font-size: 28rpx; }
+.act-btn { min-height: 40px; font-size: 24rpx; }
+.card-meta { flex-wrap: wrap; }
+@media (min-width: 960px) { .request-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; } }
 </style>

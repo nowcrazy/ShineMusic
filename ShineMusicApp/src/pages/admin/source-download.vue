@@ -48,6 +48,8 @@ const { t } = useI18n()
 
 // —— 搜索区状态 ——
 const keyword = ref('')
+const activeView = ref<'search' | 'tasks'>('search')
+const expandedTaskId = ref('')
 const providerFilter = ref<SourceProviderFilter>('all')
 const searchMode = ref<SourceSearchMode>('title')
 const searching = ref(false)
@@ -261,6 +263,7 @@ async function downloadSelected() {
       uni.showToast({ title: t('sourceDownload.downloadSkipped', { count: skipped }), icon: 'none' })
     }
     await loadTasks()
+    activeView.value = 'tasks'
   } catch (error) {
     uni.showToast({ title: describeError(error, t('sourceDownload.downloadFailed')), icon: 'none' })
   } finally {
@@ -401,6 +404,11 @@ function formatDuration(ms: number | null | undefined): string {
       </view>
     </view>
 
+    <view class="workspace-tabs">
+      <button :class="{ active: activeView === 'search' }" @tap="activeView = 'search'">{{ $t('sourceDownload.searchBtn') }}</button>
+      <button :class="{ active: activeView === 'tasks' }" @tap="activeView = 'tasks'">{{ $t('sourceDownload.tasksTitle') }}</button>
+    </view>
+    <view v-show="activeView === 'search'">
     <!-- 搜索区 -->
     <view class="search-card">
       <view class="search-row">
@@ -515,9 +523,10 @@ function formatDuration(ms: number | null | undefined): string {
         <text>{{ $t('sourceDownload.downloadSelected') }}</text>
       </view>
     </view>
+    </view>
 
     <!-- 任务区 -->
-    <view class="tasks-section">
+    <view v-show="activeView === 'tasks'" class="tasks-section">
       <view class="tasks-heading">
         <view class="tasks-title-wrap">
           <ListMusic :size="17" />
@@ -576,7 +585,6 @@ function formatDuration(ms: number | null | undefined): string {
                 v-if="task.status === SourceTaskStatus.Queued && task.autoRetryCount > 0"
                 class="badge retry-badge"
               >{{ $t('sourceDownload.autoRetryBadge', { count: task.autoRetryCount, max: 3 }) }}</text>
-              <text v-if="task.autoScore != null" class="badge score-badge">{{ $t('sourceDownload.autoScoreLabel', { score: task.autoScore }) }}</text>
               <text
                 v-if="task.status === SourceTaskStatus.Completed && task.hasLyrics === false"
                 class="badge no-lyrics-badge"
@@ -588,7 +596,11 @@ function formatDuration(ms: number | null | undefined): string {
                 {{ $t('sourceDownload.pendingReviewBadge') }}
               </text>
             </view>
-            <text v-if="task.errorMessage" class="task-error">{{ task.errorMessage }}</text>
+            <button v-if="task.errorMessage || task.autoScore != null" class="task-details-toggle" :aria-expanded="expandedTaskId === task.id" @tap="expandedTaskId = expandedTaskId === task.id ? '' : task.id">{{ $t('homePage.more') }} {{ expandedTaskId === task.id ? '−' : '+' }}</button>
+            <view v-if="expandedTaskId === task.id">
+              <text v-if="task.autoScore != null" class="badge score-badge">{{ $t('sourceDownload.autoScoreLabel', { score: task.autoScore }) }}</text>
+              <text v-if="task.errorMessage" class="task-error">{{ task.errorMessage }}</text>
+            </view>
           </view>
           <view class="task-actions">
             <view
@@ -625,6 +637,12 @@ function formatDuration(ms: number | null | undefined): string {
 
 <style lang="scss" scoped>
 /* 音源抓歌管理页：搜索区 + 结果列表 + 吸底下载条 + 任务列表 */
+.workspace-tabs { display: flex; gap: 12rpx; margin-bottom: 24rpx; }
+.workspace-tabs button { flex: 1; margin: 0; background: var(--sm-surface); color: var(--sm-text-2); border: 1px solid var(--sm-border); border-radius: 16rpx; font-size: 26rpx; }
+.workspace-tabs button.active { background: var(--sm-accent-soft); color: var(--sm-accent); border-color: var(--sm-accent); }
+.workspace-tabs button::after { border: 0; }
+.task-details-toggle { margin: 12rpx 0 0; padding: 0 18rpx; width: fit-content; font-size: 24rpx; color: var(--sm-text-2); background: var(--sm-surface-2); }
+.task-details-toggle::after { border: 0; }
 .sd-page { min-height: 100vh; padding: 0 30rpx 220rpx; background: var(--sm-page-bg); box-sizing: border-box; }
 .page-heading { display: flex; align-items: center; gap: 20rpx; padding: calc(env(safe-area-inset-top) + 40rpx) 8rpx 24rpx; }
 .heading-icon { display: grid; place-items: center; width: 72rpx; height: 72rpx; border-radius: 22rpx; background: var(--sm-accent-soft); color: var(--sm-accent); }
@@ -719,4 +737,12 @@ function formatDuration(ms: number | null | undefined): string {
 .action-btn.switch { border: 1rpx solid var(--sm-info-soft-border, var(--sm-border)); background: var(--sm-info-soft, var(--sm-surface-2)); color: var(--sm-accent-2); }
 .action-btn.switch.disabled { opacity: .5; }
 .action-btn.review { border: 1rpx solid var(--sm-border); background: var(--sm-surface-2); color: var(--sm-text-2); }
+.heading-title { font-size: 40rpx; }
+.heading-subtitle, .result-meta, .task-meta { font-size: 24rpx; }
+.search-card, .task-card, .result-row { border-radius: var(--sm-radius-card); padding: 28rpx; }
+.search-input-wrap { min-width: 0; }
+.search-input { min-height: 48px; font-size: 16px; }
+.download-bar { background: var(--sm-bg-soft); }
+.action-btn { min-height: 40px; }
+@media (min-width: 960px) { .result-list, .task-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; } .download-bar { left: max(24px, calc((100vw - 1040px) / 2)); right: max(24px, calc((100vw - 1040px) / 2)); } }
 </style>

@@ -450,4 +450,12 @@ const addTrackInfo = computed(() =>
 .added-tag { flex: none; color: var(--sm-text-3); font-size: 15rpx; }
 
 .bottom-space { height: 60rpx; }
+.page-title { font-size: 40rpx; }
+.collection-row, .form-block { padding: 32rpx; }
+.collection-title { font-size: 28rpx; }
+.collection-desc, .field-label { font-size: 24rpx; }
+.field-input, .add-search-input { min-height: 48px; font-size: 16px; }
+.row-actions, .save-bar { flex-wrap: wrap; }
+.add-panel-body { background: var(--sm-bg-soft); }
+@media (min-width: 960px) { .manage-page { max-width: 960px; margin: auto; } .add-panel-body { max-width: 720px; margin: auto; border: 1px solid var(--sm-border); } }
 </style>

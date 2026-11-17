@@ -97,6 +97,25 @@ public sealed class StreamDeliveryReadbackTests : IClassFixture<StreamTestFactor
         Assert.Equal("audio/mp4", response.Content.Headers.ContentType?.MediaType);
     }
 
+    [Theory]
+    [InlineData("mp3", "audio/mpeg", "ID3", 0)]
+    [InlineData("m4a", "audio/mp4", "ftyp", 4)]
+    [InlineData("aac", "audio/aac", "ADTS", 0)]
+    public async Task Single_primary_asset_supports_range_and_correct_content_type(
+        string container, string contentType, string magic, int offset)
+    {
+        using var file = TempAudio.Create(magic, AssetSizeBytes, offset);
+        _factory.Playback.Container = container;
+        _factory.Storage.ResolvedPath = file.Path;
+        using var client = _factory.CreateClient();
+        using var request = RangeRequest(TrackId);
+        using var response = await client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.PartialContent, response.StatusCode);
+        Assert.Equal(contentType, response.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(file.Length, response.Content.Headers.ContentRange?.Length);
+        Assert.Equal(16, (await response.Content.ReadAsByteArrayAsync()).Length);
+    }
+
     [Fact]
     public void Test_host_runs_without_database_or_message_queue()
     {

@@ -12,9 +12,8 @@
 //   - **真实 HTTP 回读（L3a，§5.3）不在本文件内**：它需要 WebApplicationFactory 与 K5 的
 //     启动引导可替换接缝，见 docs 文档 §12.4。契约里的 ExpectedSizeBytes / ExpectedContentType
 //     正是留给 L3a 用 Range: bytes=0-15 比对的那一组事实；
-//   - ExpectedIdentity / ResolvedIdentity 当前**同源**（都来自 LibraryImportItem 元数据快照），
-//     身份闸门真正生效要等第 2 步把「歌单原曲身份」与「实际下载候选身份」分开记录。
-//     此处先固定契约形状与 ReasonCode，避免第 2 步再改序列化格式。
+//   - ExpectedIdentity 来自任务期望快照，ResolvedIdentity 来自导入候选。
+//     自动发布入口强制 Matched 与实测质量；契约负责实际交付文件的离线核对。
 
 using ShineMusic.Service.SourceDownload;
 
@@ -27,6 +26,7 @@ public static class DeliveryContractCodes
     public const string Mismatch = "delivery_contract_mismatch";
     public const string IdentityAmbiguous = "identity_ambiguous";
     public const string IdentityRejected = "identity_rejected";
+    // 保留旧机器码兼容已存明细；不表示评分可以补偿身份不匹配。
     public const string IdentityDeferredToScoring = "identity_deferred_to_scoring";
     public const string OriginalUnavailable = "original_unavailable";
     public const string BitrateUnknown = "bitrate_unknown";
@@ -41,11 +41,11 @@ public static class DeliveryContractCodes
 /// </summary>
 /// <param name="ImportItemId">导入条目 Id，供审核页与补偿任务反查。</param>
 /// <param name="TrackId">本次发布创建的曲目 Id。</param>
-/// <param name="ExpectedIdentity">歌单原曲身份（第 2 步前与 ResolvedIdentity 同源）。</param>
+/// <param name="ExpectedIdentity">任务快照中的期望录音身份。</param>
 /// <param name="ResolvedIdentity">实际解析/下载到的候选身份。</param>
 /// <param name="IdentityVerdict">身份闸门结论（第 1 步由唯一决策点给出）。</param>
 /// <param name="IdentityReasonCode">身份判定原因码，写入契约明细便于复盘。</param>
-/// <param name="MinimumBitrateKbps">自动发布最低码率门槛（256）；原文件缺失时按转码码率降档。</param>
+/// <param name="MinimumBitrateKbps">交付最低码率承诺（默认 192）；原文件缺失仅人工流程允许回退。</param>
 /// <param name="PrimaryStorageKey">播放主资产的库内存储键（IsPrimary=true 的那一份）。</param>
 /// <param name="ExpectedContentType">主资产应有的 Content-Type，供 L3a 比对响应头。</param>
 /// <param name="ProbedBitrateKbps">主资产声明码率（下载时 ffprobe 回填）。</param>
@@ -79,8 +79,8 @@ public sealed record DeliveryContractVerification(
 /// <summary>契约离线验证器：无 DB、无网络、无宿主依赖，纯文件 + 元数据比对。</summary>
 public static class DeliveryContractVerifier
 {
-    /// <summary>自动发布的绝对音质门槛（与 SourceScoreCalculator 的 256k 门槛同向）。</summary>
-    public const int AutomaticPublishMinimumBitrateKbps = 256;
+    /// <summary>默认有损交付门槛；质量准入另外验证真实编码与完整性。</summary>
+    public const int AutomaticPublishMinimumBitrateKbps = 192;
 
     private const int DefaultTranscodeBitrateKbps = 192;
 
@@ -100,11 +100,8 @@ public static class DeliveryContractVerifier
         var failures = new List<string>();
         var warnings = new List<string>();
 
-        // —— 身份（V2 Phase 2 裁决「评分制取代硬闸门」）——
-        // 三态仍完整记录在契约里供追溯，但**不再作为交付契约的硬失败**。
-        // 发布决策统一交给 SourceScoreCalculator 的身份 40 分维度 + 90 分阈值：
-        // Rejected=0 分、Ambiguous=部分分，数学上达不到自动发布阈值，会转人工审核；
-        // 与「契约失败可强制放行并留审计」的既有拍板一致，只是路径由「删文件阻断」改为「低分待审」。
+        // 契约保留身份诊断；自动发布由 ImportPublishService 强制要求 Matched。
+        // Ambiguous/Rejected 不能通过评分补偿，人工发布仍保留独立审核流程。
         var identityCode = contract.IdentityVerdict switch
         {
             IdentityVerdict.Rejected => DeliveryContractCodes.IdentityRejected,
@@ -113,7 +110,7 @@ public static class DeliveryContractVerifier
         };
         if (identityCode is not null)
             warnings.Add($"{identityCode}: 身份判定 {contract.IdentityVerdict}（{contract.IdentityReasonCode ?? "unknown"}），" +
-                         "交付契约不阻断，交评分闸门决定是否自动发布。");
+                         "自动发布要求身份 Matched，请人工审核；评分仅用于展示。");
 
         // —— 容器 / Content-Type ——
         if (string.IsNullOrWhiteSpace(contract.ExpectedContentType))
@@ -192,6 +189,7 @@ public static class DeliveryContractVerifier
             "audio/aiff" => Ascii(head, read, "FORM"),
             // M4A/MP4：ftyp 位于第 4~8 字节。
             "audio/mp4" => read >= 8 && Ascii(head[4..], read - 4, "ftyp"),
+            "audio/aac" => head[0] == 0xFF && (head[1] & 0xF6) == 0xF0,
             // MP3：ID3 标签，或 MPEG 帧同步 0xFF Ex。
             "audio/mpeg" => Ascii(head, read, "ID3") || (head[0] == 0xFF && (head[1] & 0xE0) == 0xE0),
             // 其余容器暂无稳定魔数（wma/ape/dsf 等），不做断言。

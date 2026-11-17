@@ -10,6 +10,7 @@
 // SHA-256 期望值来自流式下载；未传实际值时重新读取落地文件计算，校验写入后的完整性。
 
 using System.Security.Cryptography;
+using ShineMusic.Model.Domain;
 using ShineMusic.Model.Ports;
 using ShineMusic.Service.SourceProviders.Abstractions;
 
@@ -47,12 +48,6 @@ public sealed class AudioValidator
         "mp3", "aac", "ac3", "eac3", "opus", "vorbis", "wma", "wmapro",
     };
 
-    /// <summary>无损编码集合。</summary>
-    private static readonly HashSet<string> LosslessCodecs = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "flac", "alac", "wavpack", "ape", "tta", "mlp", "truehd", "pcm_s16le",
-        "pcm_s24le", "pcm_s32le", "pcm_s24be", "pcm_s16be",
-    };
 
     /// <summary>无损容器集合——对这些容器做有损编码检测。</summary>
     private static readonly HashSet<string> LosslessContainers = new(StringComparer.OrdinalIgnoreCase)
@@ -106,8 +101,7 @@ public sealed class AudioValidator
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             _logger.LogWarning(exception, "AudioValidator: ffprobe 探测失败 {FilePath}", filePath);
-            // 探测失败不直接拒绝（与既有 EvaluateDownloadedAudioAsync 的降级哲学一致），
-            // 但返回 Unknown 质量让评分闸门决定。
+            // 探测失败不能证明来源质量，保守拒绝。
             return AudioValidationResult.Rejected("probe_failed",
                 $"ffprobe 探测失败：{exception.Message}");
         }
@@ -152,6 +146,9 @@ public sealed class AudioValidator
                 $"容器 {container} 声称无损但实际编码为 {codec}（有损转无损伪装）。");
         }
 
+        if (probed.DurationMs is null or <= 0)
+            return AudioValidationResult.Rejected("unknown_duration", "无法验证音频完整时长。");
+
         // —— 2) 试听片段检测 ——
         if (expectedDurationMs is > 0 && probed.DurationMs is > 0)
         {
@@ -181,6 +178,11 @@ public sealed class AudioValidator
             return AudioValidationResult.Rejected("hash_mismatch",
                 "SHA-256 校验失败：文件可能在传输过程中被篡改。");
         }
+
+        var rejection = AudioAdmissionPolicy.GetRejectionReason(codec, container, probed.BitrateKbps);
+        if (rejection is not null)
+            return AudioValidationResult.Rejected(rejection,
+                $"实测编码 {codec} / 码率 {probed.BitrateKbps?.ToString() ?? "未知"}kbps 不符合音频准入规则。");
 
         // —— 通过：映射为 AudioQuality ——
         var format = MapAudioFormat(probed.Container ?? string.Empty, probed.Codec ?? string.Empty);
@@ -222,20 +224,7 @@ public sealed class AudioValidator
     /// </summary>
     private static AudioQualityLevel DetermineQualityLevel(ProbedMedia probed, AudioFormat format)
     {
-        // 无损编码判定：codec 在无损白名单中
-        if (LosslessCodecs.Contains(probed.Codec ?? string.Empty))
-            return AudioQualityLevel.Lossless;
-
-        // ALAC 在 m4a 容器中
-        if (format == AudioFormat.Alac)
-            return AudioQualityLevel.Lossless;
-
-        // FLAC 容器 + flac codec
-        if (format == AudioFormat.Flac)
-            return AudioQualityLevel.Lossless;
-
-        // WAV 容器（PCM 编码天然无损）
-        if (format == AudioFormat.Wav)
+        if (AudioAdmissionPolicy.IsLosslessCodec(probed.Codec))
             return AudioQualityLevel.Lossless;
 
         // 有损编码按码率分级

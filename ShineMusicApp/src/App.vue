@@ -19,11 +19,30 @@ import { loadCapabilities } from '@/services/capabilities'
 import { loadFavorites } from '@/services/library'
 import { loadFeedback } from '@/services/feedback'
 import { initTheme } from '@/services/theme'
-import { flushPlayerState, playerExpanded, syncFromBackgroundAudio } from '@/services/player'
+import { flushPlayerState, syncFromBackgroundAudio } from '@/services/player'
 
 // 应用启动：先应用主题（避免首屏闪烁），再恢复登录态与能力开关
 onLaunch(() => {
   initTheme()
+  // #ifdef H5
+  // uni-button is a custom element on H5; supply native button keyboard semantics.
+  const syncButtons = () => {
+    document.querySelectorAll<HTMLElement>('uni-button').forEach(button => {
+      const disabled = button.hasAttribute('disabled') || button.getAttribute('aria-disabled') === 'true'
+      if (button.getAttribute('role') !== 'button') button.setAttribute('role', 'button')
+      const tabIndex = disabled ? '-1' : '0'
+      if (button.getAttribute('tabindex') !== tabIndex) button.setAttribute('tabindex', tabIndex)
+    })
+  }
+  new MutationObserver(syncButtons).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled', 'aria-disabled'] })
+  document.addEventListener('keydown', event => {
+    const button = (event.target as HTMLElement)?.closest<HTMLElement>('uni-button')
+    if (!button || (event.key !== 'Enter' && event.key !== ' ') || event.repeat) return
+    event.preventDefault()
+    if (!button.hasAttribute('disabled') && button.getAttribute('aria-disabled') !== 'true') button.click()
+  })
+  syncButtons()
+  // #endif
   void (async () => {
     await restoreSession()
     if (isAuthenticated.value) {
@@ -33,25 +52,6 @@ onLaunch(() => {
     loadCapabilities()
   })()
 
-  // App 端：全局拦截返回键，永远不按返回键退出应用
-  // #ifdef APP-PLUS
-  plus.key.addEventListener('backbutton', () => {
-    // 1) 若全屏播放器展开，先关闭播放器
-    if (playerExpanded.value) {
-      playerExpanded.value = false
-      return
-    }
-    // 2) 若页面栈深度 > 1，正常返回上一页
-    const pages = getCurrentPages()
-    if (pages.length > 1) {
-      uni.navigateBack({ delta: 1 })
-      return
-    }
-    // 3) 已在最底层页面：回到桌面，不退出 App
-    // moveTaskToBack 存在于部分安卓运行时，@dcloudio/types 未收录，故做受控断言
-    ;(plus.runtime as unknown as { moveTaskToBack?: () => void }).moveTaskToBack?.()
-  })
-  // #endif
 })
 
 // 从后台切回前台：同步 BackgroundAudioManager 的真实播放状态
@@ -81,70 +81,61 @@ onHide(() => {
  * 其它页面的 <style> 只允许引用 var(--sm-*)。
  * ========================================================================== */
 
-/* ---- 默认主题：glass 玻璃质感（深色底 + 彩色光晕 + 毛玻璃） ---- */
+/* Default glass: warm paper, vermilion actions; other themes retain their palettes. */
 :root,
 :root[data-sm-theme='glass'] {
-  --sm-bg: #10131a;
-  --sm-bg-soft: #161a24;
-  --sm-page-bg: radial-gradient(circle at 8% 4%, rgba(91, 224, 122, .26), transparent 38%),
-    radial-gradient(circle at 96% 20%, rgba(74, 140, 255, .26), transparent 42%),
-    radial-gradient(circle at 4% 94%, rgba(176, 107, 255, .22), transparent 40%), #10131a;
-  --sm-surface: rgba(255, 255, 255, .09);
-  --sm-surface-2: rgba(255, 255, 255, .06);
-  --sm-surface-3: rgba(255, 255, 255, .12);
-  --sm-border: rgba(255, 255, 255, .16);
-  --sm-border-strong: rgba(255, 255, 255, .22);
-  --sm-divider: rgba(255, 255, 255, .08);
-
-  --sm-text: #f2f5f0;
-  --sm-text-2: rgba(255, 255, 255, .62);
-  --sm-text-3: rgba(255, 255, 255, .45);
-
-  --sm-accent: #5be07a;
-  --sm-accent-ink: #0d1a10;
-  --sm-accent-2: #4a8cff;
-  --sm-accent-3: #b06bff;
-  --sm-accent-soft: rgba(91, 224, 122, .16);
-  --sm-accent-soft-border: rgba(91, 224, 122, .4);
-  --sm-accent-grad: linear-gradient(90deg, #5be07a, #4a8cff);
-  --sm-accent-glow: rgba(91, 224, 122, .3);
-
-  --sm-danger: #ff8f6b;
-  --sm-danger-soft: rgba(255, 143, 107, .16);
-  --sm-danger-soft-border: rgba(255, 143, 107, .3);
-  --sm-warn: #ffd166;
-  --sm-warn-soft: rgba(255, 209, 102, .18);
-  --sm-info-soft: rgba(74, 140, 255, .2);
-  --sm-muted-soft: rgba(255, 255, 255, .12);
-  --sm-accent-2-ink: #ffffff;
-  --sm-accent-3-soft: rgba(176, 107, 255, .18);
-
+  --sm-bg: #faf9f5;
+  --sm-bg-soft: #fffefa;
+  --sm-page-bg: #faf9f5;
+  --sm-surface: #f0eee7;
+  --sm-surface-2: #f5f3ed;
+  --sm-surface-3: #e8e5dc;
+  --sm-border: #e6e3db;
+  --sm-border-strong: #d5d0c5;
+  --sm-divider: #e8e5dc;
+  --sm-text: #252521;
+  --sm-text-2: #716e65;
+  --sm-text-3: #837e72;
+  --sm-accent: #c9402b;
+  --sm-accent-ink: #ffffff;
+  --sm-accent-2: #596b7b;
+  --sm-accent-3: #7c6855;
+  --sm-accent-soft: #eee5de;
+  --sm-accent-soft-border: #d8b4a6;
+  --sm-accent-grad: linear-gradient(135deg, #bc6451, #7e6655);
+  --sm-accent-glow: rgba(201, 64, 43, .12);
+  --sm-danger: #c9402b;
+  --sm-danger-soft: #f4e2dc;
+  --sm-danger-soft-border: #dbb8aa;
+  --sm-warn: #875138;
+  --sm-warn-soft: #eee0d4;
+  --sm-info-soft: #e2e4ec;
+  --sm-muted-soft: #e8e8df;
+  --sm-accent-2-ink: #38465b;
+  --sm-accent-3-soft: #e4e8df;
   --sm-radius-card: 24rpx;
   --sm-radius-field: 16rpx;
-  --sm-radius-pill: 40rpx;
-  --sm-shadow: 0 16rpx 44rpx rgba(0, 0, 0, .4);
-  --sm-shadow-sm: 0 8rpx 20rpx rgba(0, 0, 0, .3);
-  --sm-blur: 20px;
-
-  --sm-glow-opacity: .5;
-  --sm-glow-1: #5be07a;
-  --sm-glow-2: #4a8cff;
-  --sm-glow-3: #b06bff;
-
-  --sm-hero-bg: linear-gradient(135deg, rgba(91, 224, 122, .4), rgba(74, 140, 255, .34));
-  --sm-hero-shade: linear-gradient(90deg, rgba(0, 0, 0, .82) 0%, rgba(0, 0, 0, .42) 52%, rgba(0, 0, 0, .04) 100%);
-  --sm-hero-ink-bg: rgba(255, 255, 255, .94);
-  --sm-hero-ink: #10131a;
-  --sm-avatar-bg: linear-gradient(135deg, rgba(91, 224, 122, .6), rgba(74, 140, 255, .55));
-  --sm-cover-bg: linear-gradient(135deg, rgba(91, 224, 122, .42) 0%, rgba(74, 140, 255, .4) 100%);
-  --sm-cover-ink: rgba(255, 255, 255, .9);
-  --sm-overlay-ink: rgba(16, 19, 26, .5);
-  --sm-mask: rgba(6, 8, 12, .62);
-
-  --sm-nav-bg: #10131a;
-  --sm-nav-text: #ffffff;
-  --sm-tabbar-bg: rgba(16, 19, 26, .72);
-  --sm-art-shadow: rgba(0, 0, 0, .42);
+  --sm-radius-pill: 999rpx;
+  --sm-shadow: 0 16rpx 48rpx rgba(49, 48, 30, .1);
+  --sm-shadow-sm: 0 4rpx 16rpx rgba(49, 48, 30, .05);
+  --sm-blur: 12px;
+  --sm-glow-opacity: 0;
+  --sm-glow-1: #ded4c4;
+  --sm-glow-2: #d6dbcf;
+  --sm-glow-3: #e3d6cd;
+  --sm-hero-bg: #344b46;
+  --sm-hero-shade: linear-gradient(0deg, rgba(16, 29, 25, .92), rgba(16, 29, 25, .05));
+  --sm-hero-ink-bg: #faf9f5;
+  --sm-hero-ink: #252521;
+  --sm-avatar-bg: #dfd5c1;
+  --sm-cover-bg: #d8d7cb;
+  --sm-cover-ink: #655e50;
+  --sm-overlay-ink: rgba(37, 37, 33, .55);
+  --sm-mask: rgba(37, 37, 33, .45);
+  --sm-nav-bg: #faf9f5;
+  --sm-nav-text: #252521;
+  --sm-tabbar-bg: rgba(250, 249, 245, .96);
+  --sm-art-shadow: rgba(49, 48, 30, .16);
 }
 
 /* ---- 主题 A：lime 绿意精致（浅色底 + 青柠绿强调） ---- */
@@ -687,7 +678,7 @@ page {
 /* 仅 H5 宽屏限宽；App 端（手机/折叠屏/平板）铺满，避免出现两侧空白与分隔线 */
 @media (min-width: 700px) {
   page {
-    max-width: 720px;
+    max-width: 1120px;
     margin: 0 auto;
   }
 }
@@ -772,4 +763,29 @@ page {
 .sm-glow.green { background: var(--sm-glow-1); }
 .sm-glow.blue { background: var(--sm-glow-2); }
 .sm-glow.purple { background: var(--sm-glow-3); }
+
+/* Shared interaction contract: readable controls, theme-aware focus and quiet motion. */
+:root {
+  --sm-space: 8px;
+  --sm-ease: cubic-bezier(.2, .8, .2, 1);
+}
+page { line-height: 1.5; -webkit-font-smoothing: antialiased; }
+button { font-family: inherit; color: inherit; }
+button:focus-visible, [tabindex]:focus-visible, input:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--sm-accent);
+  outline-offset: 4px;
+}
+input, textarea { min-width: 0; caret-color: var(--sm-accent); }
+button, [role='button'] { cursor: pointer; transition: opacity 120ms var(--sm-ease), transform 160ms var(--sm-ease); }
+button:active, [role='button']:active { opacity: .78; }
+button[disabled], [aria-disabled='true'] { cursor: default; opacity: .5; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}
+/* #ifdef H5 */
+@media (min-width: 960px) {
+  page { max-width: 1120px; }
+  .uni-page-head { border-bottom: 1px solid var(--sm-border); }
+}
+/* #endif */
 </style>

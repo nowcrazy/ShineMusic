@@ -8,6 +8,10 @@
       }
     },
     {
+      "path": "pages/charts/detail",
+      "style": { "navigationBarTitleText": "" }
+    },
+    {
       "path": "pages/catalog/collection",
       "style": { "navigationBarTitleText": "精选专题" }
     },

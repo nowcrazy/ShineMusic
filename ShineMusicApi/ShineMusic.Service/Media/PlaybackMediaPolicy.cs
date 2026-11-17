@@ -17,6 +17,12 @@ public static class PlaybackMediaPolicy
 {
     private const int DefaultTranscodeBitrateKbps = 192;
 
+    public static bool CanReuseOriginal(LibraryImportItem item) =>
+        (item.Container?.ToLowerInvariant(), item.Codec?.ToLowerInvariant()) is
+            ("mp3", "mp3") or ("m4a" or "mp4" or "aac", "aac");
+
+    public static bool NeedsCompatibilityCopy(LibraryImportItem item) => !CanReuseOriginal(item);
+
     /// <summary>
     /// 播放端点可直接流式输出的容器 → Content-Type。
     /// 与 CatalogController 的音频流端点共用此表，避免「发布时判可播、播放时判 415」的口径漂移。
@@ -27,7 +33,7 @@ public static class PlaybackMediaPolicy
         ["flac"] = "audio/flac",
         ["wav"] = "audio/wav",
         ["wave"] = "audio/wav",
-        ["aac"] = "audio/mp4",
+        ["aac"] = "audio/aac",
         ["m4a"] = "audio/mp4",
         ["m4b"] = "audio/mp4",
         ["mp4"] = "audio/mp4",
@@ -43,15 +49,6 @@ public static class PlaybackMediaPolicy
         ["dsf"] = "audio/dsf",
     };
 
-    private static readonly HashSet<string> LosslessCodecs = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "flac", "alac", "wavpack", "ape", "tta"
-    };
-
-    private static readonly HashSet<string> LosslessContainers = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "flac", "wav", "wave", "aiff", "aif", "wv", "ape"
-    };
 
     /// <summary>容器能否被播放端点直接输出；不支持时返回 null（对应 415）。</summary>
     public static string? TryGetContentType(string? container) =>
@@ -83,13 +80,6 @@ public static class PlaybackMediaPolicy
         return item.BitrateKbps.Value >= transcodeBitrate;
     }
 
-    private static bool IsLossless(LibraryImportItem item)
-    {
-        if (item.Codec is { } codec)
-        {
-            if (LosslessCodecs.Contains(codec)) return true;
-            if (codec.StartsWith("pcm_", StringComparison.OrdinalIgnoreCase)) return true;
-        }
-        return item.Container is { } container && LosslessContainers.Contains(container);
-    }
+    private static bool IsLossless(LibraryImportItem item) =>
+        ShineMusic.Model.Domain.AudioAdmissionPolicy.IsLosslessCodec(item.Codec);
 }

@@ -503,12 +503,12 @@ async function confirmCrop() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 24rpx 30rpx;
+  padding: calc(env(safe-area-inset-top) + 16px) 24px 16px;
   flex: none;
 }
 
 .cp-btn {
-  min-width: 110rpx;
+  min-width: 72px; min-height: 44px; display: grid; place-items: center;
   color: rgba(255, 255, 255, 0.75);
   font-size: 26rpx;
   text-align: center;
@@ -572,7 +572,7 @@ async function confirmCrop() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 22rpx 30rpx 34rpx;
+  padding: 16px 24px calc(env(safe-area-inset-bottom) + 24px); gap: 16px; flex-wrap: wrap;
   flex: none;
 }
 

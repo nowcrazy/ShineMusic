@@ -307,6 +307,8 @@ public sealed partial class MiguSourceProvider(
             return SourceQualities.Lossless;
         if (maxTone != "PQ" && HasQuality(entry, "HQ"))
             return SourceQualities.High;
+        if (maxTone != "PQ" && HasQuality(entry, "SQ"))
+            return SourceQualities.Lossless;
         return SourceQualities.Standard;
     }
 
@@ -317,6 +319,8 @@ public sealed partial class MiguSourceProvider(
             return "SQ";
         if (maxTone != "PQ" && resource.HasHq)
             return "HQ";
+        if (maxTone != "PQ" && resource.HasSq)
+            return "SQ";
         return "PQ";
     }
 
@@ -479,12 +483,9 @@ public sealed partial class MiguSourceProvider(
         if (string.IsNullOrWhiteSpace(pqUrl) || !pqUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
             throw new SourceUnavailableException("咪咕下载地址无效。");
 
-        // 3) 逐档下载：从配置允许的最高档开始，失败或返回非音频内容时自动降到下一档。
-        //    resourceinfo 声明「有 SQ」不代表 SQ 直链真的可取——2026-11-12 实测《月亮代表我的心》
-        //    声明 SQ，但换档后的 FLAC URL 返回 404 + text/vnd.wap.wml；原实现会把这个错误页
-        //    当成 .flac 保存下来（curl 未加 --fail），后续 ffprobe 才失败，且不会自动降档。
-        //    这里按 SQ→HQ→PQ 逐档实测，取第一个真正拿到音频文件的档位。
-        var toneLadder = BuildToneLadder(SelectTone(resource, options.Value.Migu.ToneFlag));
+        // 3) HQ 优先时仍允许回退到资源声明的 SQ；PQ 必须排在 SQ 之后，
+        //    避免先返回 128k 文件，被下游 192k 最低质量门槛拒绝而错过可用无损文件。
+        var toneLadder = BuildToneLadder(resource, options.Value.Migu.ToneFlag);
         SourceUnavailableException? lastFailure = null;
         foreach (var tone in toneLadder)
         {
@@ -519,19 +520,23 @@ public sealed partial class MiguSourceProvider(
             $"咪咕所有音质档均不可下载（{string.Join("/", toneLadder)}）：{lastFailure?.Message}");
     }
 
-    /// <summary>按配置允许的最高档构造降档链：SQ→HQ→PQ、HQ→PQ、PQ。</summary>
-    private static List<string> BuildToneLadder(string highestTone) => highestTone switch
+    /// <summary>按偏好及资源音质构造尝试顺序；所有高质量候选均在 PQ 之前。</summary>
+    private static List<string> BuildToneLadder(MiguResourceInfo resource, string configuredTone)
     {
-        "SQ" => ["SQ", "HQ", "PQ"],
-        "HQ" => ["HQ", "PQ"],
-        _ => ["PQ"]
-    };
+        var preferred = NormalizeTone(configuredTone);
+        var tones = new List<string>();
+        if (preferred == "SQ" && resource.HasSq) tones.Add("SQ");
+        if (preferred != "PQ" && resource.HasHq) tones.Add("HQ");
+        if (preferred == "HQ" && resource.HasSq) tones.Add("SQ");
+        tones.Add("PQ");
+        return tones;
+    }
 
     /// <summary>
     /// 校验下载结果确实是音频，而不是 CDN 的 404/鉴权错误页。
     /// 只看文件头魔数：fLaC / ID3 / MP3 帧同步 / OggS / RIFF / ftyp(M4A) / MAC(APE) / wvpk。
     /// </summary>
-    private static bool IsPlausibleAudioFile(string path)
+    internal static bool IsPlausibleAudioFile(string path)
     {
         try
         {
@@ -540,7 +545,8 @@ public sealed partial class MiguSourceProvider(
             var read = stream.Read(head, 0, head.Length);
             if (read < 4) return false;
             var ascii = Encoding.ASCII.GetString(head, 0, Math.Min(read, 4));
-            if (ascii is "fLaC" or "ID3" or "OggS" or "RIFF" or "MAC " or "wvpk") return true;
+            if (head[0] == 'I' && head[1] == 'D' && head[2] == '3') return true;
+            if (ascii is "fLaC" or "OggS" or "RIFF" or "MAC " or "wvpk") return true;
             // M4A/MP4：'ftyp' 位于偏移 4。
             if (read >= 8 && Encoding.ASCII.GetString(head, 4, 4) == "ftyp") return true;
             // MP3 裸流帧同步：0xFF Ex。

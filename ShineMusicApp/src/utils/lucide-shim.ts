@@ -332,6 +332,11 @@ export const MessageCircle = createShimIcon('MessageCircle', [
 export const MessageSquare = createShimIcon('MessageSquare', [
   ["path", { d: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z", key: "1lielz" }]
 ] as LucideNode[])
+export const MoreHorizontal = createShimIcon('MoreHorizontal', [
+  ["circle", { cx: "12", cy: "12", r: "1", key: "41hilf" }],
+  ["circle", { cx: "19", cy: "12", r: "1", key: "1wjl8i" }],
+  ["circle", { cx: "5", cy: "12", r: "1", key: "1pcz8c" }]
+] as LucideNode[])
 export const Music = createShimIcon('Music', [
   ["path", { d: "M9 18V5l12-2v13", key: "1jmyc2" }],
   ["circle", { cx: "6", cy: "18", r: "3", key: "fqmcym" }],

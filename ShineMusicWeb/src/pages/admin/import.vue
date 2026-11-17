@@ -2,7 +2,7 @@
 /**
  * 导入审核：批量上传音频/歌词，跟踪处理状态，试听并修正元数据后发布或拒绝。
  */
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import {
   ElMessage,
   ElMessageBox,
@@ -27,6 +27,7 @@ import {
 import { getUnmatchedTracks } from '@/services/admin-source-download'
 import UnmatchedTracksDialog from '@/components/UnmatchedTracksDialog.vue'
 import { describeError } from '@/services/errors'
+import { loadCurrentUser } from '@/services/session'
 import { formatTime } from '@/utils/format'
 import type { ApiLibraryImportItem } from '@/types/api.generated'
 
@@ -108,13 +109,29 @@ const uploadFiles = ref<UploadUserFile[]>([])
 const uploadRequestId = ref('')
 
 const previewUrl = computed(() => (current.value ? getPreviewUrl(current.value.id) : ''))
+const previewFailed = ref(false)
+const previewLoading = ref(false)
+const previewRevision = ref(0)
+watch(previewUrl, () => { previewFailed.value = false })
+async function reloadPreview() {
+  previewLoading.value = true
+  try {
+    await loadCurrentUser()
+    previewFailed.value = false
+    previewRevision.value++
+  } catch (error) {
+    ElMessage.error(describeError(error, '试听加载失败，请重新登录后再试'))
+  } finally {
+    previewLoading.value = false
+  }
+}
 const canReview = (item: ApiLibraryImportItem) =>
   ['pending_review', 'ready_to_publish', 'pending_publication'].includes(item.status)
 const canReject = (item: ApiLibraryImportItem) => !['published', 'rejected', 'identity_rejected'].includes(item.status)
 const canDismiss = (item: ApiLibraryImportItem) =>
   ['published', 'rejected', 'identity_rejected', 'processing_failed'].includes(item.status)
 
-/** AutoScore 分段颜色：≥90 绿（自动发布线）、75-89 黄（达旧发布线但需人工确认）、<75 红（需人工）、null 灰（未评分）。 */
+/** AutoScore 分段颜色：分数用于展示；是否自动发布由身份、完整性、质量和发布校验共同决定。 */
 function scoreTone(score: number | null | undefined) {
   if (score == null) return { color: 'var(--adm-text-3)', tone: 'info' as const, label: '未评' }
   if (score >= 90) return { color: '#22c55e', tone: 'success' as const, label: '优' }
@@ -122,12 +139,12 @@ function scoreTone(score: number | null | undefined) {
   return { color: '#ef4444', tone: 'danger' as const, label: '低分' }
 }
 
-/** 待审核条目里高分可自动发布的统计提示。 */
+/** 待审核条目统计：高分仅表示评分较高，不能单独代表自动发布资格。 */
 const pendingScoreStats = computed(() => {
   const pending = items.value.filter(i => i.status === 'pending_review')
-  const autoPublish = pending.filter(i => (i.autoScore ?? 0) >= 90).length
-  const lowQuality = pending.length - autoPublish
-  return { total: pending.length, autoPublish, lowQuality }
+  const highScore = pending.filter(i => (i.autoScore ?? 0) >= 90).length
+  const manual = pending.length - highScore
+  return { total: pending.length, autoPublish: highScore, lowQuality: manual }
 })
 
 /** 把后端 scoreBreakdown 转成模板渲染用的数组（label 为中文）。 */
@@ -533,7 +550,7 @@ onMounted(() => {
     <div class="page-heading">
       <div>
         <h2>导入审核</h2>
-        <p>上传音频后自动解析、转码，人工确认元数据后发布入库</p>
+        <p>音频自动解析与校验，按需生成兼容副本；符合发布条件的自动入库，其余在此审核</p>
       </div>
       <div class="heading-actions">
         <el-button :icon="Refresh" :loading="loading" @click="loadItems">刷新</el-button>
@@ -590,11 +607,11 @@ onMounted(() => {
         <span class="score-hint-text">
           当前待审核 <b>{{ pendingScoreStats.total }}</b> 条 ·
           <span v-if="pendingScoreStats.autoPublish > 0" class="hint-good">
-            {{ pendingScoreStats.autoPublish }} 条高分可一键发布
+            {{ pendingScoreStats.autoPublish }} 条高分仍需核对发布条件
           </span>
           <span v-if="pendingScoreStats.autoPublish > 0 && pendingScoreStats.lowQuality > 0"> · </span>
           <span v-if="pendingScoreStats.lowQuality > 0" class="hint-warn">
-            {{ pendingScoreStats.lowQuality }} 条低质量需人工处理
+            {{ pendingScoreStats.lowQuality }} 条需核对身份、版本或元数据
           </span>
         </span>
         <el-button
@@ -730,7 +747,7 @@ onMounted(() => {
       </div>
     </div>
 
-    <el-drawer v-model="drawerOpen" title="审核导入条目" size="620px" destroy-on-close>
+    <el-drawer v-model="drawerOpen" title="审核导入条目" size="min(620px, 100vw)" destroy-on-close>
       <template v-if="current">
         <el-alert
           v-if="matchAlert"
@@ -763,7 +780,11 @@ onMounted(() => {
               {{ warning }}
             </el-tag>
           </div>
-          <audio v-if="previewUrl" class="preview" :src="previewUrl" controls preload="none" />
+          <audio v-if="previewUrl" :key="previewRevision" class="preview" :src="previewUrl" controls preload="none" @error="previewFailed = true" @loadedmetadata="previewFailed = false" />
+          <div v-if="previewFailed" role="alert">
+            试听加载失败，可能是登录已过期、文件不可用或网络异常。
+            <el-button :loading="previewLoading" @click="reloadPreview">重新加载试听</el-button>
+          </div>
         </div>
 
         <!-- 自动评分面板 -->

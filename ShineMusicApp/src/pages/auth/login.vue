@@ -134,9 +134,9 @@ function editServerBase() {
 
     <text v-if="errorMessage" class="error-text">{{ errorMessage }}</text>
 
-    <view class="primary-button" :class="{ disabled: submitting }" @tap="handleLogin">
+    <button class="primary-button" :disabled="submitting" @tap="handleLogin">
       <text>{{ submitting ? $t('auth.loggingIn') : $t('auth.loginBtn') }}</text>
-    </view>
+    </button>
     <!-- 邀请注册入口 -->
     <view class="secondary-link" @tap="goRegister">
       <text>{{ $t('auth.inviteEmail') }}<text class="link">{{ $t('auth.useInviteToken') }}</text></text>
@@ -174,4 +174,12 @@ function editServerBase() {
 .server-entry { display: flex; flex-direction: column; align-items: center; margin-top: 40rpx; padding: 14rpx 20rpx; }
 .server-entry-label { color: var(--sm-text-3); font-size: 17rpx; }
 .server-entry-value { margin-top: 8rpx; color: var(--sm-text-2); font-size: 16rpx; }
+.auth-page { max-width: 560px; margin: 0 auto; }
+.auth-title { font-size: 56rpx; letter-spacing: -.04em; }
+.auth-sub { font-size: 26rpx; }
+.field-label { font-size: 24rpx; }
+.field-input { min-height: 52px; background: var(--sm-surface-2); font-size: 16px; border-radius: var(--sm-radius-field); }
+.primary-button { min-height: 52px; border-radius: var(--sm-radius-field); box-shadow: none; }
+.error-text { padding: 16rpx 24rpx; background: var(--sm-danger-soft); border-radius: var(--sm-radius-field); }
+@media (min-width: 960px) { .auth-page { min-height: auto; margin: 48px auto; padding: 48px; border: 1px solid var(--sm-border); border-radius: 24px; background: var(--sm-surface); box-shadow: var(--sm-shadow); } }
 </style>

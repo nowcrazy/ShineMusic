@@ -152,23 +152,25 @@ public sealed class LibraryImportJob(
             item.UpdatedAtUtc = DateTime.UtcNow;
             await db.Updateable(item).ExecuteCommandAsync(cancellationToken);
 
-            // 输出存储键格式：transcoded/{itemId}.m4a
-            var outputKey = $"transcoded/{item.Id:N}.m4a";
+            await mediaService.ValidateCompleteAsync(sourcePath, cancellationToken);
+            var reuseOriginal = !item.IsUserUpload && PlaybackMediaPolicy.CanReuseOriginal(item);
+            var outputKey = reuseOriginal ? item.SourceStorageKey : $"transcoded/{item.Id:N}.m4a";
             if (!storagePaths.TryResolve(outputKey, out var outputPath))
-                throw new MediaProcessingException(ErrorCodes.InternalError, "The transcode output path is invalid.");
-            // 调用 ffmpeg 将源文件转码为 AAC/m4a。
-            await mediaService.TranscodeToAacAsync(sourcePath, outputPath, transcodingOptions.Value.BitrateKbps, cancellationToken);
-            // 转码后再次探测，校验输出确实为 AAC 编码，防止静默失败。
-            var outputProbe = await mediaService.ProbeAsync(outputPath, cancellationToken);
-            if (!string.Equals(outputProbe.Codec, "aac", StringComparison.OrdinalIgnoreCase))
-                throw new MediaProcessingException(ErrorCodes.TranscodeFailed, "The output did not contain AAC audio.");
+                throw new MediaProcessingException(ErrorCodes.InternalError, "The output path is invalid.");
+            if (!reuseOriginal)
+            {
+                await mediaService.TranscodeToAacAsync(sourcePath, outputPath, transcodingOptions.Value.BitrateKbps, cancellationToken);
+                var outputProbe = await mediaService.ProbeAsync(outputPath, cancellationToken);
+                if (!string.Equals(outputProbe.Codec, "aac", StringComparison.OrdinalIgnoreCase))
+                    throw new MediaProcessingException(ErrorCodes.TranscodeFailed, "The output did not contain AAC audio.");
+            }
 
             // 阶段 4：完成 —— 转码产物落库，按来源分流：管理员导入进入人工审核发布队列；
             // 用户上传自动私有入库（立即可听），并进入“待审核转公开”队列。
             item.TranscodedStorageKey = outputKey;
             item.TranscodeStatus = "succeeded";
-            item.TranscodeFormat = "m4a";
-            item.TranscodeBitrateKbps = transcodingOptions.Value.BitrateKbps;
+            item.TranscodeFormat = reuseOriginal ? item.Container : "m4a";
+            item.TranscodeBitrateKbps = reuseOriginal ? item.BitrateKbps : transcodingOptions.Value.BitrateKbps;
 
             if (item.IsUserUpload)
             {
@@ -205,10 +207,7 @@ public sealed class LibraryImportJob(
                     item.AutoScore = score.Total;
                     item.AutoScoreBreakdownJson = score.ToBreakdownJson();
 
-                    if (AutoPublishPolicy.ShouldAutoPublish(
-                            hasSourceProvider: true,
-                            score.Total,
-                            Thresholds()))
+                    if (sourceDownloadOptions.Value.AutoPublishEnabled)
                     {
                         // PublishAsync 的前置守卫要求「已审核 + ReadyToPublish」，直通即视为评分审核通过。
                         item.IsMetadataReviewed = true;
@@ -702,7 +701,8 @@ public sealed class LibraryImportRetrySweepJob(
     ImportPublishService publishService,
     IOptions<SourceDownloadOptions> sourceDownloadOptions,
     IOptions<LibraryImportOptions> libraryImportOptions,
-    ILogger<LibraryImportRetrySweepJob> logger)
+    ILogger<LibraryImportRetrySweepJob> logger,
+    StorageGovernanceService storageGovernance)
 {
     /// <summary>processing_failed 的自动重试上限（超出后停留在 failed，需人工处理）。</summary>
     private const int MaxProcessingRetries = 2;
@@ -720,6 +720,8 @@ public sealed class LibraryImportRetrySweepJob(
     /// <summary>执行一轮恢复扫描与重投递。</summary>
     public async Task SweepAsync(CancellationToken cancellationToken)
     {
+        await storageGovernance.CleanupRetiredAsync(db, cancellationToken);
+        await publishService.RepairPublicationHousekeepingAsync(cancellationToken);
         var now = DateTime.UtcNow;
         // 卡在 lambda 外预计算好 DateTime 阈值；SqlSugar 可解析闭包捕获的局部变量。
         var stuckThreshold = now.AddMinutes(-IntermediateStuckMinutes);
@@ -815,12 +817,11 @@ public sealed class LibraryImportRetrySweepJob(
                 && item.IsMetadataReviewed == false
                 && item.IsUserUpload == false
                 && item.UpdatedAtUtc < autoPublishStuckThreshold
-                && item.AutoScore != null
+                && (item.SourceProvider != null || item.AutoScore != null)
                 && (
                     // 音源抓歌条目：AutoPublishEnabled 开 + 分数 ≥ 阈值
                     (item.SourceProvider != null
-                        && sourceDownloadOptions.Value.AutoPublishEnabled
-                        && item.AutoScore >= srcThreshold)
+                        && sourceDownloadOptions.Value.AutoPublishEnabled)
                     ||
                     // 管理员手动导入条目：AutoPublishEnabled 开 + 分数 ≥ 阈值
                     (item.SourceProvider == null

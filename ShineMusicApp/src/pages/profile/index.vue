@@ -8,7 +8,7 @@
 import { computed, ref } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
 import { useI18n } from 'vue-i18n'
-import { Camera, ChevronLeft, KeyRound, Trash2, UserRound } from 'lucide-vue-next'
+import { Camera, ChevronDown, ChevronUp, ChevronLeft, KeyRound, Trash2, UserRound } from 'lucide-vue-next'
 import { currentUser, isAuthenticated, loadCurrentUser } from '@/services/session'
 import { changePassword, deleteAvatar, updateDisplayName, uploadAvatar } from '@/services/profile'
 import { ApiError, resolveUrl } from '@/services/http'
@@ -29,6 +29,7 @@ const uploadingAvatar = ref(false)
 const avatarMessage = ref('')
 
 // —— 密码修改 ——
+const securityExpanded = ref(false)
 const currentPassword = ref('')
 const newPassword = ref('')
 const confirmPassword = ref('')
@@ -240,7 +241,12 @@ function goBack() {
 
       <!-- 修改密码 -->
       <view class="section">
-        <view class="section-title"><KeyRound :size="17" /> {{ $t('profilePage.changePassword') }}</view>
+        <button class="security-toggle" :aria-expanded="securityExpanded" @tap="securityExpanded = !securityExpanded">
+          <KeyRound :size="17" /><text>{{ $t('profilePage.accountSecurity') }}</text>
+          <ChevronUp v-if="securityExpanded" :size="18" /><ChevronDown v-else :size="18" />
+        </button>
+        <view v-show="securityExpanded">
+        <view class="section-title">{{ $t('profilePage.changePassword') }}</view>
         <input v-model="currentPassword" class="field-input" password :placeholder="$t('profilePage.currentPassword')" />
         <input v-model="newPassword" class="field-input" password :placeholder="$t('profilePage.newPasswordPlaceholder')" />
         <view class="strength-row">
@@ -255,6 +261,7 @@ function goBack() {
           <view class="save-button" :class="{ disabled: savingPassword }" @tap="handleSavePassword">
             <text>{{ savingPassword ? $t('profilePage.submitting') : $t('profilePage.changePassword') }}</text>
           </view>
+        </view>
         </view>
       </view>
 
@@ -298,4 +305,14 @@ function goBack() {
 .save-button.disabled { opacity: .6; }
 
 .bottom-space { height: 60rpx; }
+.page-title { font-size: 40rpx; }
+.section { padding: 32rpx; }
+.section-title { font-size: 28rpx; }
+.section-hint, .field-message { font-size: 24rpx; }
+.field-input { min-height: 48px; font-size: 16px; }
+.save-row { flex-wrap: wrap; }
+.security-toggle { display: flex; align-items: center; gap: 14rpx; width: 100%; margin: 0; padding: 12rpx 0; background: transparent; color: var(--sm-text); font-size: 28rpx; text-align: left; }
+.security-toggle text { flex: 1; }
+.security-toggle::after { border: 0; }
+@media (min-width: 960px) { .profile-page { max-width: 800px; margin: auto; } }
 </style>

@@ -43,7 +43,7 @@ public sealed class DeliveryContractTests
         Assert.True(result.IsAccepted);
         Assert.Equal(DeliveryContractCodes.Ok, result.ReasonCode);
         Assert.Empty(result.Failures);
-        Assert.Equal(256, result.EffectiveBitrateFloorKbps);
+        Assert.Equal(192, result.EffectiveBitrateFloorKbps);
     }
 
     [Fact]
@@ -125,14 +125,12 @@ public sealed class DeliveryContractTests
     }
 
     [Fact]
-    public void Fault_injection_primary_pointed_back_at_192k_transcode_is_rejected()
+    public void Explicit_higher_delivery_promise_rejects_lower_bitrate()
     {
-        // 评审 R2：只跑正常路径证明不了「系统不会退化」。
-        // 模拟历史 bug——原文件明明还在，却把 IsPrimary 指回 192k 转码副本。
-        // 此时不触发 original_unavailable 降档，192 < 256 必须被挡下。
+        // Admission permits 192k; an explicitly stronger delivery promise still applies.
         using var file = new TempAudioFile("ftyp", 4096, magicOffset: 4);
         var contract = Contract(contentType: "audio/mp4", bitrateKbps: 192,
-            expectedSizeBytes: 4096, originalFileAvailable: true);
+            expectedSizeBytes: 4096, originalFileAvailable: true, minimumBitrateKbps: 256);
         var result = DeliveryContractVerifier.Verify(contract, file.Path, 192);
 
         Assert.False(result.IsAccepted);

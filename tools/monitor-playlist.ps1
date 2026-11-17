@@ -1,5 +1,5 @@
 param(
-    [string]$PlaylistId = '69f3a872-94df-4c79-8c37-1fc9384d6515',
+    [string]$PlaylistId = '51549f0b-5509-46d7-a82f-f6ee5d9f06e0',
     [string]$OutputDirectory = (Join-Path $env:PI_SCRATCH_DIR 'playlist-monitor'),
     [switch]$Once
 )

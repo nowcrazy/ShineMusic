@@ -308,6 +308,11 @@ public sealed class CatalogController : ControllerBase
             return pagingError!;
 
         var query = db.Queryable<Genre>()
+            // Replacement characters indicate irreversibly damaged imported metadata.
+            // Keep the source row for correction, but never expose it as a browse filter.
+#pragma warning disable CA1847 // SqlSugar SQL translation uses the string overload.
+            .Where(genre => !genre.Name.Contains("\uFFFD"))
+#pragma warning restore CA1847
             .Where(genre => SqlFunc.Subqueryable<TrackGenre>()
                 .LeftJoin<Track>((link, track) => link.TrackId == track.Id)
                 .Where((link, track) => link.GenreId == genre.Id && track.PublishedAt.HasValue)
@@ -368,7 +373,7 @@ public sealed class CatalogController : ControllerBase
     }
 
     /// <summary>首页聚合缓存键（Redis）；首页是匿名高热端点，60s 短 TTL 即可削掉绝大部分重复查询。</summary>
-    private const string HomeCacheKey = "catalog:home:v1";
+    private const string HomeCacheKey = "catalog:home:v3";
 
     private static readonly DistributedCacheEntryOptions HomeCacheOptions = new()
     {
@@ -455,11 +460,11 @@ public sealed class CatalogController : ControllerBase
             track.TrackNumber,
             track.DiscNumber,
             track.ReleaseYear,
-            track.TrackGenres.Select(link => link.Genre.Name).Order().ToArray(),
+            track.TrackGenres.Select(link => link.Genre.Name).Where(name => !name.Contains('\uFFFD')).Order().ToArray(),
             track.DurationMs,
             ArtworkUrl(track.ArtworkId ?? track.Album?.ArtworkId),
             primaryAsset is null ? null : new AudioDto(primaryAsset.Container, primaryAsset.Codec, primaryAsset.BitrateKbps),
-            track.ReleaseDate, track.Isrc, MetadataMerge.List(track.AlbumArtistsJson), MetadataMerge.List(track.OriginalGenresJson));
+            track.ReleaseDate, track.Isrc, MetadataMerge.List(track.AlbumArtistsJson), MetadataMerge.List(track.OriginalGenresJson).Where(name => !name.Contains('\uFFFD')).ToArray());
     }
 
     /// <summary>批量构造歌单摘要：按集合 Id 统计各自「已发布曲目」数量（数据库行数口径），再映射 DTO。</summary>

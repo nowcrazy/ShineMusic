@@ -156,4 +156,10 @@ async function handleImport() {
 .spin { animation: sm-spin 1s linear infinite; }
 @keyframes sm-spin { to { transform: rotate(360deg); } }
 .page-bottom-spacer { height: 120rpx; }
+.url-card { padding: 40rpx; background: var(--sm-surface); border-radius: var(--sm-radius-card); }
+.url-input { min-height: 48px; font-size: 16px; }
+.page-sub, .track-artist { font-size: 24rpx; }
+.track-row { padding: 24rpx; margin-top: 16rpx; border: 1px solid var(--sm-border); border-radius: var(--sm-radius-field); background: var(--sm-surface); }
+.name-row { flex-wrap: wrap; }
+@media (min-width: 960px) { .import-page { max-width: 880px; margin: auto; } }
 </style>

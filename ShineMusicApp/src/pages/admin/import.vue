@@ -50,6 +50,7 @@ import {
 const { t } = useI18n()
 const batches = ref<readonly LibraryImportBatch[]>([])
 const selectedItemId = ref('')
+const showFileDetails = ref(false)
 const loading = ref(false)
 const uploading = ref(false)
 const saving = ref(false)
@@ -760,7 +761,8 @@ function statusClass(status: string): string {
       </view>
 
       <!-- 元数据概览 -->
-      <view class="meta-grid">
+      <button class="file-details-toggle" :aria-expanded="showFileDetails" @tap="showFileDetails = !showFileDetails">{{ $t('importReview.fileLabel') }} · {{ $t('importReview.formatLabel') }} {{ showFileDetails ? '−' : '+' }}</button>
+      <view v-if="showFileDetails" class="meta-grid">
         <view class="meta-cell">
           <text class="meta-label">{{ $t('importReview.fileLabel') }}</text>
           <text class="meta-value">{{ selectedItem.sourceFile.displayName }}</text>
@@ -890,6 +892,8 @@ function statusClass(status: string): string {
 </template>
 
 <style lang="scss" scoped>
+.file-details-toggle { width: 100%; margin: 20rpx 0; text-align: left; font-size: 26rpx; color: var(--sm-text-2); background: var(--sm-surface-2); border-radius: 16rpx; }
+.file-details-toggle::after { border: 0; }
 /* 曲库导入审核（方向 B · 玻璃质感）：深色底 + 彩色光晕 + 毛玻璃卡片 */
 .import-page { height: 100vh; padding: 30rpx 34rpx 0; box-sizing: border-box; background: var(--sm-page-bg); }
 .page-heading { display: flex; align-items: center; gap: 16rpx; padding: 10rpx 0 28rpx; }
@@ -995,4 +999,13 @@ function statusClass(status: string): string {
 .reject-button { display: flex; align-items: center; justify-content: center; gap: 8rpx; width: 140rpx; height: 78rpx; border-radius: 12rpx; background: var(--sm-danger-soft); color: var(--sm-danger); font-size: 17rpx; font-weight: 700; }
 
 .bottom-space { height: 50rpx; }
+.heading-title { font-size: 40rpx; }
+.heading-subtitle, .form-field, .item-meta { font-size: 24rpx; }
+.batch-card, .detail-panel { border-radius: var(--sm-radius-card); }
+.batch-header, .item-row { padding: 24rpx; }
+.batch-name, .item-title { font-size: 26rpx; }
+.detail-panel { padding: 32rpx; }
+.form-field input { min-height: 44px; font-size: 16px; }
+.action-row { flex-wrap: wrap; }
+@media (min-width: 960px) { .batch-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 24px; } }
 </style>

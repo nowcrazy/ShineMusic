@@ -8,6 +8,7 @@ import { ref, watch } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { useI18n } from 'vue-i18n'
 import { Check, Plus, Search } from 'lucide-vue-next'
+import PlayerBar from '@/components/PlayerBar.vue'
 import { searchTracks } from '@/services/catalog'
 import { addPlaylistTrack } from '@/services/library'
 import { playTrack } from '@/services/player'
@@ -109,7 +110,9 @@ async function handleAdd(track: Track) {
         <Plus v-else :size="17" />
       </view>
     </view>
+    <view class="page-bottom-spacer"></view>
   </view>
+  <PlayerBar />
 </template>
 
 <style lang="scss" scoped>
@@ -119,7 +122,7 @@ async function handleAdd(track: Track) {
 .search-box input { flex: 1; min-width: 0; height: 100%; color: var(--sm-text); font-size: 23rpx; }
 .search-box input::placeholder { color: var(--sm-text-3); }
 .state-text { padding: 80rpx 20rpx; color: var(--sm-text-2); font-size: 19rpx; text-align: center; }
-.pick-row { display: flex; align-items: center; min-height: 106rpx; gap: 16rpx; border-bottom: 1rpx solid var(--sm-divider); }
+.pick-row { display: flex; align-items: center; min-height: 136rpx; gap: 16rpx; padding: 24rpx; margin-top: 16rpx; border: 1px solid var(--sm-border); border-radius: var(--sm-radius-card); background: var(--sm-surface); }
 .pick-cover { flex: none; width: 76rpx; height: 76rpx; border-radius: 14rpx; background: var(--sm-surface-3); }
 .pick-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 7rpx; }
 .pick-title { overflow: hidden; color: var(--sm-text); font-size: 21rpx; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
@@ -127,4 +130,11 @@ async function handleAdd(track: Track) {
 .pick-duration { width: 60rpx; color: var(--sm-text-2); font-size: 16rpx; text-align: right; }
 .pick-add { display: grid; flex: none; place-items: center; width: 56rpx; height: 56rpx; border-radius: 50%; background: var(--sm-accent); color: var(--sm-accent-ink); }
 .pick-add.added { background: var(--sm-surface-3); color: var(--sm-text-2); }
+.search-box { min-height: 52px; border-radius: var(--sm-radius-field); }
+.search-box input { font-size: 16px; }
+.pick-title { font-size: 26rpx; }
+.pick-artist { font-size: 24rpx; }
+.pick-add { min-width: 40px; min-height: 40px; }
+.page-bottom-spacer { height: calc(180rpx + env(safe-area-inset-bottom)); }
+@media (max-width: 380px) { .pick-duration { display: none; } }
 </style>

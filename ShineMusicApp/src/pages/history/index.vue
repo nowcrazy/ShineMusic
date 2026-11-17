@@ -106,12 +106,12 @@ onReachBottom(loadMore)
 <style lang="scss" scoped>
 .history-page { min-height: 100vh; padding: 24rpx 40rpx 60rpx; background: var(--sm-page-bg); box-sizing: border-box; }
 .page-state { padding: 100rpx 20rpx; color: var(--sm-text-2); font-size: 19rpx; text-align: center; }
-.list-head { padding: 8rpx 0 18rpx; }
+.list-head { padding: 24rpx 32rpx; margin-bottom: 32rpx; background: var(--sm-surface); border: 1px solid var(--sm-border); border-radius: var(--sm-radius-card); }
 .list-count { color: var(--sm-text-2); font-size: 18rpx; }
 .history-item { margin-bottom: 28rpx; }
-.hi-head { display: flex; align-items: center; justify-content: space-between; padding: 0 6rpx 12rpx; }
-.hi-date { color: var(--sm-text); font-size: 23rpx; font-weight: 700; }
-.hi-count { color: var(--sm-text-3); font-size: 17rpx; }
+.hi-head { display: flex; align-items: center; justify-content: space-between; padding: 20rpx 8rpx; margin-top: 24rpx; }
+.hi-date { color: var(--sm-text); font-size: 30rpx; font-weight: 700; }
+.hi-count { color: var(--sm-text-2); font-size: 24rpx; }
 .load-more { padding: 30rpx 0 10rpx; color: var(--sm-accent); font-size: 18rpx; text-align: center; }
 .page-bottom-spacer { height: 180rpx; }
 </style>

@@ -12,6 +12,7 @@ import { useI18n } from 'vue-i18n'
 import { Play, RefreshCw, Sparkles } from 'lucide-vue-next'
 import TrackRow from '@/components/TrackRow.vue'
 import PlayerBar from '@/components/PlayerBar.vue'
+import CoverArt from '@/components/CoverArt.vue'
 import { getDailyRecommendations } from '@/services/recommend'
 import { playQueue } from '@/services/player'
 import type { Track } from '@/types/music'
@@ -69,24 +70,24 @@ onPullDownRefresh(async () => {
   <view class="daily-page">
     <!-- 顶部推荐头图 -->
     <view class="daily-hero">
-      <view class="hero-icon"><Sparkles :size="26" /></view>
+      <view class="hero-art"><CoverArt :src="tracks[0]?.cover || ''" :seed="t('daily.title')" :rounded="8" :icon-size="36" /></view>
       <view class="hero-copy">
         <text class="hero-title">{{ t('daily.title') }}</text>
         <text class="hero-sub">
           {{ dateLabel ? dateLabel + ' · ' : '' }}{{ personalized ? t('daily.personalizedSub') : t('daily.freshSub') }}
         </text>
       </view>
-      <view class="hero-play" :class="{ disabled: !tracks.length }" @tap="playAll">
+      <button v-if="!loading && !loadError && tracks.length" class="hero-play" @tap="playAll">
         <Play :size="20" fill="currentColor" />
         <text>{{ t('daily.play') }}</text>
-      </view>
+      </button>
     </view>
 
     <!-- 状态：加载中 / 失败 / 列表 -->
     <view v-if="loading" class="state-text">{{ t('daily.picking') }}</view>
     <view v-else-if="loadError" class="state-block">
       <text class="state-text">{{ t('daily.loadError') }}</text>
-      <view class="retry-button" @tap="load"><RefreshCw :size="17" /><text>{{ t('daily.retry') }}</text></view>
+      <button class="retry-button" @tap="load"><RefreshCw :size="17" /><text>{{ t('daily.retry') }}</text></button>
     </view>
     <template v-else>
       <view v-if="tracks.length" class="list-head"><text class="list-count">{{ t('daily.totalTracks', { count: tracks.length }) }}</text></view>
@@ -98,7 +99,6 @@ onPullDownRefresh(async () => {
         :queue="tracks"
       />
       <view v-if="!tracks.length" class="state-text">{{ t('daily.quiet') }}</view>
-      <view v-else class="list-end">{{ t('daily.daily30') }}</view>
     </template>
     <view class="page-bottom-spacer"></view>
   </view>
@@ -110,10 +110,10 @@ onPullDownRefresh(async () => {
 <style lang="scss" scoped>
 /* 每日推荐页（沿用 --sm-* 主题令牌） */
 .daily-page { min-height: 100vh; padding: 24rpx 40rpx 60rpx; background: var(--sm-page-bg); box-sizing: border-box; }
-.daily-hero { display: flex; align-items: center; gap: 20rpx; padding: 30rpx 28rpx; border: 1rpx solid var(--sm-border-strong); border-radius: var(--sm-radius-card); background: var(--sm-surface-3); box-shadow: 0 16rpx 40rpx var(--sm-art-shadow); }
+.daily-hero { display: flex; align-items: center; gap: 24rpx; padding: 40rpx 32rpx; border: 1px solid var(--sm-accent-soft-border); border-radius: var(--sm-radius-card); background: var(--sm-accent-soft); box-shadow: none; }
 .hero-icon { display: grid; place-items: center; width: 78rpx; height: 78rpx; border-radius: 24rpx; background: var(--sm-accent-soft); color: var(--sm-accent); }
 .hero-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 8rpx; }
-.hero-title { color: var(--sm-text); font-size: 32rpx; font-weight: 800; }
+.hero-title { color: var(--sm-text); font-size: 40rpx; font-weight: 800; }
 .hero-sub { color: var(--sm-text-2); font-size: 17rpx; }
 .hero-play { display: flex; align-items: center; gap: 8rpx; padding: 15rpx 24rpx; border-radius: var(--sm-radius-pill); background: var(--sm-hero-ink-bg); color: var(--sm-hero-ink); font-size: 18rpx; font-weight: 700; }
 .hero-play.disabled { opacity: .45; }
@@ -124,4 +124,15 @@ onPullDownRefresh(async () => {
 .list-count { color: var(--sm-text-2); font-size: 18rpx; }
 .list-end { padding: 36rpx 0 20rpx; color: var(--sm-text-3); font-size: 17rpx; text-align: center; }
 .page-bottom-spacer { height: 180rpx; }
+.daily-page { padding: 28px 24px 80px; max-width: 940px; margin: auto; }
+.daily-hero { display: grid; grid-template-columns: 112px minmax(0,1fr); gap: 12px 20px; padding: 0; background: transparent; border: 0; }
+.hero-art { width: 112px; height: 112px; grid-row: span 2; }
+.hero-title { font-size: 24px; line-height: 1.3; }
+.hero-sub { font-size: 12px; line-height: 1.6; }
+.hero-play { justify-self: start; margin: 0; padding: 10px 16px; font-size: 12px; line-height: 1.5; background: var(--sm-accent); color: var(--sm-accent-ink); }
+.hero-play::after, .retry-button::after { border: 0; }
+.list-head { padding: 24px 0 12px; }
+.list-count { font-size: 12px; }
+.state-text { font-size: 13px; }
+@media(min-width:800px) { .daily-page { padding: 32px 32px 80px; } }
 </style>

@@ -22,6 +22,29 @@ public static class MetadataMerge
     public static bool Locked(LibraryImportItem item, string field) => Audit(item.MetadataAuditJson).Any(a => a.Field == field && a.ManualLocked);
     public static bool HasConflicts(LibraryImportItem item) => Audit(item.MetadataAuditJson).Any(a => a.CandidateJson is not null);
 
+    // 描述性字段差异保留审计；仅身份相关的有效候选阻断自动发布。
+    public static bool HasBlockingConflicts(LibraryImportItem item) => Audit(item.MetadataAuditJson)
+        .Any(a => a.CandidateJson is not null
+            && a.Field is "title" or "artists" or "album" or "albumArtists" or "isrc"
+            && IsValidCandidateJson(a.CandidateJson));
+
+    private static bool IsValidCandidateJson(string json)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            return IsValidElement(document.RootElement);
+        }
+        catch (JsonException) { return true; } // 未知历史格式保持人工审核。
+    }
+
+    private static bool IsValidElement(JsonElement value) => value.ValueKind switch
+    {
+        JsonValueKind.String => !value.GetString()!.Contains('\uFFFD'),
+        JsonValueKind.Array => value.EnumerateArray().All(IsValidElement),
+        _ => true
+    };
+
     public static void RecordExisting(LibraryImportItem item, string field, object? value, string source, string? sourceId = null)
     {
         if (value is null) return;
@@ -41,6 +64,7 @@ public static class MetadataMerge
         var prior = rows.FirstOrDefault(a => a.Field == field);
         var value = JsonSerializer.Serialize(current);
         var proposed = JsonSerializer.Serialize(candidate);
+        if (!IsValidCandidateJson(proposed)) return false;
         if (prior?.ManualLocked == true || !empty)
         {
             if (value != proposed)

@@ -11,6 +11,7 @@ import App from './App.vue'
 import { reapplyThemeOnApp } from '@/utils/app-theme-bridge'
 import { installWebApiShim } from '@/utils/web-api-shim'
 import { createAppI18n, refreshNavigationBarTitle } from '@/locale'
+import { playerExpanded } from '@/services/player'
 
 /**
  * uni-app 定制 Vue 运行时额外导出的应用工厂。
@@ -49,6 +50,20 @@ export function createApp() {
       // #ifdef APP-PLUS
       reapplyThemeOnApp()
       // #endif
+    },
+    onBackPress(event: { from: string }) {
+      // #ifdef APP-PLUS
+      if (event.from === 'navigateBack') return false
+      if (playerExpanded.value) {
+        playerExpanded.value = false
+        return true
+      }
+      if (getCurrentPages().length === 1 && plus.os.name === 'Android') {
+        plus.android.invoke(plus.android.runtimeMainActivity(), 'moveTaskToBack', true)
+        return true
+      }
+      // #endif
+      return false
     },
   })
   return { app }

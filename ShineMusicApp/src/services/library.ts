@@ -37,6 +37,9 @@ const favoritesLoaded = ref(false)
 const favoritesLoading = ref(false)
 // 已收藏曲目列表（已通过 mapTrack 映射为前端 Track）
 export const favoriteTracks = ref<Track[]>([])
+export const favoritesTotal = ref(0)
+let favoritesGeneration = 0
+let favoritesPending: Promise<void> | null = null
 
 /**
  * 判断某曲目是否已收藏，返回响应式计算属性。
@@ -56,21 +59,31 @@ export const isFavorite = (trackId: string) => computed(() => favoriteIds.value.
  * @returns 无返回值，结果写入 module 级 ref
  * @throws 网络或后端错误
  */
-export async function loadFavorites(force = false) {
-  if ((favoritesLoaded.value || favoritesLoading.value) && !force) return
+export function loadFavorites(force = false): Promise<void> {
+  if (favoritesPending) return favoritesPending
+  if (favoritesLoaded.value && !force) return Promise.resolve()
+  const version = favoritesGeneration
   favoritesLoading.value = true
-  try {
-    // GET /me/favorites?pageSize=100
-    const result = await http.get<ApiPageResult<ApiTrack>>(
-      `${API_PREFIX}/me/favorites?pageSize=100`,
-    )
-    // 复用 catalog.mapTrack，确保收藏曲目与目录曲目结构一致
-    favoriteTracks.value = result.items.map(mapTrack)
-    favoriteIds.value = new Set(result.items.map((track) => track.id))
-    favoritesLoaded.value = true
-  } finally {
-    favoritesLoading.value = false
-  }
+  favoritesPending = (async () => {
+    try {
+      const items: ApiTrack[] = []
+      let total = 0
+      for (let page = 1; ; page++) {
+        const result = await http.get<ApiPageResult<ApiTrack>>(`${API_PREFIX}/me/favorites?page=${page}&pageSize=100`)
+        if (version !== favoritesGeneration) return
+        items.push(...result.items)
+        total = result.total
+        if (!result.items.length || items.length >= total) break
+      }
+      favoriteTracks.value = items.map(mapTrack)
+      favoritesTotal.value = total
+      favoriteIds.value = new Set(items.map(track => track.id))
+      favoritesLoaded.value = true
+    } finally {
+      if (version === favoritesGeneration) { favoritesLoading.value = false; favoritesPending = null }
+    }
+  })()
+  return favoritesPending
 }
 
 /**
@@ -79,8 +92,12 @@ export async function loadFavorites(force = false) {
  * 副作用：重置 favoriteIds、favoriteTracks、favoritesLoaded，不发起请求。
  */
 export function resetLibrary() {
+  favoritesGeneration++
+  favoritesPending = null
+  favoritesLoading.value = false
   favoriteIds.value = new Set()
   favoriteTracks.value = []
+  favoritesTotal.value = 0
   favoritesLoaded.value = false
 }
 
@@ -96,6 +113,7 @@ export function resetLibrary() {
  */
 export async function toggleFavorite(track: Track): Promise<boolean> {
   const liked = favoriteIds.value.has(track.id)
+  favoritesTotal.value = Math.max(0, favoritesTotal.value + (liked ? -1 : 1))
   // 乐观更新，失败回滚
   const next = new Set(favoriteIds.value)
   if (liked) next.delete(track.id)
@@ -113,6 +131,7 @@ export async function toggleFavorite(track: Track): Promise<boolean> {
     }
     return !liked
   } catch (error) {
+    favoritesTotal.value = Math.max(0, favoritesTotal.value + (liked ? 1 : -1))
     const rollback = new Set(favoriteIds.value)
     if (liked) rollback.add(track.id)
     else rollback.delete(track.id)

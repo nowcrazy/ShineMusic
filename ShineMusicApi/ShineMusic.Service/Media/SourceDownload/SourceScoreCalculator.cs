@@ -172,7 +172,7 @@ public static class SourceScoreCalculator
         var score = 0;
         var missing = new List<string>();
 
-        if (!string.IsNullOrWhiteSpace(item.Title)) score += 5; else missing.Add("标题(-5)");
+        if (!string.IsNullOrWhiteSpace(item.Title) && !item.Title.Contains('\uFFFD')) score += 5; else missing.Add("标题缺失或无效(-5)");
         if (DeserializeList(item.ArtistsJson).Count > 0) score += 5; else missing.Add("艺人(-5)");
         if (!string.IsNullOrWhiteSpace(item.AlbumTitle)) score += 3; else missing.Add("专辑(-3)");
         if (DeserializeList(item.GenresJson).Count > 0) score += 2; else missing.Add("流派(-2)");
@@ -187,10 +187,11 @@ public static class SourceScoreCalculator
     /// <summary>歌词匹配度：按匹配置信度线性折算到配置满分。</summary>
     private static SourceScoreDimension ScoreLyrics(LibraryImportItem item, int max)
     {
-        if (item.LyricsConfidence is not > 0)
-            return new SourceScoreDimension(0, max, "no lyrics matched");
-        var score = (int)Math.Round(item.LyricsConfidence.Value * max, MidpointRounding.AwayFromZero);
-        return new SourceScoreDimension(score, max, $"confidence {item.LyricsConfidence.Value:0.##} × {max}");
+        if (item.LyricsConfidence is not > 0 || !double.IsFinite(item.LyricsConfidence.Value))
+            return new SourceScoreDimension(0, max, "no valid lyrics confidence");
+        var confidence = Math.Clamp(item.LyricsConfidence.Value, 0, 1);
+        var score = (int)Math.Round(confidence * max, MidpointRounding.AwayFromZero);
+        return new SourceScoreDimension(score, max, $"confidence {confidence:0.##} × {max}");
     }
 
     /// <summary>判定无损：codec 命中白名单，或 codec 是 PCM 系（wav/aiff 容器），或容器命中白名单。</summary>
@@ -209,7 +210,8 @@ public static class SourceScoreCalculator
         if (string.IsNullOrWhiteSpace(json)) return [];
         try
         {
-            return JsonSerializer.Deserialize<List<string>>(json) ?? [];
+            return (JsonSerializer.Deserialize<List<string>>(json) ?? [])
+                .Where(value => !string.IsNullOrWhiteSpace(value) && !value.Contains('\uFFFD')).ToList();
         }
         catch (JsonException)
         {

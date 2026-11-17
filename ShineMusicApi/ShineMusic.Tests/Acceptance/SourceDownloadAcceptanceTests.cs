@@ -165,10 +165,19 @@ public sealed class SourceDownloadAcceptanceTests
         f.Bus.FailImports = false;
         item.UpdatedAtUtc = DateTime.UtcNow.AddMinutes(-2);
         await f.Db.Updateable(item).ExecuteCommandAsync();
-        var sweep = new ShineMusic.Service.LibraryImportRetrySweepJob(f.Db, f.Bus, null!,
+        f.Db.CodeFirst.InitTables<MediaAsset, Artwork>();
+        var publisher = new ShineMusic.Service.ImportPublishService(f.Db,
+            Microsoft.Extensions.Options.Options.Create(new ShineMusic.Model.Options.SongRequestFulfillmentOptions()), null!, null!,
+            NullLogger<ShineMusic.Service.ImportPublishService>.Instance, null!, null!);
+        var sweep = new ShineMusic.Service.LibraryImportRetrySweepJob(f.Db, f.Bus, publisher,
             Microsoft.Extensions.Options.Options.Create(f.Options),
             Microsoft.Extensions.Options.Options.Create(new ShineMusic.Model.Options.LibraryImportOptions()),
-            NullLogger<ShineMusic.Service.LibraryImportRetrySweepJob>.Instance);
+            NullLogger<ShineMusic.Service.LibraryImportRetrySweepJob>.Instance,
+            new ShineMusic.Service.StorageGovernanceService(
+                new ShineMusic.Repository.Data.LibraryStoragePaths(
+                    Microsoft.Extensions.Options.Options.Create(new ShineMusic.Model.Options.StorageOptions { LibraryRoot = f.Root }),
+                    new TestEnvironment { ContentRootPath = f.Root }),
+                NullLogger<ShineMusic.Service.StorageGovernanceService>.Instance));
         await sweep.SweepAsync(default);
         Assert.Contains(f.Bus.Messages, message => message.Queue == QueueNames.Imports && message.Id == item.Id);
     }
@@ -281,6 +290,7 @@ public sealed class SourceDownloadAcceptanceTests
     public async Task A06_Sq_network_or_validation_failure_attempts_hq_in_order(bool networkFailure)
     {
         using var f = new SourceDownloadAcceptanceFixture();
+        f.Options.ProviderFramework.QualityPolicy.PreferredQuality = "Lossless";
         f.Primary.Candidates = [LadderProvider.Candidate("sq", true, 935), LadderProvider.Candidate("hq", false, 320)];
         if (networkFailure)
             f.Http.Respond = path => path.Contains("sq") ? new(HttpStatusCode.ServiceUnavailable) :
@@ -305,14 +315,13 @@ public sealed class SourceDownloadAcceptanceTests
         f.Primary.Candidates = [LadderProvider.Candidate("claimed-hq", false, 320)];
         var task = f.Seed();
         await f.Job().ProcessAsync(task.Id, default);
-        if (allowLossy) AssertImported(f, task.Id);
-        else AssertRejected(f, task.Id);
+        AssertRejected(f, task.Id);
     }
 
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task A07_Low_candidate_is_only_downloaded_when_explicitly_allowed(bool allowLossy)
+    public async Task A07_Subminimum_candidate_is_never_downloaded(bool allowLossy)
     {
         using var f = new SourceDownloadAcceptanceFixture();
         f.Options.ProviderFramework.QualityPolicy.AllowLossyFallback = allowLossy;
@@ -322,9 +331,8 @@ public sealed class SourceDownloadAcceptanceTests
             f.Http.Requests.Last().Contains("hq") ? ScriptedMedia.Mp3(320, 11000) : ScriptedMedia.Mp3(128);
         var task = f.Seed();
         await f.Job().ProcessAsync(task.Id, default);
-        Assert.Equal(allowLossy ? new[] { "/sq.flac", "/hq.mp3", "/pq.mp3" } : new[] { "/sq.flac", "/hq.mp3" }, f.Http.Requests);
-        if (allowLossy) AssertImported(f, task.Id);
-        else AssertRejected(f, task.Id);
+        Assert.Equal(new[] { "/hq.mp3", "/sq.flac" }, f.Http.Requests);
+        AssertRejected(f, task.Id);
     }
 
     [Theory]

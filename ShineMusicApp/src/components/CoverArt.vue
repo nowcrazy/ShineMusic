@@ -98,5 +98,5 @@ const placeholderStyle = computed(() => {
 
 <style scoped>
 .cover-art { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-.cover-placeholder { color: var(--sm-cover-ink); }
+.cover-placeholder { color: var(--sm-cover-ink); background-image: radial-gradient(circle at 30% 20%, var(--sm-accent-soft), transparent 70%); border: 1px solid var(--sm-border); }
 </style>

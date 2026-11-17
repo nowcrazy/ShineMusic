@@ -11,7 +11,7 @@
  */
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Check, ImagePlus, LogIn, Palette, RefreshCw, Trash2 } from 'lucide-vue-next'
+import { Check, ChevronDown, ChevronUp, ImagePlus, LogIn, Palette, RefreshCw, Trash2 } from 'lucide-vue-next'
 import {
   applyCustomTheme,
   applyTheme,
@@ -36,6 +36,7 @@ import { isAuthenticated, requireLogin } from '@/services/session'
 
 // 文案多语言
 const { t } = useI18n()
+const customExpanded = ref(false)
 
 /** 取色中（选图后到色板生成为止） */
 const extracting = ref(false)
@@ -286,13 +287,37 @@ function removeCustom() {
       </view>
     </view>
 
+    <!-- 预设主题是默认主任务；壁纸编辑按需展开。 -->
+    <view class="section-title-row"><text class="section-title">{{ $t('themePage.presetSectionTitle') }}</text></view>
+    <view class="theme-list">
+      <view v-for="theme in THEMES" :key="theme.id" class="theme-card" :class="{ active: currentTheme === theme.id }" @tap="selectTheme(theme.id)">
+        <view class="theme-preview" :style="{ background: theme.swatch.bg }">
+          <view class="preview-card" :style="{ background: theme.swatch.surface, borderColor: theme.swatch.accent }">
+            <view class="preview-dot" :style="{ background: theme.swatch.accent }"></view>
+            <view class="preview-lines">
+              <view class="preview-line" :style="{ background: theme.swatch.text }"></view>
+              <view class="preview-line short" :style="{ background: theme.swatch.text }"></view>
+            </view>
+          </view>
+          <view class="preview-pill" :style="{ background: theme.swatch.accent }"></view>
+        </view>
+        <view class="theme-copy">
+          <view class="theme-name-row"><text class="theme-name">{{ $t(theme.nameKey) }}</text><text class="theme-tone">{{ $t(theme.toneKey) }}</text></view>
+          <text class="theme-desc">{{ $t(theme.descKey) }}</text>
+        </view>
+        <view class="theme-check" :class="{ checked: currentTheme === theme.id }"><Check v-if="currentTheme === theme.id" :size="14" /></view>
+      </view>
+    </view>
+
     <!-- ===== 自定义图片主题 ===== -->
-    <view class="section-title-row">
+    <button class="section-title-row custom-toggle" :aria-expanded="customExpanded" @tap="customExpanded = !customExpanded">
       <text class="section-title">{{ $t('themePage.customSectionTitle') }}</text>
       <text v-if="hasCustom" class="section-badge" :class="{ on: isCustomActive }">
         {{ isCustomActive ? $t('themePage.statusActive') : $t('themePage.statusInactive') }}
       </text>
-    </view>
+      <ChevronUp v-if="customExpanded" :size="18" /><ChevronDown v-else :size="18" />
+    </button>
+    <view v-show="customExpanded">
 
     <!-- 未登录：引导 -->
     <view v-if="!isAuthenticated" class="custom-card login-hint">
@@ -385,46 +410,6 @@ function removeCustom() {
       </view>
     </view>
 
-    <!-- ===== 预设主题 ===== -->
-    <view class="section-title-row">
-      <text class="section-title">{{ $t('themePage.presetSectionTitle') }}</text>
-    </view>
-
-    <!-- 主题卡片列表 -->
-    <view class="theme-list">
-      <view
-        v-for="theme in THEMES"
-        :key="theme.id"
-        class="theme-card"
-        :class="{ active: currentTheme === theme.id }"
-        @tap="selectTheme(theme.id)"
-      >
-        <!-- 迷你预览：用该主题自身的色卡绘制，不受当前主题影响 -->
-        <view class="theme-preview" :style="{ background: theme.swatch.bg }">
-          <view class="preview-card" :style="{ background: theme.swatch.surface, borderColor: theme.swatch.accent }">
-            <view class="preview-dot" :style="{ background: theme.swatch.accent }"></view>
-            <view class="preview-lines">
-              <view class="preview-line" :style="{ background: theme.swatch.text }"></view>
-              <view class="preview-line short" :style="{ background: theme.swatch.text }"></view>
-            </view>
-          </view>
-          <view class="preview-pill" :style="{ background: theme.swatch.accent }"></view>
-        </view>
-
-        <!-- 主题信息 -->
-        <view class="theme-copy">
-          <view class="theme-name-row">
-            <text class="theme-name">{{ $t(theme.nameKey) }}</text>
-            <text class="theme-tone">{{ $t(theme.toneKey) }}</text>
-          </view>
-          <text class="theme-desc">{{ $t(theme.descKey) }}</text>
-        </view>
-
-        <!-- 选中标记 -->
-        <view class="theme-check" :class="{ checked: currentTheme === theme.id }">
-          <Check v-if="currentTheme === theme.id" :size="14" />
-        </view>
-      </view>
     </view>
 
     <view class="bottom-space"></view>
@@ -506,7 +491,7 @@ function removeCustom() {
 .action-button.danger { border-color: var(--sm-danger-soft-border); background: var(--sm-danger-soft); color: var(--sm-danger); }
 
 /* ===== 预设主题列表 ===== */
-.theme-list { display: flex; flex-direction: column; gap: 18rpx; }
+.theme-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24rpx; }
 
 .theme-card {
   display: flex;
@@ -569,4 +554,11 @@ function removeCustom() {
 .theme-check.checked { border-color: transparent; background: var(--sm-accent); }
 
 .bottom-space { height: 60rpx; }
+.heading-title { font-size: 40rpx; }
+.heading-subtitle, .theme-desc { font-size: 24rpx; }
+.theme-card { min-width: 0; padding: 28rpx; }
+.theme-name-row, .palette-row, .custom-actions { flex-wrap: wrap; }
+.upload-area { border-radius: var(--sm-radius-card); }
+.custom-toggle { width: 100%; margin: 32rpx 0 16rpx; padding: 24rpx; justify-content: space-between; background: var(--sm-surface); color: var(--sm-text-2); border-radius: var(--sm-radius-field); text-align: left; }
+@media (min-width: 960px) { .theme-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } .custom-card { padding: 32px; } }
 </style>

@@ -1,110 +1,83 @@
 <script setup lang="ts">
-/**
- * 精选专题详情页：展示专题封面、简介与专题内曲目列表，支持播放全部。
- * 进入参数（onLoad query）：id —— 专题 ID（缺失时直接展示错误态）。
- * 对应后端接口：services/catalog.getCollection（返回专题详情 + 曲目列表）。
- */
-import { ref } from 'vue'
-import { onLoad } from '@dcloudio/uni-app'
-import { Music2, Play } from 'lucide-vue-next'
+import { computed, ref, watch } from 'vue'
+import { onLoad, onShow } from '@dcloudio/uni-app'
+import { useI18n } from 'vue-i18n'
+import { Heart, Play } from 'lucide-vue-next'
 import TrackRow from '@/components/TrackRow.vue'
 import PlayerBar from '@/components/PlayerBar.vue'
+import CoverArt from '@/components/CoverArt.vue'
 import { getCollection } from '@/services/catalog'
 import { resolveUrl } from '@/services/http'
 import { playQueue } from '@/services/player'
+import { isAuthenticated, requireLogin } from '@/services/session'
+import { useCapabilities } from '@/services/capabilities'
+import { loadSavedCollections, savedCollectionIds, savedCollectionsLoading, savedCollectionsError, savingCollectionIds, toggleSavedCollection } from '@/services/saved-collections'
 import type { ApiCollectionDetail, Track } from '@/types/music'
-
-// 页面状态：专题详情 / 曲目列表 / 封面完整 URL / 加载中 / 加载失败
+const { t } = useI18n()
+const capabilities = useCapabilities()
+const id = ref('')
 const detail = ref<ApiCollectionDetail | null>(null)
 const tracks = ref<Track[]>([])
-const cover = ref('')
 const loading = ref(true)
 const loadError = ref(false)
-
-/**
- * 页面入参解析：必须携带 id，缺参直接进入错误态，否则拉取详情
- * @param options onLoad query，期望含 id
- */
-onLoad((options) => {
-  const id = options?.id
-  if (!id) {
-    loadError.value = true
-    loading.value = false
-    return
-  }
-  void load(id)
-})
-
-/**
- * 加载专题详情与曲目，并同步原生导航栏标题
- * @param id 专题 ID
- * 关键副作用：失败置 loadError；无论成败关闭 loading
- */
-async function load(id: string) {
+const saved = computed(() => savedCollectionIds.value.has(id.value))
+const saveMessage = ref('')
+async function refreshSaved() { try { await loadSavedCollections(true) } catch { /* visible inline retry */ } }
+watch(isAuthenticated, () => { saveMessage.value = ''; void refreshSaved() })
+onShow(() => { void refreshSaved() })
+onLoad(options => { id.value = String(options?.id ?? ''); void load() })
+async function load() {
+  loading.value = true
+  loadError.value = false
   try {
-    const result = await getCollection(id)
+    if (!id.value) throw new Error('Missing collection id')
+    const result = await getCollection(id.value)
     detail.value = result.detail
     tracks.value = result.tracks
-    cover.value = result.detail.artworkUrl ? resolveUrl(result.detail.artworkUrl) : ''
     uni.setNavigationBarTitle({ title: result.detail.title })
-  } catch {
-    loadError.value = true
-  } finally {
-    loading.value = false
-  }
+  } catch { loadError.value = true } finally { loading.value = false }
 }
-
-/** 播放全部：将专题曲目整体作为队列交给播放器（空列表不响应） */
-function playAll() {
-  if (tracks.value.length) playQueue(tracks.value)
+async function toggleSave() {
+  if (!requireLogin() || !detail.value) return
+  saveMessage.value = ''
+  try {
+    await toggleSavedCollection({ ...detail.value, trackCount: tracks.value.length })
+    saveMessage.value = t(saved.value ? 'homePage.collectionSaved' : 'homePage.collectionUnsaved')
+  } catch { saveMessage.value = t('homePage.operationFailed') }
 }
 </script>
-
 <template>
-  <scroll-view class="detail-page" scroll-y :show-scrollbar="false">
-    <!-- 加载中 / 失败或不存在 的状态提示 -->
-    <view v-if="loading" class="state-text">{{ $t('catalogPage.loading') }}</view>
-    <view v-else-if="loadError || !detail" class="state-text">{{ $t('catalogPage.collectionUnavailable') }}</view>
+  <view class="detail-page">
+    <view v-if="loading" class="state-text" role="status">{{ t('catalogPage.loading') }}</view>
+    <view v-else-if="loadError || !detail" class="state-text"><text>{{ t('catalogPage.collectionUnavailable') }}</text><button class="retry" @tap="load">{{ t('app.retry') }}</button></view>
     <template v-else>
-      <!-- 专题头部：封面、标题、简介、曲目数、播放全部 -->
-      <view class="detail-header">
-        <image v-if="cover" class="detail-art" :src="cover" mode="aspectFill" />
-        <view v-else class="detail-art detail-art-fallback"><Music2 :size="46" /></view>
-        <text class="detail-title">{{ detail.title }}</text>
-        <text v-if="detail.description" class="detail-sub">{{ detail.description }}</text>
-        <text class="detail-meta">{{ $t('catalogPage.editorialPicks') }} · {{ $t('catalog.trackCount', { count: tracks.length }) }}</text>
-        <view class="play-all" @tap="playAll"><Play :size="16" fill="currentColor" /><text>{{ $t('catalogPage.playAll') }}</text></view>
-      </view>
-      <!-- 专题曲目列表（空专题给出空态提示） -->
-      <view class="detail-list">
-        <TrackRow
-          v-for="(track, index) in tracks"
-          :key="track.id"
-          :track="track"
-          :index="index"
-          :queue="tracks"
-        />
-        <view v-if="!tracks.length" class="state-text">{{ $t('catalogPage.collectionNoTracks') }}</view>
-      </view>
-      <view class="page-bottom-spacer"></view>
+      <view class="detail-header"><view class="detail-art"><CoverArt :src="detail.artworkUrl ? resolveUrl(detail.artworkUrl) : ''" :seed="detail.title" :rounded="8" :icon-size="44" /></view><view class="detail-copy"><text class="eyebrow">{{ t('catalogPage.editorialPicks') }}</text><text class="detail-title">{{ detail.title }}</text><text v-if="detail.description" class="detail-sub">{{ detail.description }}</text><text class="detail-meta">{{ t('catalog.trackCount', { count: tracks.length }) }}</text></view></view>
+      <view class="detail-actions"><button class="play-all" :disabled="!tracks.length" @tap="playQueue(tracks)"><Play :size="16" fill="currentColor" />{{ t('catalogPage.playAll') }}</button><button v-if="capabilities.capabilities.editorialCollections" class="save-button" :class="{ saved }" :aria-pressed="saved" :disabled="savedCollectionsLoading || savingCollectionIds.size > 0" @tap="toggleSave"><Heart :size="16" :fill="saved ? 'currentColor' : 'none'" />{{ t(saved ? 'homePage.unsaveCollection' : 'homePage.saveCollection') }}</button></view>
+      <view v-if="savedCollectionsLoading" class="state-text" role="status">{{ t('homePage.loading') }}</view>
+      <button v-else-if="savedCollectionsError && isAuthenticated" class="retry" @tap="refreshSaved">{{ t('homePage.savedLoadFailed') }} · {{ t('app.retry') }}</button>
+      <text v-if="saveMessage" class="save-message" role="status">{{ saveMessage }}</text>
+      <view class="detail-list"><TrackRow v-for="(track, index) in tracks" :key="track.id" :track="track" :index="index" :queue="tracks" /><view v-if="!tracks.length" class="state-text">{{ t('catalogPage.collectionNoTracks') }}</view></view>
     </template>
-  </scroll-view>
-
-  <!-- 全局播放条 -->
+  </view>
   <PlayerBar />
 </template>
-
-<style lang="scss" scoped>
-/* 专题详情（方向 B · 玻璃质感） */
-.detail-page { height: 100vh; padding: 32rpx 40rpx 0; box-sizing: border-box; background: var(--sm-page-bg); }
-.state-text { padding: 80rpx 20rpx; color: var(--sm-text-2); font-size: 19rpx; text-align: center; }
-.detail-header { display: flex; flex-direction: column; align-items: flex-start; padding: 12rpx 0 20rpx; }
-.detail-art { width: 300rpx; height: 300rpx; align-self: center; border: 1rpx solid var(--sm-border-strong); border-radius: 26rpx; background: var(--sm-surface-3); box-shadow: 0 18rpx 44rpx var(--sm-art-shadow); }
-.detail-art-fallback { display: grid; place-items: center; color: var(--sm-text-3); }
-.detail-title { margin-top: 30rpx; color: var(--sm-text); font-size: 38rpx; font-weight: 800; }
-.detail-sub { margin-top: 12rpx; color: var(--sm-text-2); font-size: 20rpx; line-height: 1.6; }
-.detail-meta { margin-top: 14rpx; color: var(--sm-text-2); font-size: 17rpx; }
-.play-all { display: flex; align-items: center; gap: 10rpx; margin-top: 26rpx; padding: 16rpx 34rpx; border-radius: 44rpx; background: var(--sm-accent); color: var(--sm-accent-ink); font-size: 20rpx; font-weight: 800; box-shadow: 0 10rpx 30rpx var(--sm-accent-glow); }
-.detail-list { margin-top: 26rpx; }
-.page-bottom-spacer { height: 180rpx; }
+<style scoped lang="scss">
+.detail-page { box-sizing: border-box; min-height: 100vh; padding: 28px 24px 160px; background: var(--sm-page-bg); color: var(--sm-text); }
+.detail-header { display: flex; align-items: center; gap: 20px; }
+.detail-art { width: 112px; height: 112px; flex: none; }
+.detail-copy { min-width: 0; flex: 1; }
+.eyebrow { display: block; font-size: 10px; letter-spacing: 1px; color: var(--sm-accent); }
+.detail-title { display: block; margin-top: 8px; font-size: 24px; font-weight: 800; line-height: 1.3; overflow-wrap: anywhere; }
+.detail-sub { display: block; margin-top: 8px; font-size: 12px; color: var(--sm-text-2); line-height: 1.6; overflow-wrap: anywhere; }
+.detail-meta { display: block; margin-top: 8px; color: var(--sm-text-2); font-size: 11px; }
+.detail-actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 24px 0; }
+button { margin: 0; padding: 12px 16px; line-height: 1.5; font-size: 12px; border-radius: 24px; }
+button::after { border: 0; }
+.play-all, .save-button { display: flex; align-items: center; gap: 8px; }
+.play-all { background: var(--sm-accent); color: var(--sm-accent-ink); }
+.save-button { background: var(--sm-surface); color: var(--sm-text-2); }
+.save-button.saved, .retry { color: var(--sm-accent); background: var(--sm-accent-soft); }
+.state-text { padding: 24px 0; color: var(--sm-text-2); font-size: 13px; }
+.save-message { display: block; margin: 12px 0; color: var(--sm-text-2); font-size: 12px; }
+@media(min-width:800px) { .detail-page { max-width: 940px; margin: auto; padding: 32px 32px 160px; } .detail-art { width: 180px; height: 180px; } .detail-title { font-size: 32px; } }
 </style>

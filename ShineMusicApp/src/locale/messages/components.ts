@@ -5,6 +5,7 @@
 // （trackRow.* / playback.* / drawer.listener 等），不在本文件重复。
 export const componentsMessages = {
   'zh-CN': {
+    trackRow: { addFavorite: '收藏', removeFavorite: '取消收藏' },
     drawer: {
       serverAddress: '服务器地址',
       serverPlaceholder: 'http://域名或IP:端口（留空恢复内置）',
@@ -15,6 +16,7 @@ export const componentsMessages = {
       serverNotConnected: '暂未连通（地址已保存）',
       logout: '退出登录',
       notConfigured: '未配置',
+      sameOrigin: '默认地址（同源 / API 代理）',
       groupAccount: '账号',
       profile: '个人资料',
       theme: '主题外观',
@@ -33,6 +35,7 @@ export const componentsMessages = {
       queueTitle: '播放队列（{count}）',
     },
     comments: {
+      loginToComment: '登录后发表评论',
       title: '评论 {count} 条',
       justNow: '刚刚',
       minutesAgo: '{min} 分钟前',
@@ -72,6 +75,7 @@ export const componentsMessages = {
     },
   },
   en: {
+    trackRow: { addFavorite: 'Add to favorites', removeFavorite: 'Remove favorite' },
     drawer: {
       serverAddress: 'Server Address',
       serverPlaceholder: 'http://domain-or-ip:port (leave empty to restore built-in)',
@@ -82,6 +86,7 @@ export const componentsMessages = {
       serverNotConnected: 'Not reachable yet (address saved)',
       logout: 'Sign Out',
       notConfigured: 'Not configured',
+      sameOrigin: 'Default address (same origin / API proxy)',
       groupAccount: 'Account',
       profile: 'Profile',
       theme: 'Theme',
@@ -100,6 +105,7 @@ export const componentsMessages = {
       queueTitle: 'Play Queue ({count})',
     },
     comments: {
+      loginToComment: 'Sign in to comment',
       title: '{count} Comments',
       justNow: 'Just now',
       minutesAgo: '{min} min ago',
@@ -139,6 +145,7 @@ export const componentsMessages = {
     },
   },
   ja: {
+    trackRow: { addFavorite: 'お気に入りに追加', removeFavorite: 'お気に入りを解除' },
     drawer: {
       serverAddress: 'サーバーアドレス',
       serverPlaceholder: 'http://ドメインまたはIP:ポート（空欄で内蔵に戻る）',
@@ -149,6 +156,7 @@ export const componentsMessages = {
       serverNotConnected: 'まだ接続できません（アドレスは保存済み）',
       logout: 'ログアウト',
       notConfigured: '未設定',
+      sameOrigin: '既定のアドレス（同一オリジン / API プロキシ）',
       groupAccount: 'アカウント',
       profile: 'プロフィール',
       theme: 'テーマ',
@@ -167,6 +175,7 @@ export const componentsMessages = {
       queueTitle: '再生キュー（{count}）',
     },
     comments: {
+      loginToComment: 'ログインしてコメントする',
       title: 'コメント {count}件',
       justNow: 'たった今',
       minutesAgo: '{min}分前',

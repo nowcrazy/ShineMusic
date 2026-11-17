@@ -244,7 +244,9 @@ public sealed class LibraryImportController : ControllerBase
             return ApiResults.NotFound(HttpContext);
         var storageKey = item.TranscodedStorageKey ?? item.SourceStorageKey;
         if (storagePaths.TryResolve(storageKey, out var path) && System.IO.File.Exists(path))
-            return Results.File(path, GetAudioContentType(item.TranscodedStorageKey is null ? item.Container : "m4a"), enableRangeProcessing: true);
+            return Results.File(path, GetAudioContentType(
+                item.TranscodedStorageKey is null || item.TranscodedStorageKey == item.SourceStorageKey
+                    ? item.Container : item.TranscodeFormat ?? "m4a"), enableRangeProcessing: true);
 
         // 用户上传已私有入库：隔离区文件已随入库清理，回退到曲库中的播放资产。
         if (item.PublishedTrackId is null)

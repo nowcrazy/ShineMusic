@@ -109,8 +109,8 @@ onReachBottom(async () => {
 /* 曲目列表（方向 B · 玻璃质感） */
 .list-page { min-height: 100vh; padding: 24rpx 40rpx 60rpx; background: var(--sm-page-bg); box-sizing: border-box; }
 .state-text { padding: 80rpx 20rpx; color: var(--sm-text-2); font-size: 19rpx; text-align: center; }
-.list-head { padding: 6rpx 0 18rpx; }
-.list-count { color: var(--sm-text-2); font-size: 18rpx; }
+.list-head { padding: 24rpx 32rpx; margin-bottom: 24rpx; background: var(--sm-surface); border: 1px solid var(--sm-border); border-radius: var(--sm-radius-card); }
+.list-count { color: var(--sm-text); font-size: 26rpx; font-weight: 700; }
 .list-end { padding: 36rpx 0 20rpx; color: var(--sm-text-3); font-size: 17rpx; text-align: center; }
 .page-bottom-spacer { height: 180rpx; }
 </style>

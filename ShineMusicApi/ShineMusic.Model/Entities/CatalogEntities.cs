@@ -279,6 +279,9 @@ public sealed class MediaAsset
     public bool IsPublished { get; set; }
     /// <summary>是否为主资产（同曲目多版本时默认播放的那份）。</summary>
     public bool IsPrimary { get; set; }
+    /// <summary>Retired assets remain referenced until the rollback retention expires.</summary>
+    [SugarColumn(IsNullable = true)]
+    public DateTime? RetainUntilUtc { get; set; }
 }
 
 /// <summary>

@@ -3,7 +3,7 @@
 // 以及「评分 ≥ 阈值自动直通入库」的闸门开关。
 //
 // 【安全默认值原则】2026-11-12 逐源实测后，只有 netease / migu 能稳定交付
-// 正确曲目 + 320k/无损；其余 9 个源默认禁用，Migu 默认 SQ，VIP 回退只保留 gdstudio。
+// 正确曲目 + 合格音频；其余 9 个源默认禁用，Migu 默认 HQ，VIP 回退只保留 gdstudio。
 // 这些值不是「示例」，而是配置缺失 / 环境覆盖失败时的最后一道防线：
 // appsettings.json 与代码默认值必须同向，否则一次漏配就会静默回退到低质量链路。
 // 重新启用任一源的判据见 docs/音源巡检与音质结论.md（逐源码率/时长/内容形态实测）。
@@ -218,7 +218,7 @@ public sealed class NeteaseVipFallbackOptions
     /// </summary>
     public List<NeteaseVipFallbackEndpoint> Endpoints { get; set; } = new()
     {
-        new() { Type = VipFallbackEndpointTypes.GdStudio, Url = "https://music-api.gdstudio.xyz/api.php?types=url&source=netease&id={id}&br={level}", Levels = ["999", "320"] },
+        new() { Type = VipFallbackEndpointTypes.GdStudio, Url = "https://music-api.gdstudio.xyz/api.php?types=url&source=netease&id={id}&br={level}", Levels = ["320", "999"] },
     };
 
     /// <summary>单次回退请求超时（秒），默认 15s（第三方服务响应通常较快）。</summary>
@@ -260,7 +260,7 @@ public sealed class NeteaseVipFallbackEndpoint
     public string? BaseUrl { get; set; }
 
     /// <summary>尝试的音质等级（按顺序，首个返回有效 url 的为准）。</summary>
-    public string[] Levels { get; set; } = ["320", "128"];
+    public string[] Levels { get; set; } = ["320", "192"];
 }
 
 /// <summary>咪咕音乐音源配置。</summary>
@@ -269,8 +269,8 @@ public sealed class MiguSourceOptions
     /// <summary>是否启用该音源（默认开启）。</summary>
     public bool Enabled { get; set; } = true;
 
-    /// <summary>最高下载音质：PQ=128k / HQ=320k / SQ=无损flac；资源没有该档时逐档实测降档。默认 SQ（音质优先）。</summary>
-    public string ToneFlag { get; set; } = "SQ";
+    /// <summary>最高下载音质：PQ=128k / HQ=320k / SQ=无损flac。默认 HQ，落地后须通过实测准入。</summary>
+    public string ToneFlag { get; set; } = "HQ";
 
     /// <summary>可选 Cookie（登录态）：配置后可取 VIP 资源，留空为匿名态。真实值由环境变量注入，勿提交仓库。</summary>
     public string Cookie { get; set; } = string.Empty;
@@ -456,19 +456,18 @@ public sealed class SourceProviderHealthCheckOptions
 }
 
 /// <summary>
-/// 质量策略声明（提案 §8.1 / §5.1）。
-/// <b>Phase 1 不强制执行</b>：这些值目前只作为配置契约存在，真正的 QualityGate 在 Phase 3。
+/// 原文件质量策略；由 QualityGate 与 AudioAdmissionPolicy 共同执行。
 /// </summary>
 public sealed class SourceQualityPolicyOptions
 {
-    /// <summary>首选质量。默认 Lossless。</summary>
-    public string PreferredQuality { get; set; } = "Lossless";
+    /// <summary>常用目标质量。默认 320K，不为每首曲目持续追求无损。</summary>
+    public string PreferredQuality { get; set; } = "320K";
 
-    /// <summary>最低质量硬约束。默认 320K。</summary>
-    public string MinimumQuality { get; set; } = "320K";
+    /// <summary>最低实测 MP3/AAC 码率。默认 192K；未知编码不准入。</summary>
+    public string MinimumQuality { get; set; } = "192K";
 
-    /// <summary>是否允许有损兜底。默认 false（省略初始化器以满足 CA1805 / 安全默认值测试）。</summary>
-    public bool AllowLossyFallback { get; set; }
+    /// <summary>允许合格有损回退；不绕过实测编码和 192kbps 硬下限。</summary>
+    public bool AllowLossyFallback { get; set; } = true;
 
     /// <summary>是否允许试听片段。默认 false。</summary>
     public bool AllowPreview { get; set; }

@@ -258,4 +258,11 @@ function goBackToLibrary() {
 .result-group { margin-bottom: 20rpx; }
 .result-title { display: block; margin-bottom: 10rpx; color: var(--sm-text); font-size: 19rpx; font-weight: 700; }
 .result-line { display: block; padding: 6rpx 0; color: var(--sm-text-2); font-size: 17rpx; }
+.up-tip { padding: 40rpx; border-radius: var(--sm-radius-card); }
+.tip-title { font-size: 32rpx; }
+.tip-sub, .file-name, .result-line { font-size: 24rpx; overflow-wrap: anywhere; }
+.tip-copy { min-width: 0; }
+.file-row { padding: 24rpx; margin-top: 16rpx; background: var(--sm-surface); border: 1px solid var(--sm-border); border-radius: var(--sm-radius-field); }
+.btn { min-height: 48px; border-radius: var(--sm-radius-field); }
+@media (min-width: 960px) { .up-page { max-width: 800px; margin: auto; } }
 </style>

@@ -23,6 +23,7 @@
 import { ref } from 'vue'
 import { injectThemeCssOnApp, removeThemeCssOnApp, setThemeAttrOnApp } from '@/utils/app-theme-bridge'
 import { accentInk, hslToHex, hexToHsl, hueRotate, withAlpha } from './color-extract'
+import { editorialMessages } from '@/locale/messages/editorial'
 
 /** 主题 id 联合类型（custom 为运行时生成的自定义图片主题，不在 THEMES 列表中） */
 export type ThemeId = 'lime' | 'glass' | 'cream' | 'night' | 'sunset' | 'violet' | 'ocean' | 'sakura' | 'oled' | 'custom'
@@ -61,13 +62,13 @@ export const THEMES: ThemeMeta[] = [
   },
   {
     id: 'glass',
-    name: '玻璃质感',
+    name: editorialMessages['zh-CN'].theme.glass,
     nameKey: 'theme.glass',
-    description: '深色底 + 彩色光晕 + 毛玻璃，沉浸有质感',
+    description: editorialMessages['zh-CN'].theme.glassDesc,
     descKey: 'theme.glassDesc',
-    tone: '深色',
-    toneKey: 'themePage.toneDark',
-    swatch: { bg: '#10131a', surface: 'rgba(255,255,255,.16)', accent: '#5be07a', text: '#f2f5f0' },
+    tone: '浅色',
+    toneKey: 'themePage.toneLight',
+    swatch: { bg: '#faf9f5', surface: '#f0eee7', accent: '#c9402b', text: '#252521' },
   },
   {
     id: 'cream',

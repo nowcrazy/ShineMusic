@@ -177,14 +177,14 @@ public class AudioValidatorTests
     // ─────────────────────── 质量等级映射 ───────────────────────
 
     [Fact]
-    public void Low_bitrate_mp3_maps_to_below320k()
+    public void Low_bitrate_mp3_is_rejected()
     {
         var probed = new ProbedMedia("mp3", "mp3", 128, 269000, "mp3", 44100, null, 2);
 
         var result = AudioValidator.Evaluate(probed, expectedDurationMs: 269000);
 
-        Assert.True(result.Accepted);
-        Assert.Equal(AudioQualityLevel.Below320K, result.Quality!.Level);
+        Assert.False(result.Accepted);
+        Assert.Equal("bitrate_below_minimum", result.ErrorCode);
     }
 
     [Fact]
@@ -203,5 +203,31 @@ public class AudioValidatorTests
         Assert.Equal(2, q.Channels);
         Assert.Equal(269000, q.DurationMs);
         Assert.Equal(30_000_000, q.FileSizeBytes);
+    }
+    [Theory]
+    [InlineData("mp3", "mp3", 192)]
+    [InlineData("mp3", "mp3", 256)]
+    [InlineData("aac", "m4a", 192)]
+    [InlineData("aac", "m4a", 256)]
+    public void Qualified_lossy_audio_keeps_compatible_display_level(string codec, string container, int bitrate)
+    {
+        var result = AudioValidator.Evaluate(new ProbedMedia(container, codec, bitrate, 180000, container));
+        Assert.True(result.Accepted);
+        Assert.Equal(AudioQualityLevel.Below320K, result.Quality!.Level);
+    }
+
+    [Theory]
+    [InlineData("wav", "unknown", 1411, 180000L, "unsupported_codec")]
+    [InlineData("flac", "unknown", 1411, 180000L, "unsupported_codec")]
+    [InlineData("mp3", "mp3", null, 180000L, "unknown_bitrate")]
+    [InlineData("m4a", "aac", 191, 180000L, "bitrate_below_minimum")]
+    [InlineData("mp3", "mp3", 320, null, "unknown_duration")]
+    [InlineData("mp3", "mp3", 320, 0L, "unknown_duration")]
+    [InlineData("mp3", "mp3", 192, 20000L, "preview_fragment")]
+    public void Unknown_quality_and_fragments_are_rejected(string container, string codec, int? bitrate, long? duration, string code)
+    {
+        var result = AudioValidator.Evaluate(new ProbedMedia(container, codec, bitrate, duration, container));
+        Assert.False(result.Accepted);
+        Assert.Equal(code, result.ErrorCode);
     }
 }

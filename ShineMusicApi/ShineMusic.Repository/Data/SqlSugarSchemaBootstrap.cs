@@ -77,7 +77,7 @@ public static class SqlSugarSchemaBootstrap
 
         // user_playlist_pending_tracks / playlist_download_queue_items：SqlSugar CodeFirst 在 PG 下
         // 建表会把标识符强制转小写，而早期运行时用带引号的 PascalCase 标识符，两者不兼容。
-        // 统一走手写 DDL 建表（snake_case），并清掉历史残留表。无条件调用（内部幂等）。
+        // 统一走手写 DDL 建表（snake_case）。保留历史表，启动期间不删除任何数据。
         EnsurePendingTracksTable(db, logger);
         EnsurePlaylistDownloadQueueTable(db, logger);
 
@@ -118,10 +118,19 @@ public static class SqlSugarSchemaBootstrap
         EnsureColumn(db, logger, "external_download_tasks", "expected_artists_json", "text");
         EnsureColumn(db, logger, "external_download_tasks", "expected_album_title", "text");
         EnsureColumn(db, logger, "external_download_tasks", "expected_duration_ms", "bigint");
+        // 资产回滚保留期：存量库不会执行实体表同步，必须显式补列；旧资产保持 NULL。
+        EnsureMediaAssetRetentionColumn(db, logger);
 
         // 存量库：details_json 早期由 CodeFirst 默认建为 varchar(255)，写入完整请求快照会触发
         // PG 22001（推荐策略保存 500 的根因）。varchar→text 在 PG 中二进制兼容、不重写表，幂等升级一次。
         EnsureTextColumn(db, logger, "admin_audit_entries", ToSnakeCase(nameof(ShineMusic.Model.Entities.AdminAuditEntry.DetailsJson)));
+    }
+
+    /// <summary>仅补资产保留期列；IF NOT EXISTS 支持重复启动及并发启动，不修改已有资产。</summary>
+    public static void EnsureMediaAssetRetentionColumn(ISqlSugarClient db, ILogger logger)
+    {
+        logger.LogInformation("SqlSugar schema patch: ensuring media_assets.retain_until_utc.");
+        db.Ado.ExecuteCommand("ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS retain_until_utc timestamptz NULL");
     }
 
     /// <summary>
@@ -163,14 +172,10 @@ public static class SqlSugarSchemaBootstrap
 
     /// <summary>
     /// 手动建 user_playlist_pending_tracks（snake_case），规避 SqlSugar CodeFirst 在 PG 下
-    /// 强制小写标识符与 PascalCase 不兼容的问题。先清掉历史残留表，再按实体定义精确建表。
+    /// 强制小写标识符与 PascalCase 不兼容的问题。保留历史表，按实体定义创建缺失表。
     /// </summary>
     private static void EnsurePendingTracksTable(ISqlSugarClient db, ILogger logger)
     {
-        // 清掉 CodeFirst 误建的历史残留表（无数据，安全删除）。
-        db.Ado.ExecuteCommand("DROP TABLE IF EXISTS \"UserPlaylistPendingTracks\"");
-        db.Ado.ExecuteCommand("DROP TABLE IF EXISTS userplaylistpendingtracks");
-
         if (db.DbMaintenance.IsAnyTable("user_playlist_pending_tracks", false)) return;
 
         logger.LogInformation("SqlSugar schema patch: creating table user_playlist_pending_tracks.");
@@ -199,8 +204,6 @@ public static class SqlSugarSchemaBootstrap
 
     private static void EnsurePlaylistDownloadQueueTable(ISqlSugarClient db, ILogger logger)
     {
-        db.Ado.ExecuteCommand("DROP TABLE IF EXISTS \"PlaylistDownloadQueueItems\"");
-
         if (db.DbMaintenance.IsAnyTable("playlist_download_queue_items", false)) return;
 
         logger.LogInformation("SqlSugar schema patch: creating table playlist_download_queue_items.");

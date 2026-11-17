@@ -61,6 +61,11 @@ const expanded = reactive<Record<string, boolean>>({})
 
 const hasMore = computed(() => comments.value.length < total.value)
 
+/** 登录使用页面栈返回；不清空已有顶层/回复草稿。 */
+function loginToComment() {
+  uni.navigateTo({ url: '/pages/auth/login' })
+}
+
 /** 当前用户是否为评论作者或管理员。 */
 function canDelete(comment: CommentNode): boolean {
   if (!isAuthenticated.value) return false
@@ -131,8 +136,8 @@ async function load(reset = false) {
 /** 点击「回复」：需登录，聚焦该评论的内联输入框。 */
 function startReply(comment: CommentNode) {
   if (!requireLogin()) return
+  if (replyingTo.value?.id !== comment.id) replyDraft.value = ''
   replyingTo.value = comment
-  replyDraft.value = ''
   // 回复时自动展开回复列表，便于看到提交结果
   // 放在 nextTick 由模板渲染；此处直接标记展开
   expanded[comment.id] = true
@@ -238,7 +243,8 @@ onMounted(() => void load(true))
     </view>
 
     <!-- 顶部写评论 -->
-    <view class="cs-composer">
+    <button v-if="!isAuthenticated" class="cs-login" @tap="loginToComment">{{ $t('comments.loginToComment') }}</button>
+    <view v-else class="cs-composer">
       <view class="cs-input-row">
         <view class="cs-avatar cs-avatar--sm">{{ currentUser?.displayName?.slice(0, 1) || $t('comments.me') }}</view>
         <input
@@ -320,7 +326,7 @@ onMounted(() => void load(true))
             </view>
 
             <!-- 内联回复输入框 -->
-            <view v-if="replyingTo?.id === comment.id" class="cs-inline-reply">
+            <view v-if="isAuthenticated && replyingTo?.id === comment.id" class="cs-inline-reply">
               <view class="cs-reply-hint">
                 <CornerDownRight :size="14" />
                 <text>{{ $t('comments.replyingTo', { name: comment.userName }) }}</text>
@@ -397,4 +403,11 @@ onMounted(() => void load(true))
 .cs-inline-reply { margin-top: 14rpx; padding: 14rpx 16rpx; border-radius: 18rpx; background: var(--sm-surface-2); border: 1rpx solid var(--sm-border); }
 
 .cs-more { padding: 26rpx 0 6rpx; color: var(--sm-accent); font-size: 18rpx; text-align: center; }
+.comment-section { margin-top: 32rpx; padding: 32rpx; border: 1px solid var(--sm-border); border-radius: var(--sm-radius-card); background: var(--sm-surface); }
+.cs-input { min-width: 0; min-height: 44px; border-radius: var(--sm-radius-field); font-size: 16px; }
+.cs-meta, .cs-ops { flex-wrap: wrap; }
+.cs-content { font-size: 26rpx; line-height: 1.75; }
+.cs-op { min-height: 36px; font-size: 22rpx; }
+.cs-state { font-size: 24rpx; }
+.cs-login { width: 100%; margin: 0 0 24rpx; padding: 18rpx; border-radius: var(--sm-radius-field); background: var(--sm-accent-soft); color: var(--sm-accent); font-size: 26rpx; text-align: left; }
 </style>

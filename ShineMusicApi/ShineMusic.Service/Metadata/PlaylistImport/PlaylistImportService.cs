@@ -799,6 +799,17 @@ public sealed partial class PlaylistImportService(
                         track.Title, string.Join("/", track.Artists), queryTitle, candidates.Count);
                 }
             }
+            var original = await GetNeteaseOriginalCandidateAsync(
+                pending, track, searchBudgetSeconds, precheckDownloadable, cancellationToken);
+            if (original is not null)
+            {
+                candidates.RemoveAll(candidate =>
+                    string.Equals(candidate.Provider, original.Provider, StringComparison.OrdinalIgnoreCase)
+                    && candidate.ProviderTrackId == original.ProviderTrackId);
+                candidates.Insert(0, original);
+                diagnostics.Insert(0, new ProviderSearchDiagnostic(
+                    original.Provider, SearchOutcomes.Matched, 1, "歌单原曲 ID 已通过详情身份校验"));
+            }
             pending.SearchDiagnosticsJson = SerializeDiagnostics(diagnostics);
             if (candidates.Count == 0)
             {
@@ -809,12 +820,13 @@ public sealed partial class PlaylistImportService(
                 return;
             }
 
-            // 按 SourceQualities.Rank() 排序：lossless → high → standard → unknown。
+            // 已验证的原曲 ID 优先；其余候选按音质排序。
             var sorted = candidates
-                .OrderBy(c => SourceQualities.Rank(c.Quality))
+                .OrderBy(c => ReferenceEquals(c, original) ? 0 : 1)
+                .ThenBy(c => SourceQualities.Rank(c.Quality))
                 .ToList();
 
-            // 取音质最好的候选的主信息用于元数据快照。
+            // 取首选候选的主信息用于元数据快照。
             var primary = sorted[0];
             var metadata = new Dictionary<string, SourceSearchItemDto>
             {
@@ -854,6 +866,62 @@ public sealed partial class PlaylistImportService(
             if (pending.Status == PendingStatuses.Downloading)
                 return;
             pending.Status = PendingStatuses.Pending;
+        }
+    }
+
+    private async Task<SourceSearchResult?> GetNeteaseOriginalCandidateAsync(
+        UserPlaylistPendingTrack pending, ParsedPlaylistTrack track,
+        int? searchBudgetSeconds, bool precheckDownloadable, CancellationToken cancellationToken)
+    {
+        if (!string.Equals(pending.SourcePlatform, "netease", StringComparison.OrdinalIgnoreCase)
+            || string.IsNullOrWhiteSpace(track.SourceTrackId)
+            || string.IsNullOrWhiteSpace(track.Title)
+            || !track.Artists.Any(artist => !string.IsNullOrWhiteSpace(artist))
+            || !searchAggregator.Providers.Any(descriptor =>
+                string.Equals(descriptor.ProviderName, "netease", StringComparison.OrdinalIgnoreCase)
+                && descriptor.ConfigEnabled && descriptor.DownloadEnabled
+                && descriptor.Declares(ShineMusic.Service.SourceProviders.Abstractions.ProviderCapability.Resolve)))
+            return null;
+
+        var provider = providers.FirstOrDefault(candidate =>
+            string.Equals(candidate.Provider, "netease", StringComparison.OrdinalIgnoreCase) && candidate.IsEnabled);
+        if (provider is null)
+            return null;
+
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        budget.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(searchBudgetSeconds ?? options.Value.SearchBudgetSeconds, 3, 30)));
+        try
+        {
+            var detail = await provider.GetTrackAsync(track.SourceTrackId, budget.Token).WaitAsync(budget.Token);
+            if (detail is null
+                || !string.Equals(detail.Provider, provider.Provider, StringComparison.OrdinalIgnoreCase)
+                || detail.ProviderTrackId != track.SourceTrackId
+                || !MatchesSongAndArtist(track, detail))
+                return null;
+
+            if (provider is IQualityLadderProvider ladder)
+            {
+                var qualities = await ladder.ResolveDownloadCandidatesAsync(detail.ProviderTrackId, budget.Token).WaitAsync(budget.Token);
+                if (qualities.Count > 0)
+                    detail = detail with
+                    {
+                        Quality = qualities[0].Quality,
+                        IsLosslessAvailable = qualities.Any(quality => quality.IsLossless)
+                    };
+            }
+            if (precheckDownloadable
+                && !await provider.CanDownloadAsync(detail.ProviderTrackId, budget.Token).WaitAsync(budget.Token))
+                return null;
+            return detail;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return null;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "Playlist original track lookup failed for netease track {TrackId}.", track.SourceTrackId);
+            return null;
         }
     }
 

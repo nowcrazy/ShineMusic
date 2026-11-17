@@ -96,6 +96,12 @@ public sealed class FfmpegMediaService(IOptions<FfmpegOptions> options, ILogger<
     private readonly FfmpegOptions _options = options.Value;
     private readonly ILogger<FfmpegMediaService> _logger = logger;
 
+    /// <summary>Decode every audio frame without creating a second lossy file.</summary>
+    public Task ValidateCompleteAsync(string path, CancellationToken cancellationToken) =>
+        RunForExitAsync(_options.ExecutablePath,
+            ["-nostdin", "-hide_banner", "-v", "error", "-xerror", "-i", path,
+             "-map", "0:a:0", "-f", "null", "-"], cancellationToken, $"validate {path}");
+
     /// <summary>
     /// 使用 ffprobe 探测指定音频文件的容器、编码器、比特率与时长。
     /// </summary>
@@ -133,8 +139,11 @@ public sealed class FfmpegMediaService(IOptions<FfmpegOptions> options, ILogger<
             var formatNames = ReadString(format, "format_name") ?? "unknown";
             // 将 ffprobe 的原始容器名归一化为系统内部使用的统一标识。
             var canonicalContainer = CanonicalContainer(formatNames, codec);
-            // 比特率优先取音频流级别，回退到容器级别。
-            var bitrate = ParseLong(ReadString(audioStream, "bit_rate")) ?? ParseLong(ReadString(format, "bit_rate"));
+            // 有损准入只能使用音频流码率，容器总码率可能包含封面、视频或额外轨道。
+            // VBR 使用 ffprobe 报告的音频流平均码率；无法确认时保持未知。
+            var bitrate = ParseLong(ReadString(audioStream, "bit_rate"));
+            if (ShineMusic.Model.Domain.AudioAdmissionPolicy.IsLosslessCodec(codec))
+                bitrate ??= ParseLong(ReadString(format, "bit_rate"));
             var duration = ParseDouble(ReadString(format, "duration"));
             // Phase 3：ffprobe 对 FLAC 通常给 bits_per_raw_sample（16/24），部分版本给 bits_per_sample。
             // 两者都取，优先 raw；非正数（部分容器回填 0）视为缺失，避免把「未知」误判成不达标。

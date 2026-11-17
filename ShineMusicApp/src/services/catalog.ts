@@ -38,9 +38,10 @@ import { t } from '@/locale'
  * @returns 可被播放器与列表组件直接消费的 Track
  */
 export function mapTrack(track: ApiTrack): Track {
+  const genres = track.genres.filter((genre) => genre.trim().length > 0 && !genre.includes('\uFFFD'))
   const mood =
-    track.genres.find((genre) => ['松弛', '轻快', '温柔', '夜晚'].includes(genre)) ??
-    track.genres[0] ??
+    genres.find((genre) => ['松弛', '轻快', '温柔', '夜晚'].includes(genre)) ??
+    genres[0] ??
     '全部'
 
   return {
@@ -52,7 +53,7 @@ export function mapTrack(track: ApiTrack): Track {
     cover: track.artworkUrl ? resolveUrl(track.artworkUrl) : '',
     duration: (track.durationMs ?? 0) / 1000,
     audioUrl: resolveUrl(`${API_PREFIX}/tracks/${track.id}/stream`),
-    genres: track.genres,
+    genres,
     mood,
   }
 }
@@ -232,7 +233,7 @@ export async function getGenres(): Promise<readonly string[]> {
   if (!_genresInFlight) {
     _genresInFlight = http
       .get<ApiPageResult<string>>(`${API_PREFIX}/genres?pageSize=100`, false)
-      .then((r) => r.items)
+      .then((r) => r.items.filter((genre) => genre.trim().length > 0 && !genre.includes('\uFFFD')))
       .finally(() => {
         _genresInFlight = null
       })

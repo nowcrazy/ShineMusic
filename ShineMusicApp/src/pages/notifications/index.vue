@@ -207,4 +207,11 @@ function goLogin() {
 .notify-body { color: var(--sm-text-2); font-size: 17rpx; line-height: 1.55; }
 .notify-time { color: var(--sm-text-3); font-size: 14rpx; }
 .bottom-space { height: 40rpx; }
+.notify-card { padding: 32rpx; border-radius: var(--sm-radius-card); }
+.notify-card.unread { border-left: 4px solid var(--sm-accent); background: var(--sm-accent-soft); }
+.notify-title { font-size: 28rpx; }
+.notify-body { font-size: 24rpx; line-height: 1.7; overflow-wrap: anywhere; }
+.notify-time { font-size: 22rpx; }
+.page-heading { flex-wrap: wrap; }
+@media (min-width: 960px) { .notify-page { max-width: 840px; margin: auto; } }
 </style>

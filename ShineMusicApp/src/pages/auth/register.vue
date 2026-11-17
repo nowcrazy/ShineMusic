@@ -259,4 +259,12 @@ function invitationError(error: unknown): string {
 .invite-copy { display: flex; flex: 1; flex-direction: column; gap: 5rpx; }
 .invite-email { color: var(--sm-text); font-size: 19rpx; font-weight: 700; }
 .invite-expiry { color: var(--sm-text-2); font-size: 16rpx; }
+.auth-page { max-width: 560px; margin: 0 auto; }
+.auth-title { font-size: 56rpx; letter-spacing: -.04em; }
+.auth-sub { font-size: 26rpx; }
+.field-label { font-size: 24rpx; }
+.field-input { min-height: 52px; background: var(--sm-surface-2); font-size: 16px; border-radius: var(--sm-radius-field); }
+.primary-button { min-height: 52px; border-radius: var(--sm-radius-field); box-shadow: none; }
+.error-text { padding: 16rpx 24rpx; background: var(--sm-danger-soft); border-radius: var(--sm-radius-field); }
+@media (min-width: 960px) { .auth-page { min-height: auto; margin: 48px auto; padding: 48px; border: 1px solid var(--sm-border); border-radius: 24px; background: var(--sm-surface); } }
 </style>

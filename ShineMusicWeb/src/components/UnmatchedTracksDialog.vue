@@ -104,7 +104,7 @@ function originText(row: ApiUnmatchedTrack) {
 </script>
 
 <template>
-  <el-dialog v-model="visible" title="未匹配 / 无音源曲目" width="1000px" top="6vh">
+  <el-dialog v-model="visible" title="未匹配 / 下载失败曲目" width="min(1200px, 94vw)" top="6vh">
     <div class="unmatched-toolbar">
       <el-radio-group v-model="status" size="small" @change="changeStatus">
         <el-radio-button v-for="item in statusOptions" :key="item.value" :value="item.value">
@@ -133,6 +133,14 @@ function originText(row: ApiUnmatchedTrack) {
       <el-table-column label="艺人" prop="artists" min-width="150" show-overflow-tooltip>
         <template #default="{ row }">{{ row.artists.join(' / ') || '—' }}</template>
       </el-table-column>
+      <el-table-column label="状态" prop="status" width="100">
+        <template #default="{ row }">
+          <el-tag size="small" :type="statusMeta[row.status]?.type || 'info'">{{ statusMeta[row.status]?.label || row.status }}</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="原因" prop="reason" min-width="320">
+        <template #default="{ row }"><span class="reason-text">{{ row.reason || '—' }}</span></template>
+      </el-table-column>
       <el-table-column label="专辑" prop="albumTitle" min-width="140" show-overflow-tooltip>
         <template #default="{ row }">{{ row.albumTitle || '—' }}</template>
       </el-table-column>
@@ -141,16 +149,6 @@ function originText(row: ApiUnmatchedTrack) {
       </el-table-column>
       <el-table-column label="来源" prop="origin" min-width="150" show-overflow-tooltip>
         <template #default="{ row }">{{ originText(row) }}</template>
-      </el-table-column>
-      <el-table-column label="状态" prop="status" width="100">
-        <template #default="{ row }">
-          <el-tag size="small" :type="statusMeta[row.status]?.type || 'info'">
-            {{ statusMeta[row.status]?.label || row.status }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="原因" prop="reason" min-width="320" show-overflow-tooltip>
-        <template #default="{ row }">{{ row.reason || '—' }}</template>
       </el-table-column>
       <el-table-column label="创建时间" prop="createdAtUtc" width="170">
         <template #default="{ row }">{{ formatDateTime(row.createdAtUtc) }}</template>
@@ -171,7 +169,7 @@ function originText(row: ApiUnmatchedTrack) {
     </div>
 
     <template #footer>
-      <span class="footer-hint">这些曲目未创建下载任务；需要人工处理请到「歌单导入」页重新补齐或换源。</span>
+      <span class="footer-hint">无音源表示尚未创建下载任务；下载失败请查看关联任务原因。可到「歌单解析」页重新补齐，或到「音源抓歌」页处理失败任务。</span>
       <el-button @click="visible = false">关闭</el-button>
     </template>
   </el-dialog>
@@ -205,7 +203,8 @@ function originText(row: ApiUnmatchedTrack) {
 
 .footer-hint {
   margin-right: auto;
-  color: var(--adm-text-3);
-  font-size: 12px;
+  color: var(--adm-text-2);
+  font-size: 13px;
 }
+.reason-text { white-space: normal; overflow-wrap: anywhere; line-height: 1.6; }
 </style>

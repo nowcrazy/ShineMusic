@@ -1,0 +1,47 @@
+export const editorialMessages = {
+  'zh-CN': {
+    theme: { glass: '暖白留声', glassDesc: '暖白中性底色与朱红强调，让封面和音乐成为主角' },
+    homePage: {
+      tabForYou: '推荐', recommendEyebrow: '为这一刻，选一份音乐', recommendHeading: '今天，听点喜欢的。',
+      discoverEyebrow: '好音乐，正在发生', discoverHeading: '发现新频率。', libraryEyebrow: '所有好声音，都在这里',
+      leadCollection: '本日主推', dailyCaption: '熟悉的喜欢，和一点新鲜感', collectionShelf: '把心情交给歌单',
+      moreCollectionsEmpty: '暂时没有更多精选合集', profileCaption: '音乐是生活的另一种记录。', favoriteMusic: '我喜欢的音乐',
+      favoritesFilter: '已收藏', savedCollections: '收藏的歌单', savedEmpty: '还没有收藏合集，去推荐页寻找喜欢的音乐。',
+      saveCollection: '收藏合集', unsaveCollection: '取消收藏', collectionSaved: '已收藏合集', collectionUnsaved: '已取消收藏',
+      savedLoadFailed: '收藏合集加载失败', newArrivalsTitle: '新声入库', newArrivalsHint: '按曲目最新发布时间排序',
+      genreLoadFailed: '风格加载失败', genresEmpty: '曲库中还没有风格标签。',
+      weeklyTitle: '七日热听榜', favoritesTitle: '心动收藏榜', allTimeTitle: '累计热听榜',
+      playerClose: '收起播放器', playerOpen: '打开播放器', playerSeek: '播放进度', playerMode: '切换播放模式',
+    },
+  },
+  en: {
+    theme: { glass: 'Warm paper', glassDesc: 'Warm neutral surfaces and vermilion accents, with music and artwork in focus' },
+    homePage: {
+      tabForYou: 'For you', recommendEyebrow: 'A LITTLE MUSIC FOR THIS MOMENT', recommendHeading: 'Something you’ll love today.',
+      discoverEyebrow: 'GOOD MUSIC IS HAPPENING', discoverHeading: 'Find a new frequency.', libraryEyebrow: 'ALL THE SOUNDS YOU LOVE',
+      leadCollection: 'FEATURED COLLECTION', dailyCaption: 'Familiar favorites, fresh discoveries', collectionShelf: 'A playlist for your mood',
+      moreCollectionsEmpty: 'No more featured collections yet', profileCaption: 'A life remembered through music.', favoriteMusic: 'My favorite music',
+      favoritesFilter: 'Favorites', savedCollections: 'Saved collections', savedEmpty: 'No saved collections yet. Find a favorite in For you.',
+      saveCollection: 'Save collection', unsaveCollection: 'Unsave', collectionSaved: 'Collection saved', collectionUnsaved: 'Collection removed',
+      savedLoadFailed: 'Could not load saved collections', newArrivalsTitle: 'New arrivals', newArrivalsHint: 'Ordered by most recently published',
+      genreLoadFailed: 'Could not load genres', genresEmpty: 'No genre tags in the library yet.',
+      weeklyTitle: 'Weekly listening', favoritesTitle: 'Most loved', allTimeTitle: 'All-time listening',
+      playerClose: 'Collapse player', playerOpen: 'Open player', playerSeek: 'Playback position', playerMode: 'Change playback mode',
+    },
+  },
+  ja: {
+    theme: { glass: '暖かな余白', glassDesc: '暖かな白と朱色で、音楽とジャケットを主役に' },
+    homePage: {
+      tabForYou: 'おすすめ', recommendEyebrow: 'この瞬間に、音楽を', recommendHeading: '今日は、好きな音楽を。',
+      discoverEyebrow: 'いい音楽が、ここに', discoverHeading: '新しい音に出会おう。', libraryEyebrow: '好きな音が、すべてここに',
+      leadCollection: '本日のピックアップ', dailyCaption: 'いつものお気に入りと、新しい出会い', collectionShelf: '気分に合うプレイリスト',
+      moreCollectionsEmpty: 'ほかの特集はまだありません', profileCaption: '音楽で綴る、日々の記録。', favoriteMusic: '好きな音楽',
+      favoritesFilter: 'お気に入り', savedCollections: '保存したコレクション', savedEmpty: '保存したコレクションはありません。おすすめから探してみましょう。',
+      saveCollection: 'コレクションを保存', unsaveCollection: '保存を解除', collectionSaved: '保存しました', collectionUnsaved: '保存を解除しました',
+      savedLoadFailed: '保存したコレクションを読み込めませんでした', newArrivalsTitle: '新着の音楽', newArrivalsHint: '公開日時が新しい順',
+      genreLoadFailed: 'ジャンルを読み込めませんでした', genresEmpty: 'ジャンルタグはまだありません。',
+      weeklyTitle: '週間再生ランキング', favoritesTitle: 'お気に入りランキング', allTimeTitle: '累計再生ランキング',
+      playerClose: 'プレーヤーを閉じる', playerOpen: 'プレーヤーを開く', playerSeek: '再生位置', playerMode: '再生モードを切り替え',
+    },
+  },
+}

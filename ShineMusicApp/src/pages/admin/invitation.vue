@@ -28,6 +28,7 @@ import {
 
 const { t } = useI18n()
 const email = ref('')
+const invitationMode = ref<'email' | 'code'>('email')
 const invitations = ref<readonly Invitation[]>([])
 const loading = ref(false)
 const creating = ref(false)
@@ -178,7 +179,11 @@ function formatDate(dateStr: string): string {
 
     <!-- 创建邀请表单 -->
     <view class="create-card">
-      <view class="form-row">
+      <view class="method-tabs">
+        <button :class="{ active: invitationMode === 'email' }" @tap="invitationMode = 'email'">{{ $t('invitationAdmin.send') }}</button>
+        <button :class="{ active: invitationMode === 'code' }" @tap="invitationMode = 'code'">{{ $t('invitationAdmin.generateCode') }}</button>
+      </view>
+      <view v-if="invitationMode === 'email'" class="form-row">
         <view class="email-input">
           <Mail :size="16" />
           <input v-model="email" :placeholder="$t('invitationAdmin.emailPlaceholder')" confirm-type="done" @confirm="handleCreate" />
@@ -188,7 +193,7 @@ function formatDate(dateStr: string): string {
           <text>{{ creating ? $t('invitationAdmin.sending') : $t('invitationAdmin.send') }}</text>
         </view>
       </view>
-      <view class="form-row code-row">
+      <view v-else class="form-row code-row">
         <view class="code-btn" :class="{ disabled: generating }" @tap="handleCreateCode">
           <KeyRound :size="16" />
           <text>{{ generating ? $t('invitationAdmin.generating') : $t('invitationAdmin.generateCode') }}</text>
@@ -249,6 +254,10 @@ function formatDate(dateStr: string): string {
 
 <style lang="scss" scoped>
 /* 邀请管理（方向 B · 玻璃质感）：深色底 + 彩色光晕 + 毛玻璃卡片 */
+.method-tabs { display: flex; gap: 12rpx; margin-bottom: 24rpx; }
+.method-tabs button { flex: 1; margin: 0; font-size: 24rpx; color: var(--sm-text-2); background: var(--sm-surface-2); border-radius: 16rpx; }
+.method-tabs button.active { color: var(--sm-accent); background: var(--sm-accent-soft); }
+.method-tabs button::after { border: 0; }
 .invite-page { height: 100vh; padding: 30rpx 34rpx 0; box-sizing: border-box; background: var(--sm-page-bg); }
 .page-heading { display: flex; align-items: center; gap: 16rpx; padding: 10rpx 0 28rpx; }
 .heading-icon { display: grid; place-items: center; width: 68rpx; height: 68rpx; border-radius: 18rpx; background: var(--sm-accent-3-soft); border: 1rpx solid var(--sm-border); color: var(--sm-accent-3); }
@@ -293,4 +302,14 @@ function formatDate(dateStr: string): string {
 .status-pending { background: var(--sm-warn-soft); color: var(--sm-warn); }
 
 .bottom-space { height: 50rpx; }
+.heading-title { font-size: 40rpx; }
+.heading-subtitle, .invite-meta { font-size: 24rpx; }
+.create-card, .invite-card { padding: 32rpx; border-radius: var(--sm-radius-card); }
+.email-input { min-width: 0; min-height: 48px; }
+.email-input input { font-size: 16px; }
+.invite-email { font-size: 26rpx; overflow-wrap: anywhere; min-width: 0; }
+.invite-meta, .invite-actions { flex-wrap: wrap; }
+.action-btn { min-height: 40px; font-size: 24rpx; }
+.code-btn { color: var(--sm-text); }
+@media (min-width: 960px) { .invite-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; } }
 </style>

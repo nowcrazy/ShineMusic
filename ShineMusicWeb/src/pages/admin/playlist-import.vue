@@ -82,7 +82,7 @@ const PENDING_STATUS_META: Record<string, PendingStatusMeta> = {
     label: '待审核',
     type: 'info',
     active: false,
-    hint: '已下载完成，不用再下载；评分低于自动入库阈值，确认后即可入库',
+    hint: '已下载并处理，身份、版本、元数据或发布校验仍需人工确认',
   },
   no_source: {
     label: '无音源',
@@ -94,7 +94,7 @@ const PENDING_STATUS_META: Record<string, PendingStatusMeta> = {
     label: '失败',
     type: 'danger',
     active: false,
-    hint: '已创建下载任务但候选音源都没拿到可下载直链；已尝试的源见下载任务明细，未进入候选的源不会被尝试',
+    hint: '下载、音频校验或导入处理失败；请到音源抓歌页查看关联任务的具体错误与逐源尝试记录',
   },
   rejected: {
     label: '已拒绝',
@@ -325,6 +325,7 @@ async function handleRematch() {
   rematchResult.value = null
   try {
     rematchResult.value = await rematchPlaylist(rematchPlaylistId.value)
+    queuedResult.value = null // 重新排队后清除先前“未下载”的导入快照。
     ElMessage.success('已重新排队，后台补齐中')
     await loadPlaylists()
     await loadProgress()
@@ -339,7 +340,7 @@ async function handleRematch() {
 onMounted(loadPlaylists)
 onUnmounted(stopProgressPolling)
 
-/** 跳转到「导入审核」页发布待审核曲目（自动评分低于阈值，需人工发布后才入库）。 */
+/** 跳转到导入审核页，检查评分、身份冲突及发布条件。 */
 function goReviewImport() {
   router.push({ name: 'import' })
 }
@@ -404,7 +405,7 @@ function handlePlaylistChange() {
           <span v-else-if="queuedResult.queued">
             歌单已生成：共 {{ queuedResult.total }} 首，已入库 {{ queuedResult.matched }} 首，
             <b>{{ queuedResult.pending }} 首已加入后台下载队列</b>。后台会逐首搜索音源并下载，期间可离开本页；
-            评分达标的曲目自动入库，评分偏低的会停在「待审核」，需到「导入审核」页发布。
+            身份、版本和音频校验通过的曲目自动入库；其余曲目需到「导入审核」页查看原因并处理。
           </span>
           <span v-else>
             歌单已生成：共 {{ queuedResult.total }} 首，已入库 {{ queuedResult.matched }} 首，
@@ -460,7 +461,7 @@ function handlePlaylistChange() {
               title="创建歌单并添加已匹配的曲目；未匹配曲目可之后在歌单中重新补齐"
               @click="handleImport"
             >
-              导入整张歌单
+              仅创建歌单（不下载）
             </el-button>
           </div>
         </div>
@@ -549,15 +550,14 @@ function handlePlaylistChange() {
       </div>
 
       <div v-if="progressLoaded && progress.needsReview" class="progress-note">
-        入库是自动的、按评分决定：评分达标的曲目下载完成后直接入库；这
-        <b>{{ progress.needsReview }} 首评分低于自动入库阈值</b>，音频已下载完成但停在「待审核」，
-        <b>不需要重新下载</b>，到「导入审核」页确认后即可入库，10 秒内自动进歌单。
+        <b>{{ progress.needsReview }} 首曲目需要审核</b>。请核对身份、版本、元数据及发布校验结果。
+        请到「导入审核」页核对歌曲版本和元数据；发布成功后会自动回填歌单。
       </div>
 
       <template v-if="progressLoaded && progressRows.length">
         <div class="progress-toolbar">
           <el-radio-group v-model="progressFilter" size="small">
-            <el-radio-button value="all">全部 {{ progress.total }}</el-radio-button>
+            <el-radio-button value="all">待补齐合计 {{ progress.total }}</el-radio-button>
             <el-radio-button value="active">进行中 {{ progress.pending + progress.downloading }}</el-radio-button>
             <el-radio-button value="needs_review">待审核 {{ progress.needsReview }}</el-radio-button>
             <el-radio-button value="issue">异常 {{ progress.noSource + progress.failed + progress.rejected }}</el-radio-button>

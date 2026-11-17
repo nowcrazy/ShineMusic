@@ -446,7 +446,7 @@ public sealed class SourceDownloadJob(
             else
             {
                 var client = httpClientFactory.CreateClient(task.SourceProvider);
-                // 支持音质链的音源：按「无损 → 有损」从高到低逐档下载，落地校验通过才采用。
+                // 在既有候选预算内按目标档优先下载，原文件实测合格即停止。
                 var candidates = provider is IQualityLadderProvider ladder
                     ? await ladder.ResolveDownloadCandidatesAsync(task.ProviderTrackId, cancellationToken)
                     : [download!];
@@ -454,13 +454,13 @@ public sealed class SourceDownloadJob(
                 SourceDownloadInfo? accepted = null;
                 Exception? lastCandidateDownloadException = null;
                 string? lastRejectReason = null;
-                foreach (var candidate in candidates)
+                var qualityChain = _qualityGate.GetAllowedQualityChain().ToArray();
+                foreach (var candidate in candidates.OrderBy(candidate =>
+                    candidate.BitrateKbps is null or <= 0 && !candidate.IsLossless ? int.MaxValue :
+                    Array.IndexOf(qualityChain, candidate.IsLossless ? AudioQualityLevel.Lossless
+                        : candidate.BitrateKbps is >= 320 ? AudioQualityLevel.High320K : AudioQualityLevel.Below320K)))
                 {
-                    var declaredLevel = candidate.IsLossless ? AudioQualityLevel.Lossless
-                        : candidate.BitrateKbps is >= 320 ? AudioQualityLevel.High320K
-                        : candidate.BitrateKbps is > 0 ? AudioQualityLevel.Below320K
-                        : AudioQualityLevel.Unknown;
-                    if (!_qualityGate.IsQualityAllowed(declaredLevel))
+                    if (!_qualityGate.IsCandidateAllowed(candidate.IsLossless, candidate.BitrateKbps))
                         continue;
                     try
                     {
@@ -893,7 +893,7 @@ public sealed class SourceDownloadJob(
     ///   4. 跨源佐证：短音频（&lt; 2min）再与其他平台同名同艺人曲目的时长交叉比对——堵住
     ///      「源平台搜索/详情/文件三方自洽地错标」的情况（实测酷我有整曲被一致错标成 60s 试听的案例），
     ///      实测时长不足跨源参照的一半即判试听/占位。
-    /// 探测失败（ffprobe 不可用等）只记告警并放行，避免误伤正常下载；跨源取不到参照同样放行。
+    /// 探测失败或无法验证质量时拒绝；跨源取不到参照不覆盖原文件验证结论。
     /// </summary>
     private async Task<(bool Valid, string? Reason)> EvaluateDownloadedAudioAsync(
         ExternalDownloadTask task,
@@ -903,7 +903,7 @@ public sealed class SourceDownloadJob(
         string? expectedSha256 = null)
     {
         if (!storagePaths.TryResolve(audioKey, out var audioPath) || !File.Exists(audioPath))
-            return (true, null);
+            return (false, "下载文件不存在或隔离路径无效。");
 
         // Phase 3：使用 AudioValidator 做编码级验证（有损转无损 + 试听片段 + 时长偏差）。
         var result = await _audioValidator.ValidateAsync(
@@ -911,18 +911,15 @@ public sealed class SourceDownloadJob(
 
         if (!result.Accepted)
         {
-            // encoding_mismatch 和 preview_fragment 是硬失败，直接拒绝。
-            if (result.ErrorCode is "encoding_mismatch" or "preview_fragment" or "hash_mismatch" or "file_not_found")
-                return (false, result.Reason);
-
-            // probe_failed 按既有降级哲学放行（与之前 ffprobe 不可用时放行一致）。
-            logger.LogWarning(
-                "Source download task {TaskId}: AudioValidator returned {ErrorCode} ({Reason}); falling back to cross-source check.",
+            logger.LogWarning("Source download task {TaskId}: rejected {ErrorCode} ({Reason}).",
                 task.Id, result.ErrorCode, result.Reason);
+            return (false, result.Reason);
         }
 
-        if (result.Accepted && result.Quality is { } measured && !_qualityGate.IsAcceptableForLibrary(measured.Level))
-            return (false, $"实测音质 {measured.Level} 未达到配置入库门槛。");
+        if (result.Quality is not { } measured)
+            return (false, "缺少实测音频质量。");
+        if (!_qualityGate.IsAcceptableForLibrary(measured.Codec, measured.Format.ToString(), measured.BitrateKbps))
+            return (false, $"实测编码 {measured.Codec} / {measured.BitrateKbps}kbps 未达到配置入库门槛。");
 
         // 跨源佐证：AudioValidator 的时长校验通过后，仍需对短音频做跨源交叉验证。
         // 这部分逻辑依赖 searchAggregator，不适合放进 AudioValidator，保留在 SourceDownloadJob 中。

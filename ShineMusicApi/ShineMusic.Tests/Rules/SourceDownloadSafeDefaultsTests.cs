@@ -14,8 +14,7 @@ namespace ShineMusic.Tests.Rules;
 /// <summary>
 /// 音源配置的「安全默认值」回归锁（2026-11-12 逐源实测结论）。
 /// 这些断言防的不是配置写错，而是「配置节缺失 / 新环境未覆盖」时静默回退到低质量链路：
-/// 只有 netease / migu 默认启用，Migu 默认 SQ，VIP 回退只保留 gdstudio，
-/// 自动发布阈值必须高于低质量文件的评分上限。改默认值请先跑一遍逐源实测。
+/// 只有 netease / migu 默认启用，Migu 默认 HQ，VIP 回退保持 320 优先，自动发布阈值必须高于低质量文件的评分上限。
 /// </summary>
 public sealed class SourceDownloadSafeDefaultsTests
 {
@@ -41,9 +40,9 @@ public sealed class SourceDownloadSafeDefaultsTests
     }
 
     [Fact]
-    public void Migu_defaults_to_lossless_tier()
+    public void Migu_defaults_to_320_tier()
     {
-        Assert.Equal("SQ", Defaults().Migu.ToneFlag);
+        Assert.Equal("HQ", Defaults().Migu.ToneFlag);
     }
 
     [Fact]
@@ -53,7 +52,7 @@ public sealed class SourceDownloadSafeDefaultsTests
 
         var endpoint = Assert.Single(endpoints);
         Assert.Equal(VipFallbackEndpointTypes.GdStudio, endpoint.Type);
-        Assert.Equal(["999", "320"], endpoint.Levels);
+        Assert.Equal(["320", "999"], endpoint.Levels);
         Assert.DoesNotContain(endpoints, e => e.Type == VipFallbackEndpointTypes.HaiTangW);
         Assert.DoesNotContain(endpoints, e => e.Type == VipFallbackEndpointTypes.NextMusic);
         Assert.Equal(VipFallbackEndpointTypes.GdStudio, new NeteaseVipFallbackEndpoint().Type);
@@ -102,9 +101,9 @@ public sealed class SourceDownloadSafeDefaultsTests
         using var provider = BuildOptionsProvider(new Dictionary<string, string?>());
         var options = provider.GetRequiredService<IOptions<SourceDownloadOptions>>().Value;
 
-        Assert.True(options.Netease.Enabled);
         Assert.True(options.Migu.Enabled);
-        Assert.Equal("SQ", options.Migu.ToneFlag);
+        Assert.True(options.Netease.Enabled);
+        Assert.Equal("HQ", options.Migu.ToneFlag);
         Assert.False(options.Qq.Enabled);
     }
 
@@ -120,6 +119,28 @@ public sealed class SourceDownloadSafeDefaultsTests
 
         Assert.Throws<OptionsValidationException>(
             () => provider.GetRequiredService<IOptions<SourceDownloadOptions>>().Value);
+    }
+
+    [Fact]
+    public void Appsettings_and_code_defaults_agree_on_quality_policy()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !Directory.Exists(Path.Combine(directory.FullName, "ShineMusic.Api")))
+            directory = directory.Parent;
+        Assert.NotNull(directory);
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(Path.Combine(directory!.FullName, "ShineMusic.Api", "appsettings.json"))
+            .Build();
+        var configured = configuration.GetSection("SourceDownload").Get<SourceDownloadOptions>()!;
+        var policy = configured.ProviderFramework.QualityPolicy;
+        Assert.Equal("320K", policy.PreferredQuality);
+        Assert.Equal("192K", policy.MinimumQuality);
+        Assert.True(policy.AllowLossyFallback);
+        Assert.False(policy.AllowPreview);
+        Assert.True(policy.RequireFullTrack);
+        Assert.Equal(Defaults().ProviderFramework.QualityPolicy.MinimumQuality, policy.MinimumQuality);
+        Assert.Equal(Defaults().Migu.ToneFlag, configured.Migu.ToneFlag);
+        Assert.Equal(Defaults().Netease.VipFallback.Endpoints[0].Levels, configured.Netease.VipFallback.Endpoints[0].Levels);
     }
 
     private static ServiceProvider BuildOptionsProvider(IDictionary<string, string?> overrides)

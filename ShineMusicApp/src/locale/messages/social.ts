@@ -91,6 +91,7 @@ export const socialMessages = {
       submitBtn: '提交需求',
     },
     profilePage: {
+      accountSecurity: '账号安全',
       strengthLevel0: '很弱',
       strengthLevel1: '较弱',
       strengthLevel2: '一般',
@@ -194,6 +195,7 @@ export const socialMessages = {
       submitBtn: 'Submit Request',
     },
     profilePage: {
+      accountSecurity: 'Account security',
       strengthLevel0: 'Very weak',
       strengthLevel1: 'Weak',
       strengthLevel2: 'Fair',
@@ -297,6 +299,7 @@ export const socialMessages = {
       submitBtn: 'リクエストを送信',
     },
     profilePage: {
+      accountSecurity: 'アカウントのセキュリティ',
       strengthLevel0: '非常に弱い',
       strengthLevel1: '弱い',
       strengthLevel2: '普通',

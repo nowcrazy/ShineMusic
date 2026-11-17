@@ -44,13 +44,14 @@ const expanded = playerExpanded // 全屏播放器是否展开（全局 ref，�
 const lyricMode = ref(false) // 是否处于沉浸歌词模式（隐藏封面、歌词铺满）
 const eqPanelVisible = ref(false) // 音效预设选择弹层是否可见
 const queuePanelVisible = ref(false) // 播放队列面板是否可见
+const moreActionsVisible = ref(false)
 
 /** 当前音效预设的本地化名称（音效按钮文案） */
 const eqPresetName = computed(() => t(`player.eqPresets.${state.eqPreset}`))
 
 /** 是否位于有自定义 tabbar 的页面（首页）：影响底部偏移量（132rpx 预留首页 tabbar 中间凸起按钮的高度） */
 const props = withDefaults(defineProps<{ withTabbar?: boolean }>(), { withTabbar: false })
-const bottomOffset = computed(() => `calc(env(safe-area-inset-bottom) + ${props.withTabbar ? 132 : 24}rpx)`)
+const bottomOffset = computed(() => `calc(env(safe-area-inset-bottom) + ${props.withTabbar ? 64 : 16}px)`)
 
 // 播放进度百分比（0-100），无总时长时按 0 处理；拖动中以手指位置为准
 const trackDuration = computed(() => state.currentTrack?.duration || 0)
@@ -174,8 +175,8 @@ watch(
 const overlayStyle = computed(() => {
   if (!palette.value) return {}
   return {
-    backgroundColor: 'var(--sm-bg)',
-    backgroundImage: `radial-gradient(120% 70% at 50% 0%, ${hexToRgba(palette.value.c1, 0.42)} 0%, transparent 62%), radial-gradient(120% 80% at 50% 100%, ${hexToRgba(palette.value.c2, 0.24)} 0%, transparent 60%)`,
+    backgroundColor: '#262e2b',
+    backgroundImage: `radial-gradient(120% 70% at 50% 0%, ${hexToRgba(palette.value.c1, 0.16)} 0%, transparent 62%)`,
   }
 })
 
@@ -488,7 +489,7 @@ const barStyles = Array.from({ length: 26 }, (_, index) => ({
 // ===== 交互 =====
 /** 展开全屏播放器 */
 function openPlayer() {
-  expanded.value = true
+  if (state.currentTrack) expanded.value = true
 }
 
 /** 切换沉浸歌词模式 */
@@ -693,21 +694,11 @@ function onSeekEnd() {
 <template>
   <view v-if="state.currentTrack">
     <!-- 底部迷你播放条：点击展开全屏页，内部按钮 @tap.stop 不触发展开 -->
-    <view class="now-playing" :style="{ bottom: bottomOffset }" @tap="openPlayer">
+    <view class="now-playing" :style="{ bottom: bottomOffset }">
       <view class="now-progress"><view :style="{ width: `${progress}%` }"></view></view>
-      <view class="now-cover"><CoverArt :src="state.currentTrack.cover" :seed="state.currentTrack.title" :rounded="13" :icon-size="16" /></view>
-      <view class="now-copy">
-        <text class="now-title">{{ state.currentTrack.title }}</text>
-        <text class="now-artist">{{ state.currentTrack.artist }}</text>
-      </view>
-      <view class="now-live">
-        <view class="mini-eq" :class="{ paused: !state.isPlaying }"><view></view><view></view><view></view></view>
-      </view>
-      <view class="now-play" @tap.stop="togglePlayback">
-        <Pause v-if="state.isPlaying" :size="21" fill="currentColor" />
-        <Play v-else :size="21" fill="currentColor" />
-      </view>
-      <view class="now-next" @tap.stop="nextTrack"><SkipForward :size="19" /></view>
+      <button class="now-open" :aria-label="t('homePage.playerOpen')" @tap="openPlayer"><view class="now-cover"><CoverArt :src="state.currentTrack.cover" :seed="state.currentTrack.title" :rounded="5" :icon-size="16" /></view><view class="now-copy"><text class="now-title">{{ state.currentTrack.title }}</text><text class="now-artist">{{ state.currentTrack.artist }}</text></view></button>
+      <button class="now-play" :aria-label="t(state.isPlaying ? 'player.pause' : 'player.play')" @tap="togglePlayback"><Pause v-if="state.isPlaying" :size="21" /><Play v-else :size="21" /></button>
+      <button class="now-next" :aria-label="t('player.queue')" @tap="queuePanelVisible = true"><ListMusic :size="20" /></button>
     </view>
 
     <!-- 全屏播放器弹层：动态背景 + 黑胶封面 / 沉浸歌词 + 频谱 + 控制区。
@@ -715,12 +706,12 @@ function onSeekEnd() {
     <view v-if="expanded" ref="overlayElRef" class="player-overlay" :class="{ immersive: lyricMode }" :style="overlayStyleWithRatio">
       <!-- 顶栏：收起 / 歌词模式切换 / 关闭 -->
       <view class="player-topbar">
-        <view class="player-icon-button" @tap="expanded = false"><ChevronDown :size="23" /></view>
+        <button class="player-icon-button" :aria-label="t('homePage.playerClose')" @tap="expanded = false"><ChevronDown :size="23" /></button>
         <view class="player-top-label">
           <text>{{ t('player.nowPlaying') }}</text>
           <text class="player-context">{{ lyricMode ? t('playback.lyricsMode') : 'Shine Music' }}</text>
         </view>
-        <view class="player-icon-button" :class="{ active: lyricMode }" @tap="toggleLyricMode"><AlignLeft :size="20" /></view>
+        <button class="player-icon-button" :class="{ active: lyricMode }" :aria-label="t('playback.lyricsMode')" :aria-pressed="lyricMode" @tap="toggleLyricMode"><AlignLeft :size="20" /></button>
       </view>
 
       <!-- 舞台：封面（可手势）+ 曲名信息 + 歌词（竖屏在内，横屏经 display:contents 变为右栏） -->
@@ -735,9 +726,7 @@ function onSeekEnd() {
           >
             <view class="player-disc" :class="{ playing: state.isPlaying }">
               <CoverArt :src="state.currentTrack.cover" :seed="state.currentTrack.title" :rounded="0" :icon-size="44" />
-              <view class="disc-hole"></view>
             </view>
-            <view class="art-sticker"><AudioLines :size="16" /><text>SHINE SESSION</text></view>
           </view>
           <view class="art-hint">{{ t('playback.gestureHint') }}</view>
         </view>
@@ -747,9 +736,6 @@ function onSeekEnd() {
           <view class="player-info-copy">
             <text class="player-song-title">{{ state.currentTrack.title }}</text>
             <text class="player-song-artist">{{ artistAlbumLabel }}</text>
-          </view>
-          <view class="player-like" :class="{ liked }" @tap="handleLike">
-            <Heart :size="24" :fill="liked ? 'currentColor' : 'none'" />
           </view>
         </view>
 
@@ -786,14 +772,10 @@ function onSeekEnd() {
         <view v-else class="lyric-empty">{{ t('player.noLyrics') }}</view>
       </view>
 
-      <!-- 律动频谱条：播放时跳动，暂停时静置 -->
-      <view class="visualizer" :class="{ paused: !state.isPlaying }">
-        <view v-for="(style, index) in barStyles" :key="index" class="vbar" :style="style"></view>
-      </view>
 
       <!-- 进度条：touchstart/touchmove 拖动跟手，touchend 时一次性 seek -->
       <view class="seek-area">
-        <view class="seek-track" @touchstart="onSeekStart" @touchmove="onSeekMove" @touchend="onSeekEnd" @touchcancel="onSeekEnd">
+        <view class="seek-track" role="slider" tabindex="0" :aria-label="t('homePage.playerSeek')" :aria-valuenow="Math.round(state.currentTime)" :aria-valuemin="0" :aria-valuemax="trackDuration" @keydown.left.prevent="seek(Math.max(0, state.currentTime - 5))" @keydown.right.prevent="seek(Math.min(trackDuration, state.currentTime + 5))" @touchstart="onSeekStart" @touchmove="onSeekMove" @touchend="onSeekEnd" @touchcancel="onSeekEnd">
           <view :style="{ width: `${progress}%` }"></view>
           <view class="seek-knob" :style="{ left: `${progress}%` }"></view>
         </view>
@@ -802,26 +784,29 @@ function onSeekEnd() {
 
       <!-- 播放控制：播放模式（单按钮三态）/ 上一首 / 播放暂停 / 下一首 / 收藏 -->
       <view class="player-controls">
-        <view class="control-secondary" :class="{ active: state.playMode !== 'order' }" @tap="cyclePlayMode">
+        <button class="control-secondary" :class="{ active: state.playMode !== 'order' }" :aria-label="t('homePage.playerMode')" @tap="cyclePlayMode">
           <ListOrdered v-if="state.playMode === 'order'" :size="22" />
           <Shuffle v-else-if="state.playMode === 'shuffle'" :size="22" />
           <Repeat1 v-else :size="22" />
-        </view>
-        <view class="control-skip" @tap="previousTrack"><SkipBack :size="24" fill="currentColor" /></view>
-        <view class="control-play" @tap="togglePlayback">
+        </button>
+        <button class="control-skip" :aria-label="t('player.prev')" @tap="previousTrack"><SkipBack :size="24" fill="currentColor" /></button>
+        <button class="control-play" :aria-label="t(state.isPlaying ? 'player.pause' : 'player.play')" @tap="togglePlayback">
           <Pause v-if="state.isPlaying" :size="27" fill="currentColor" />
           <Play v-else :size="27" fill="currentColor" />
-        </view>
-        <view class="control-skip" @tap="nextTrack"><SkipForward :size="24" fill="currentColor" /></view>
-        <view class="control-secondary" :class="{ liked }" @tap="handleLike">
+        </button>
+        <button class="control-skip" :aria-label="t('player.next')" @tap="nextTrack"><SkipForward :size="24" fill="currentColor" /></button>
+        <button class="control-secondary" :class="{ liked }" :aria-label="t(liked ? 'trackRow.removeFavorite' : 'trackRow.addFavorite')" :aria-pressed="liked" @tap="handleLike">
           <Heart :size="21" :fill="liked ? 'currentColor' : 'none'" />
-        </view>
+        </button>
       </view>
 
       <!-- 评论 / 播放列表 / 加歌单 / 音效 / 不感兴趣：音效仅 H5（Web Audio）可用时展示 -->
       <view class="player-extra">
-        <view class="extra-button extra-button--primary" @tap="openComments"><MessageSquare :size="17" /><text>{{ t('player.comments') }}</text></view>
-        <view class="extra-button" @tap="queuePanelVisible = true"><ListMusic :size="17" /><text>{{ t('player.queue') }}</text></view>
+        <button class="extra-button extra-button--primary" @tap="openComments"><MessageSquare :size="17" /><text>{{ t('player.comments') }}</text></button>
+        <button class="extra-button" @tap="queuePanelVisible = true"><ListMusic :size="17" /><text>{{ t('player.queue') }}</text></button>
+        <button class="extra-button" :aria-expanded="moreActionsVisible" @tap="moreActionsVisible = !moreActionsVisible">{{ moreActionsVisible ? t('comments.collapse') : t('homePage.more') }}</button>
+      </view>
+      <view v-if="moreActionsVisible" class="player-extra">
         <view class="extra-button" @tap="addToPlaylist"><ListPlus :size="17" /><text>{{ t('player.addToPlaylist') }}</text></view>
         <view v-if="state.eqSupported" class="extra-button" :class="{ active: state.eqPreset !== 'flat' }" @tap="eqPanelVisible = true">
           <SlidersHorizontal :size="17" /><text>{{ t('player.eq') }} · {{ eqPresetName }}</text>
@@ -980,7 +965,7 @@ function onSeekEnd() {
 
 /* 音效预设选择底部抽屉 */
 .eq-sheet-mask { position: fixed; z-index: 11; inset: 0; display: flex; align-items: flex-end; background: rgba(0, 0, 0, .45); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); animation: fade-in .2s ease-out; }
-.eq-sheet { display: flex; flex-direction: column; width: 100%; padding: 34rpx 40rpx calc(env(safe-area-inset-bottom) + 36rpx); border-radius: 34rpx 34rpx 0 0; background: var(--sm-surface-3); animation: slide-up .26s ease-out; }
+.eq-sheet { display: flex; flex-direction: column; width: 100%; max-height: 85vh; overflow-y: auto; padding: 34rpx 40rpx calc(env(safe-area-inset-bottom) + 36rpx); border: 1px solid var(--sm-border); border-radius: 32rpx 32rpx 0 0; background: var(--sm-bg-soft); animation: slide-up 280ms cubic-bezier(.2,.8,.2,1); }
 .eq-sheet-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 26rpx; }
 .eq-sheet-title { color: var(--sm-text); font-size: 22rpx; font-weight: 700; }
 .eq-sheet-close { display: grid; place-items: center; width: 48rpx; height: 48rpx; color: var(--sm-text-2); }
@@ -1238,4 +1223,37 @@ function onSeekEnd() {
 
 @keyframes slide-in-right { from { transform: translateX(100%); } to { transform: translateX(0); } }
 @keyframes lyric-flash { 0% { background: var(--sm-accent-soft); } 100% { background: transparent; } }
+@media (min-width: 960px) {
+  .now-playing { right: max(40px, calc((100vw - 960px) / 2)); left: max(40px, calc((100vw - 960px) / 2)); bottom: 108px; height: 72px; border-radius: 20px; background: var(--sm-bg-soft); }
+  .now-title { font-size: 16px; } .now-artist { font-size: 13px; }
+  .player-overlay { max-width: 1120px; padding: 32px 48px; }
+  .player-art-wrap { width: min(36vh, 320px); }
+  .player-song-title { font-size: 28px; }
+}
+.player-icon-button, .player-like, .eq-sheet-close { min-width: 40px; min-height: 40px; border-radius: 50%; }
+.control-play { background: var(--sm-accent); color: var(--sm-accent-ink); box-shadow: var(--sm-shadow-sm); }
+/* Compact independent mini player and quiet square artwork. */
+button { margin: 0; padding: 0; background: transparent; color: inherit; line-height: 1.5; }
+button::after { border: 0; }
+button:focus-visible, [role='slider']:focus-visible { outline: 2px solid var(--sm-accent); outline-offset: 3px; }
+.now-playing { left: 20px; right: 20px; height: 56px; box-sizing: border-box; padding: 8px 10px; gap: 8px; border-radius: 10px; background: var(--sm-surface); border: 1px solid var(--sm-border-strong); box-shadow: none; }
+.now-open { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1; text-align: left; }
+.now-cover { width: 36px; height: 36px; border-radius: 5px; flex: none; }
+.now-copy { flex: 1; min-width: 0; }
+.now-title { font-size: 12px; }
+.now-artist { margin-top: 3px; font-size: 10px; }
+.now-play, .now-next { display: grid; place-items: center; width: 36px; height: 36px; flex: none; background: transparent; color: var(--sm-text); }
+.now-progress { top: auto; bottom: 0; left: 10px; right: 10px; height: 2px; }
+.player-overlay { --sm-bg: #262e2b; --sm-bg-soft: #303a35; --sm-text: #f0efe7; --sm-text-2: #b2bcb1; --sm-text-3: #a0ad9f; --sm-accent: #e5b7a2; --sm-accent-ink: #262e2b; --sm-surface: #354039; --sm-surface-3: #465148; --sm-border: #536056; --sm-danger: #ef977f; --sm-art-shadow: #0005; background: #262e2b; color: var(--sm-text); overflow-y: auto; animation: rise-in 260ms cubic-bezier(.2,.85,.25,1.05); }
+.player-disc { border-radius: 8px; animation: none; box-shadow: 0 20px 48px #0004; }
+.player-art-wrap { width: min(72vw, 300px); }
+.player-art-block { margin-top: 24px; }
+.player-song-title { white-space: normal; overflow-wrap: anywhere; font-size: 24px; }
+.control-play { background: #eeeede; color: #27322a; width: 64px; height: 64px; }
+.player-controls { gap: 12px; }
+.art-hint { font-size: 10px; opacity: .7; }
+@media(min-width:800px) { .now-playing { left: max(24px, calc((100vw - 892px) / 2)); right: max(24px, calc((100vw - 892px) / 2)); } }
+@media(orientation:portrait) { .player-overlay { padding: calc(env(safe-area-inset-top) + 24px) 24px calc(env(safe-area-inset-bottom) + 24px); } .player-stage { overflow: visible; flex: 1 0 auto; } .lyric-view { flex: none; height: 88px; margin-top: 16px; } .player-stage.immersive .lyric-view { height: 48vh; } .player-info, .seek-area, .player-controls { width: min(100%, 380px); margin-left: auto; margin-right: auto; box-sizing: border-box; } }
+@media(max-height:740px) and (orientation:portrait) { .player-art-wrap { width: min(56vw, 220px); } .player-art-block { margin-top: 16px; } }
+@media(prefers-reduced-motion:reduce) { .player-overlay, .player-disc, .mini-eq view { animation: none; transition: none; } }
 </style>
