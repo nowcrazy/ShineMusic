@@ -66,6 +66,38 @@ public sealed class SourceDownloadSafeDefaultsTests
     }
 
     [Fact]
+    public void Configured_resolvers_and_levels_replace_the_initialized_defaults()
+    {
+        using var provider = BuildOptionsProvider(new Dictionary<string, string?>
+        {
+            ["SourceDownload:Netease:VipFallback:Endpoints:0:Id"] = "custom",
+            ["SourceDownload:Netease:VipFallback:Endpoints:0:Url"] = "https://resolver.example/audio",
+            ["SourceDownload:Netease:VipFallback:Endpoints:0:Levels:0"] = "256",
+            ["SourceDownload:Netease:VipFallback:Endpoints:0:Enabled"] = "false"
+        });
+
+        var endpoint = Assert.Single(provider.GetRequiredService<IOptions<SourceDownloadOptions>>().Value.Netease.VipFallback.Endpoints);
+        Assert.Equal("custom", endpoint.Id);
+        Assert.False(endpoint.Enabled);
+        Assert.Equal(["256"], endpoint.Levels);
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("null")]
+    public void Explicitly_empty_resolver_list_does_not_restore_the_default_service(string value)
+    {
+        using var json = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(
+            "{\"SourceDownload\":{\"Netease\":{\"VipFallback\":{\"Endpoints\":" + value + "}}}}"));
+        var configuration = new ConfigurationBuilder().AddJsonStream(json).Build();
+        var options = configuration.GetSection("SourceDownload").Get<SourceDownloadOptions>()!;
+
+        SourceDownloadOptionsBinding.ReplaceConfiguredNeteaseEndpoints(configuration, options);
+
+        Assert.Empty(options.Netease.VipFallback.Endpoints);
+    }
+
+    [Fact]
     public void A_128k_file_with_perfect_metadata_still_cannot_auto_publish()
     {
         // 把元数据、封面、歌词全部拉满，只把码率压到 128k：
@@ -125,7 +157,7 @@ public sealed class SourceDownloadSafeDefaultsTests
     public void Appsettings_and_code_defaults_agree_on_quality_policy()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !Directory.Exists(Path.Combine(directory.FullName, "ShineMusic.Api")))
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "ShineMusic.Api", "appsettings.json")))
             directory = directory.Parent;
         Assert.NotNull(directory);
         var configuration = new ConfigurationBuilder()

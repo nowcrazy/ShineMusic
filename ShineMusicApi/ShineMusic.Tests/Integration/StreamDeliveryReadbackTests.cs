@@ -16,9 +16,12 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using ShineMusic.Api.Services;
 using ShineMusic.Model.Ports;
+using ShineMusic.Model.Options;
 using ShineMusic.Service;
+using ShineMusic.Service.Media;
 using ShineMusic.Service.SourceDownload;
 using Xunit;
 
@@ -45,6 +48,7 @@ public sealed class StreamDeliveryReadbackTests : IClassFixture<StreamTestFactor
         _factory = factory;
         _factory.Playback.Container = "flac";
         _factory.Playback.StorageKey = "l3a/fixture.flac";
+        _factory.Playback.Visibility = new TrackPlaybackVisibility(DateTimeOffset.UtcNow, null);
         _factory.Storage.ResolvedPath = null;
     }
 
@@ -114,6 +118,75 @@ public sealed class StreamDeliveryReadbackTests : IClassFixture<StreamTestFactor
         Assert.Equal(contentType, response.Content.Headers.ContentType?.MediaType);
         Assert.Equal(file.Length, response.Content.Headers.ContentRange?.Length);
         Assert.Equal(16, (await response.Content.ReadAsByteArrayAsync()).Length);
+    }
+
+    [Fact]
+    public async Task Public_stream_revalidates_conditional_request_and_sets_cache_policy()
+    {
+        using var file = TempAudio.Create("fLaC", AssetSizeBytes, magicOffset: 0);
+        _factory.Storage.ResolvedPath = file.Path;
+        using var client = _factory.CreateClient();
+        using var first = await client.GetAsync($"/api/v1/tracks/{TrackId}/stream");
+
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        Assert.Contains("public", first.Headers.CacheControl?.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("no-cache", first.Headers.CacheControl?.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(first.Headers.ETag);
+
+        using var conditional = new HttpRequestMessage(HttpMethod.Get, $"/api/v1/tracks/{TrackId}/stream");
+        conditional.Headers.IfNoneMatch.Add(first.Headers.ETag!);
+        using var notModified = await client.SendAsync(conditional);
+
+        Assert.Equal(HttpStatusCode.NotModified, notModified.StatusCode);
+        Assert.Contains("no-cache", notModified.Headers.CacheControl?.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Private_stream_is_hidden_and_never_cached_for_shared_clients()
+    {
+        _factory.Playback.Visibility = new TrackPlaybackVisibility(null, Guid.NewGuid());
+        using var client = _factory.CreateClient();
+
+        using var response = await client.GetAsync($"/api/v1/tracks/{TrackId}/stream");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Contains("private", response.Headers.CacheControl?.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("no-store", response.Headers.CacheControl?.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Explicit_aac_compatibility_response_preserves_range_etag_and_private_cache_policy()
+    {
+        using var file = TempAudio.Create("fLaC", AssetSizeBytes, magicOffset: 0);
+        _factory.Storage.ResolvedPath = file.Path;
+        using var client = _factory.CreateClient();
+        using var request = RangeRequest(TrackId);
+        request.RequestUri = new Uri($"/api/v1/tracks/{TrackId}/stream?format=aac", UriKind.Relative);
+
+        using var response = await client.SendAsync(request);
+        var bytes = await response.Content.ReadAsByteArrayAsync();
+
+        Assert.Equal(HttpStatusCode.PartialContent, response.StatusCode);
+        Assert.Equal("audio/mp4", response.Content.Headers.ContentType?.MediaType);
+        Assert.Contains("public", response.Headers.CacheControl?.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("no-cache", response.Headers.CacheControl?.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(16, bytes.Length);
+        Assert.Equal(1, _factory.TemporaryPlayback.TranscodeCount);
+        Assert.True(_factory.TemporaryPlayback.LastLeaseDisposed);
+    }
+
+    [Fact]
+    public async Task Anonymous_disabled_stream_is_unauthorized_and_private_no_store()
+    {
+        using var deniedFactory = new StreamTestFactory(anonymousPlaybackEnabled: false);
+        deniedFactory.EnsureHost();
+        using var client = deniedFactory.CreateClient();
+
+        using var response = await client.GetAsync($"/api/v1/tracks/{TrackId}/stream");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Contains("private", response.Headers.CacheControl?.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("no-store", response.Headers.CacheControl?.ToString(), StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -202,27 +275,31 @@ internal static class StreamReadbackVerifier
 /// </summary>
 public sealed class StreamTestFactory : WebApplicationFactory<Program>
 {
-    private static readonly (string Key, string Value)[] EnvironmentOverrides =
-    [
-        // appsettings.json 刻意不含 SigningKey（生产靠 User Secrets / 环境变量）；CI 无 User Secrets，
-        // 而 AddShineMusicAuthentication 在注册时就会校验长度，必须显式给一个仅用于测试的值。
-        ("Auth__SigningKey", "L3a-Integration-Test-SigningKey-0123456789-abcdefgh"),
-        // Worker:Mode 在 Program.cs 顶层决定 HostedService 注册，WAF 的 ConfigureAppConfiguration 太晚，
-        // 只能靠环境变量（CreateBuilder 会加载）。
-        ("Worker__Mode", "none"),
-        ("Features__AnonymousPlayback", "true"),
-    ];
+    private readonly (string Key, string Value)[] _environmentOverrides;
 
     private readonly Dictionary<string, string?> _previousEnvironment = [];
     private readonly string _previousWorkingDirectory = Environment.CurrentDirectory;
 
     public FakePlaybackStore Playback { get; } = new();
     public FakeAudioStorage Storage { get; } = new();
+    public FakeTemporaryPlaybackService TemporaryPlayback { get; } = new();
     public NoopStartupBootstrap NoopBootstrap { get; } = new();
 
-    public StreamTestFactory()
+    public StreamTestFactory() : this(true) { }
+
+    internal StreamTestFactory(bool anonymousPlaybackEnabled)
     {
-        foreach (var (key, value) in EnvironmentOverrides)
+        _environmentOverrides =
+        [
+            // appsettings.json 刻意不含 SigningKey（生产靠 User Secrets / 环境变量）；CI 无 User Secrets，
+            // 而 AddShineMusicAuthentication 在注册时就会校验长度，必须显式给一个仅用于测试的值。
+            ("Auth__SigningKey", "L3a-Integration-Test-SigningKey-0123456789-abcdefgh"),
+            // Worker:Mode 在 Program.cs 顶层决定 HostedService 注册，WAF 的 ConfigureAppConfiguration 太晚，
+            // 只能靠环境变量（CreateBuilder 会加载）。
+            ("Worker__Mode", "none"),
+            ("Features__AnonymousPlayback", anonymousPlaybackEnabled ? "true" : "false"),
+        ];
+        foreach (var (key, value) in _environmentOverrides)
         {
             _previousEnvironment[key] = Environment.GetEnvironmentVariable(key);
             Environment.SetEnvironmentVariable(key, value);
@@ -237,6 +314,7 @@ public sealed class StreamTestFactory : WebApplicationFactory<Program>
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        builder.UseEnvironment("Testing");
         builder.UseContentRoot(ResolveApiProjectDirectory());
         // 不写 logs/：文件日志提供器由 Program.cs 在 builder.Logging 上注册，这里清掉。
         builder.ConfigureLogging(logging => logging.ClearProviders());
@@ -252,6 +330,8 @@ public sealed class StreamTestFactory : WebApplicationFactory<Program>
             services.AddSingleton<ITrackPlaybackStore>(Playback);
             services.RemoveAll<IAudioStorage>();
             services.AddSingleton<IAudioStorage>(Storage);
+            services.RemoveAll<ITemporaryPlaybackService>();
+            services.AddSingleton<ITemporaryPlaybackService>(TemporaryPlayback);
         });
     }
 
@@ -295,13 +375,37 @@ public sealed class FakePlaybackStore : ITrackPlaybackStore
 {
     public string Container { get; set; } = "flac";
     public string? StorageKey { get; set; } = "l3a/fixture.flac";
+    public TrackPlaybackVisibility? Visibility { get; set; } = new(DateTimeOffset.UtcNow, null);
 
     public Task<TrackPlaybackVisibility?> GetVisibilityAsync(Guid trackId, CancellationToken cancellationToken) =>
-        Task.FromResult<TrackPlaybackVisibility?>(new TrackPlaybackVisibility(DateTimeOffset.UtcNow, null));
+        Task.FromResult(Visibility);
 
     public Task<PublishedAudioAsset?> GetPublishedAudioAsync(Guid trackId, CancellationToken cancellationToken) =>
         Task.FromResult<PublishedAudioAsset?>(StorageKey is null ? null : new PublishedAudioAsset(StorageKey, Container));
 }
+
+public sealed class FakeTemporaryPlaybackService : ITemporaryPlaybackService
+{
+    private const int OutputSizeBytes = 4096;
+    public int TranscodeCount { get; private set; }
+    public bool LastLeaseDisposed { get; private set; }
+
+    public async Task<TemporaryPlaybackLease> GetAacAsync(
+        Guid trackId, string originalFilePath, string sourceIdentity, CancellationToken cancellationToken)
+    {
+        TranscodeCount++;
+        var path = Path.Combine(Path.GetTempPath(), $"shine-temporary-stream-{Guid.NewGuid():N}.m4a");
+        await File.WriteAllBytesAsync(path, Enumerable.Repeat((byte)0xF0, OutputSizeBytes).ToArray(), cancellationToken);
+        var info = new FileInfo(path);
+        var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.Asynchronous | FileOptions.DeleteOnClose);
+        return new TemporaryPlaybackLease(stream, info.Length, new DateTimeOffset(info.LastWriteTimeUtc), $"\"{info.Length:x}-{info.LastWriteTimeUtc.Ticks:x}\"", () =>
+        {
+            LastLeaseDisposed = true;
+            return ValueTask.CompletedTask;
+        });
+    }
+}
+
 
 public sealed class FakeAudioStorage : IAudioStorage
 {

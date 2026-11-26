@@ -14,16 +14,31 @@
 import { onHide, onLaunch, onShow } from '@dcloudio/uni-app'
 // 引入全局 scss 变量与公共样式（uni.scss）
 import './uni.scss'
-import { isAuthenticated, restoreSession } from '@/services/session'
+import { isAuthenticated, restoreSession, resumeSession, startSessionRecovery } from '@/services/session'
 import { loadCapabilities } from '@/services/capabilities'
 import { loadFavorites } from '@/services/library'
 import { loadFeedback } from '@/services/feedback'
 import { initTheme } from '@/services/theme'
-import { flushPlayerState, syncFromBackgroundAudio } from '@/services/player'
+import { flushPlayerState, restorePlayerForIdentity, syncFromBackgroundAudio } from '@/services/player'
+import { resetUserApiState } from '@/services/user-state'
+import { subscribeApiContextChange } from '@/services/http'
 
 // 应用启动：先应用主题（避免首屏闪烁），再恢复登录态与能力开关
 onLaunch(() => {
   initTheme()
+  startSessionRecovery()
+  // A new origin or authenticated identity is a new API data scope. Clear all
+  // service caches synchronously before any screen can reuse them.
+  subscribeApiContextChange(({ reason, previous }) => {
+    // Session orchestration already clears service state synchronously.
+    if (reason !== 'session') resetUserApiState()
+    void loadCapabilities()
+    // Dispose page-local private data as soon as an authenticated session ends or is suspended.
+    if (reason === 'session' && previous.userId !== null) {
+      uni.reLaunch({ url: '/pages/home/index' })
+    }
+  })
+  void loadCapabilities()
   // #ifdef H5
   // uni-button is a custom element on H5; supply native button keyboard semantics.
   const syncButtons = () => {
@@ -45,11 +60,11 @@ onLaunch(() => {
   // #endif
   void (async () => {
     await restoreSession()
+    restorePlayerForIdentity()
     if (isAuthenticated.value) {
       loadFavorites().catch(() => undefined)
       loadFeedback().catch(() => undefined)
     }
-    loadCapabilities()
   })()
 
 })
@@ -60,6 +75,7 @@ onLaunch(() => {
 // 会用 BGM 为权威源纠正 currentTrack / isPlaying / currentTime / duration，
 // PlayerBar 绑定 usePlayer().state，纠正后 UI 自动更新。
 onShow(() => {
+  void resumeSession()
   syncFromBackgroundAudio()
 })
 

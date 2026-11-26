@@ -129,12 +129,15 @@ public sealed class LibraryImportController : ControllerBase
                     Status = LibraryImportItemStatuses.Uploaded
                 }).ToList()
             };
-            // 批次 + 条目 + 审计同事务提交。
+            // 批次、条目、审计和待发消息同事务提交。
+            var outboxIds = new List<Guid>();
             await db.Ado.BeginTranAsync();
             try
             {
                 await db.Insertable(batch).ExecuteCommandAsync(cancellationToken);
                 await db.Insertable(batch.Items.ToList()).ExecuteCommandAsync(cancellationToken);
+                foreach (var file in pendingFiles)
+                    outboxIds.Add(await MessageOutbox.EnqueueAsync(db, QueueNames.Imports, file.Id, cancellationToken));
                 AdminAudit.Add(HttpContext, db, "library_import.created", "import_batch", batch.Id, new { itemCount = batch.Items.Count });
                 await db.Ado.CommitTranAsync();
             }
@@ -144,8 +147,8 @@ public sealed class LibraryImportController : ControllerBase
                 throw;
             }
             batchSaved = true;
-            foreach (var file in pendingFiles)
-                await messageBus.PublishAsync(QueueNames.Imports, file.Id, cancellationToken);
+            foreach (var outboxId in outboxIds)
+                await MessageOutboxDispatcher.TryDeliverAsync(db, messageBus, outboxId, cancellationToken);
             var requests = await LoadRequestsAsync(db, [songRequestId], cancellationToken);
             return Results.Accepted($"/api/v1/admin/library/imports/{batch.Id}", ToDto(batch, requests, fulfillmentOptions.Value));
         }
@@ -170,7 +173,7 @@ public sealed class LibraryImportController : ControllerBase
         // 仅拉取未被软删除的条目；若批次内所有条目都已被删除，则该批次也不展示。
         var query = db.Queryable<LibraryImportBatch>()
             .Where(batch => SqlFunc.Subqueryable<LibraryImportItem>()
-                .Where(item => item.BatchId == batch.Id && !item.IsDeleted).Any());
+                .Where(item => item.BatchId == batch.Id && !item.IsDeleted && !item.IsUserUpload).Any());
         if (!string.IsNullOrWhiteSpace(status))
             query = query.Where(batch => batch.Status == status);
         var total = await query.CountAsync(cancellationToken);
@@ -184,7 +187,7 @@ public sealed class LibraryImportController : ControllerBase
         var batchItems = batchIds.Count == 0
             ? new List<LibraryImportItem>()
             : await db.Queryable<LibraryImportItem>()
-                .Where(item => batchIds.Contains(item.BatchId) && !item.IsDeleted)
+                .Where(item => batchIds.Contains(item.BatchId) && !item.IsDeleted && !item.IsUserUpload)
                 .ToListAsync(cancellationToken);
         var itemsByBatch = batchItems.ToLookup(item => item.BatchId);
         foreach (var batch in batches)
@@ -210,8 +213,10 @@ public sealed class LibraryImportController : ControllerBase
         if (batch is null)
             return ApiResults.NotFound(HttpContext);
         batch.Items = await db.Queryable<LibraryImportItem>()
-            .Where(item => item.BatchId == batch.Id && !item.IsDeleted)
+            .Where(item => item.BatchId == batch.Id && !item.IsDeleted && !item.IsUserUpload)
             .ToListAsync(cancellationToken);
+        if (batch.Items.Count == 0)
+            return ApiResults.NotFound(HttpContext);
         var requests = await LoadRequestsAsync(db, batch.Items.Select(item => item.SongRequestId), cancellationToken);
         return Results.Ok(ToDto(batch, requests, fulfillmentOptions.Value));
     }
@@ -223,7 +228,7 @@ public sealed class LibraryImportController : ControllerBase
         IOptions<SongRequestFulfillmentOptions> fulfillmentOptions,
         CancellationToken cancellationToken)
     {
-        var item = await db.Queryable<LibraryImportItem>().FirstAsync(candidate => candidate.Id == itemId && !candidate.IsDeleted, cancellationToken);
+        var item = await db.Queryable<LibraryImportItem>().FirstAsync(candidate => candidate.Id == itemId && !candidate.IsDeleted && !candidate.IsUserUpload, cancellationToken);
         if (item is null)
             return ApiResults.NotFound(HttpContext);
         var requests = await LoadRequestsAsync(db, [item.SongRequestId], cancellationToken);
@@ -239,7 +244,7 @@ public sealed class LibraryImportController : ControllerBase
         LibraryStoragePaths libraryPaths,
         CancellationToken cancellationToken)
     {
-        var item = await db.Queryable<LibraryImportItem>().FirstAsync(candidate => candidate.Id == itemId, cancellationToken);
+        var item = await db.Queryable<LibraryImportItem>().FirstAsync(candidate => candidate.Id == itemId && !candidate.IsUserUpload, cancellationToken);
         if (item is null)
             return ApiResults.NotFound(HttpContext);
         var storageKey = item.TranscodedStorageKey ?? item.SourceStorageKey;
@@ -248,7 +253,7 @@ public sealed class LibraryImportController : ControllerBase
                 item.TranscodedStorageKey is null || item.TranscodedStorageKey == item.SourceStorageKey
                     ? item.Container : item.TranscodeFormat ?? "m4a"), enableRangeProcessing: true);
 
-        // 用户上传已私有入库：隔离区文件已随入库清理，回退到曲库中的播放资产。
+        // 已发布的管理端导入：隔离区清理后回退到正式曲库资产。
         if (item.PublishedTrackId is null)
             return ApiResults.NotFound(HttpContext);
         var asset = await db.Queryable<MediaAsset>()
@@ -269,9 +274,12 @@ public sealed class LibraryImportController : ControllerBase
         IOptions<SongRequestFulfillmentOptions> fulfillmentOptions,
         CancellationToken cancellationToken)
     {
-        var item = await db.Queryable<LibraryImportItem>().FirstAsync(candidate => candidate.Id == itemId, cancellationToken);
+        var item = await db.Queryable<LibraryImportItem>().FirstAsync(candidate => candidate.Id == itemId && !candidate.IsUserUpload, cancellationToken);
         if (item is null)
             return ApiResults.NotFound(HttpContext);
+        var snapshot = ImportItemEditSnapshot.Capture(item);
+        if (HasActiveLease(item))
+            return ApiResults.Conflict(HttpContext, "This import item is currently owned by a media worker.");
         if (LibraryImportStateMachine.IsImmutable(item.Status))
             return ApiResults.Conflict(HttpContext, "This import item can no longer be edited.");
         if (update.Title is not null && (string.IsNullOrWhiteSpace(update.Title) || update.Title.Trim().Length > 300))
@@ -352,7 +360,11 @@ public sealed class LibraryImportController : ControllerBase
         await db.Ado.BeginTranAsync();
         try
         {
-            await db.Updateable(item).ExecuteCommandAsync(cancellationToken);
+            if (!await TrySaveUnownedAsync(db, item, snapshot, cancellationToken))
+            {
+                await db.Ado.RollbackTranAsync();
+                return ApiResults.Conflict(HttpContext, "The import item changed; reload before editing.");
+            }
             AdminAudit.Add(HttpContext, db, "library_import_item.updated", "import_item", item.Id, new { fields = new[] { "metadata" } });
             await db.Ado.CommitTranAsync();
         }
@@ -378,9 +390,12 @@ public sealed class LibraryImportController : ControllerBase
         IOptions<SongRequestFulfillmentOptions> fulfillmentOptions,
         CancellationToken cancellationToken)
     {
-        var item = await db.Queryable<LibraryImportItem>().FirstAsync(candidate => candidate.Id == itemId, cancellationToken);
+        var item = await db.Queryable<LibraryImportItem>().FirstAsync(candidate => candidate.Id == itemId && !candidate.IsUserUpload, cancellationToken);
         if (item is null)
             return ApiResults.NotFound(HttpContext);
+        var snapshot = ImportItemEditSnapshot.Capture(item);
+        if (HasActiveLease(item))
+            return ApiResults.Conflict(HttpContext, "This import item is currently owned by a media worker.");
         if (LibraryImportStateMachine.IsImmutable(item.Status))
             return ApiResults.Conflict(HttpContext, "This import item can no longer be edited.");
 
@@ -416,7 +431,11 @@ public sealed class LibraryImportController : ControllerBase
             await db.Ado.BeginTranAsync();
             try
             {
-                await db.Updateable(item).ExecuteCommandAsync(cancellationToken);
+                if (!await TrySaveUnownedAsync(db, item, snapshot, cancellationToken))
+                {
+                    await db.Ado.RollbackTranAsync();
+                    return ApiResults.Conflict(HttpContext, "The import item changed; reload before enriching.");
+                }
                 AdminAudit.Add(HttpContext, db, "library_import_item.enriched", "import_item", item.Id, new { fields = filled });
                 await db.Ado.CommitTranAsync();
             }
@@ -442,9 +461,12 @@ public sealed class LibraryImportController : ControllerBase
         IOptions<SongRequestFulfillmentOptions> fulfillmentOptions,
         CancellationToken cancellationToken)
     {
-        var item = await db.Queryable<LibraryImportItem>().FirstAsync(candidate => candidate.Id == itemId, cancellationToken);
+        var item = await db.Queryable<LibraryImportItem>().FirstAsync(candidate => candidate.Id == itemId && !candidate.IsUserUpload, cancellationToken);
         if (item is null)
             return ApiResults.NotFound(HttpContext);
+        var snapshot = ImportItemEditSnapshot.Capture(item);
+        if (HasActiveLease(item))
+            return ApiResults.Conflict(HttpContext, "This import item is currently owned by a media worker.");
         if (LibraryImportStateMachine.IsImmutable(item.Status))
             return ApiResults.Conflict(HttpContext, "This import item can no longer be edited.");
 
@@ -480,7 +502,11 @@ public sealed class LibraryImportController : ControllerBase
         await db.Ado.BeginTranAsync();
         try
         {
-            await db.Updateable(item).ExecuteCommandAsync(cancellationToken);
+            if (!await TrySaveUnownedAsync(db, item, snapshot, cancellationToken))
+            {
+                await db.Ado.RollbackTranAsync();
+                return ApiResults.Conflict(HttpContext, "The import item changed; reload before updating lyrics.");
+            }
             AdminAudit.Add(HttpContext, db, "library_import_item.lyrics_uploaded", "import_item", item.Id, new { extension, length = content.Length });
             await db.Ado.CommitTranAsync();
         }
@@ -501,14 +527,9 @@ public sealed class LibraryImportController : ControllerBase
         ImportPublishService publisher,
         CancellationToken cancellationToken)
     {
-        var item = await db.Queryable<LibraryImportItem>().FirstAsync(candidate => candidate.Id == itemId, cancellationToken);
+        var item = await db.Queryable<LibraryImportItem>().FirstAsync(candidate => candidate.Id == itemId && !candidate.IsUserUpload, cancellationToken);
         if (item is null)
             return ApiResults.NotFound(HttpContext);
-
-        // 用户上传的私有曲目转公开：曲目已在处理完成时私有入库（仅上传者可听），
-        // 此处由管理员审核决定是否进入公共曲库（设置发布时间），并同步审核中修正过的元数据。
-        if (item.IsUserUpload)
-            return await PublishUserUploadAsync(item, db, cancellationToken);
 
         // 核心发布逻辑（建 Track、资产落库、点歌联动、事务与清理）在 ImportPublishService 中，
         // 与「外部音源评分直通自动发布」共用同一条路径。
@@ -621,7 +642,7 @@ public sealed class LibraryImportController : ControllerBase
 
         var distinctIds = request.ItemIds.Distinct().ToList();
         var items = await db.Queryable<LibraryImportItem>()
-            .Where(item => distinctIds.Contains(item.Id) && !item.IsDeleted)
+            .Where(item => distinctIds.Contains(item.Id) && !item.IsDeleted && !item.IsUserUpload)
             .ToListAsync(cancellationToken);
 
         // 找不到的 Id 单独标记为失败。
@@ -642,6 +663,12 @@ public sealed class LibraryImportController : ControllerBase
         {
             try
             {
+                var snapshot = ImportItemEditSnapshot.Capture(item);
+                if (HasActiveLease(item))
+                {
+                    results.Add(new BulkReviewItemResultDto(item.Id, item.DisplayName, false, "Item is currently owned by a media worker."));
+                    continue;
+                }
                 if (action == "approve")
                 {
                     if (LibraryImportStateMachine.IsImmutable(item.Status))
@@ -656,7 +683,12 @@ public sealed class LibraryImportController : ControllerBase
                     await db.Ado.BeginTranAsync();
                     try
                     {
-                        await db.Updateable(item).ExecuteCommandAsync(cancellationToken);
+                        if (!await TrySaveUnownedAsync(db, item, snapshot, cancellationToken))
+                        {
+                            await db.Ado.RollbackTranAsync();
+                            results.Add(new BulkReviewItemResultDto(item.Id, item.DisplayName, false, "Item changed; reload before reviewing."));
+                            continue;
+                        }
                         AdminAudit.Add(HttpContext, db, "library_import_item.bulk_approved", "import_item", item.Id);
                         await db.Ado.CommitTranAsync();
                     }
@@ -680,7 +712,12 @@ public sealed class LibraryImportController : ControllerBase
                     await db.Ado.BeginTranAsync();
                     try
                     {
-                        await db.Updateable(item).ExecuteCommandAsync(cancellationToken);
+                        if (!await TrySaveUnownedAsync(db, item, snapshot, cancellationToken))
+                        {
+                            await db.Ado.RollbackTranAsync();
+                            results.Add(new BulkReviewItemResultDto(item.Id, item.DisplayName, false, "Item changed; reload before rejecting."));
+                            continue;
+                        }
                         AdminAudit.Add(HttpContext, db, "library_import_item.identity_rejected", "import_item", item.Id,
                             new { reason = request.Reason?.Trim() });
                         await db.Ado.CommitTranAsync();
@@ -715,9 +752,12 @@ public sealed class LibraryImportController : ControllerBase
         IOptions<SongRequestFulfillmentOptions> fulfillmentOptions,
         CancellationToken cancellationToken)
     {
-        var item = await db.Queryable<LibraryImportItem>().FirstAsync(candidate => candidate.Id == itemId, cancellationToken);
+        var item = await db.Queryable<LibraryImportItem>().FirstAsync(candidate => candidate.Id == itemId && !candidate.IsUserUpload, cancellationToken);
         if (item is null)
             return ApiResults.NotFound(HttpContext);
+        var snapshot = ImportItemEditSnapshot.Capture(item);
+        if (HasActiveLease(item))
+            return ApiResults.Conflict(HttpContext, "This import item is currently owned by a media worker.");
         if (item.SongRequestId is null)
             return Results.NoContent();
 
@@ -728,7 +768,11 @@ public sealed class LibraryImportController : ControllerBase
         await db.Ado.BeginTranAsync();
         try
         {
-            await db.Updateable(item).ExecuteCommandAsync(cancellationToken);
+            if (!await TrySaveUnownedAsync(db, item, snapshot, cancellationToken))
+            {
+                await db.Ado.RollbackTranAsync();
+                return ApiResults.Conflict(HttpContext, "The import item changed; reload before unlinking the request.");
+            }
             AdminAudit.Add(HttpContext, db, "library_import_item.song_request_unlinked", "import_item", item.Id);
             await db.Ado.CommitTranAsync();
         }
@@ -741,97 +785,7 @@ public sealed class LibraryImportController : ControllerBase
     }
 
     /// <summary>
-    /// 用户上传条目的转公开：私有曲目已存在（处理完成时自动入库、仅上传者可听），
-    /// 管理员审核通过后设置发布时间进入公共曲库，并把审核中修正过的元数据同步到曲目。
-    /// 拒绝（不调用本端点而调用删除端点）时曲目保持私有，上传者可继续收听。
-    /// </summary>
-    private async Task<IResult> PublishUserUploadAsync(
-        LibraryImportItem item,
-        ISqlSugarClient db,
-        CancellationToken cancellationToken)
-    {
-        if (item.Status != LibraryImportItemStatuses.PendingPublication || item.PublishedTrackId is null)
-            return ApiResults.Conflict(HttpContext, "Only user uploads awaiting publication review can be promoted.");
-        var track = await db.Queryable<Track>().FirstAsync(candidate => candidate.Id == item.PublishedTrackId.Value, cancellationToken);
-        if (track is null)
-            return ApiResults.NotFound(HttpContext);
-        if (track.PublishedAt != null)
-            return ApiResults.Conflict(HttpContext, "This track has already been published.");
-
-        // 同步审核中修正过的标量元数据（艺人/流派/专辑关联的变更需在审核界面一并修正后另行处理）。
-        if (!string.IsNullOrWhiteSpace(item.Title) && item.Title != track.Title)
-            track.Title = item.Title.Trim();
-        track.TrackNumber = item.TrackNumber;
-        track.DiscNumber = item.DiscNumber;
-        track.ReleaseYear = item.ReleaseYear;
-        track.ReleaseDate = item.ReleaseDate;
-        track.Isrc = item.Isrc;
-        track.AlbumArtistsJson = item.AlbumArtistsJson;
-        track.OriginalGenresJson = item.OriginalGenresJson;
-        track.MetadataAuditJson = item.MetadataAuditJson;
-        track.DurationMs = item.DurationMs ?? track.DurationMs;
-
-        // 歌词同步：审核中修改过歌词则以导入项为准（含来源与置信度）。
-        Lyric? lyricToInsert = null;
-        Lyric? lyricToUpdate = null;
-        if (!string.IsNullOrWhiteSpace(item.Lyrics))
-        {
-            var isLrc = System.Text.RegularExpressions.Regex.IsMatch(item.Lyrics, @"\[\d{1,2}:\d{1,2}");
-            var existing = await db.Queryable<Lyric>().FirstAsync(
-                lyric => lyric.TrackId == track.Id && lyric.IsDefault, cancellationToken);
-            if (existing is null)
-            {
-                lyricToInsert = new Lyric
-                {
-                    TrackId = track.Id,
-                    Language = null,
-                    Format = isLrc ? LyricFormats.Lrc : LyricFormats.Plain,
-                    Content = item.Lyrics,
-                    IsDefault = true,
-                    Source = item.LyricsSource ?? LyricsSources.Manual,
-                    Confidence = item.LyricsConfidence ?? 1.0,
-                    ProviderId = item.LyricsProviderId
-                };
-            }
-            else if (existing.Content != item.Lyrics)
-            {
-                existing.Content = item.Lyrics;
-                existing.Format = isLrc ? LyricFormats.Lrc : LyricFormats.Plain;
-                existing.Source = item.LyricsSource ?? LyricsSources.Manual;
-                existing.Confidence = item.LyricsConfidence ?? 1.0;
-                existing.ProviderId = item.LyricsProviderId;
-                existing.UpdatedAtUtc = DateTimeOffset.UtcNow;
-                lyricToUpdate = existing;
-            }
-        }
-
-        track.PublishedAt = DateTimeOffset.UtcNow;
-        item.Status = LibraryImportItemStatuses.Published;
-        item.UpdatedAtUtc = DateTime.UtcNow;
-        // 曲目 + 歌词 + 条目 + 审计同事务提交（等价原先单次 SaveChanges 的原子性）。
-        await db.Ado.BeginTranAsync();
-        try
-        {
-            await db.Updateable(track).ExecuteCommandAsync(cancellationToken);
-            if (lyricToInsert is not null)
-                await db.Insertable(lyricToInsert).ExecuteCommandAsync(cancellationToken);
-            else if (lyricToUpdate is not null)
-                await db.Updateable(lyricToUpdate).ExecuteCommandAsync(cancellationToken);
-            await db.Updateable(item).ExecuteCommandAsync(cancellationToken);
-            AdminAudit.Add(HttpContext, db, "track.published", "track", track.Id, new { importItemId = item.Id, promoted = true });
-            await db.Ado.CommitTranAsync();
-        }
-        catch
-        {
-            await db.Ado.RollbackTranAsync();
-            throw;
-        }
-        await ImportPublishService.UpdateBatchStatusAsync(db, item.BatchId, cancellationToken);
-        return Results.Ok(new PublishImportItemResultDto(track.Id, item.Status));
-    }
-
-    /// <summary>
-    /// 管理端导入条目列表：按状态筛选（如 pending_publication 为待审核转公开的用户上传），
+    /// 管理端导入条目列表：仅包含非用户上传条目，用户公共候选通过独立页面审核。
     /// 附带上批次上传者信息，供审核界面展示来源；支持按 标题/评分/状态/时长/创建时间 排序。
     /// </summary>
     /// <param name="sort">排序字段：created（默认）/ title / score / status / duration。</param>
@@ -857,7 +811,7 @@ public sealed class LibraryImportController : ControllerBase
     {
         page = Math.Clamp(page, 1, 1000);
         pageSize = Math.Clamp(pageSize, 1, 1000);
-        var query = db.Queryable<LibraryImportItem>().Where(item => !item.IsDeleted);
+        var query = db.Queryable<LibraryImportItem>().Where(item => !item.IsDeleted && !item.IsUserUpload);
         if (!string.IsNullOrWhiteSpace(status))
             query = query.Where(item => item.Status == status);
         if (!string.IsNullOrWhiteSpace(q))
@@ -918,9 +872,12 @@ public sealed class LibraryImportController : ControllerBase
     [HttpDelete("import-items/{itemId:guid}", Name = "DeleteLibraryImportItem")]
     public async Task<IResult> DeleteItem(Guid itemId, ISqlSugarClient db, QuarantineStoragePaths storagePaths, CancellationToken cancellationToken)
     {
-        var item = await db.Queryable<LibraryImportItem>().FirstAsync(candidate => candidate.Id == itemId, cancellationToken);
+        var item = await db.Queryable<LibraryImportItem>().FirstAsync(candidate => candidate.Id == itemId && !candidate.IsUserUpload, cancellationToken);
         if (item is null)
             return ApiResults.NotFound(HttpContext);
+        var snapshot = ImportItemEditSnapshot.Capture(item);
+        if (HasActiveLease(item))
+            return ApiResults.Conflict(HttpContext, "This import item is currently owned by a media worker.");
         if (!LibraryImportStateMachine.CanDiscard(item.Status))
             return ApiResults.Conflict(HttpContext, "Published items cannot be discarded through the import endpoint.");
         var batchId = item.BatchId;
@@ -930,7 +887,11 @@ public sealed class LibraryImportController : ControllerBase
         await db.Ado.BeginTranAsync();
         try
         {
-            await db.Updateable(item).ExecuteCommandAsync(cancellationToken);
+            if (!await TrySaveUnownedAsync(db, item, snapshot, cancellationToken))
+            {
+                await db.Ado.RollbackTranAsync();
+                return ApiResults.Conflict(HttpContext, "The import item changed; reload before discarding.");
+            }
             AdminAudit.Add(HttpContext, db, "library_import_item.rejected", "import_item", item.Id);
             await db.Ado.CommitTranAsync();
         }
@@ -953,9 +914,12 @@ public sealed class LibraryImportController : ControllerBase
     [HttpPost("import-items/{itemId:guid}/dismiss", Name = "DismissLibraryImportItem")]
     public async Task<IResult> DismissItem(Guid itemId, ISqlSugarClient db, CancellationToken cancellationToken)
     {
-        var item = await db.Queryable<LibraryImportItem>().FirstAsync(candidate => candidate.Id == itemId, cancellationToken);
+        var item = await db.Queryable<LibraryImportItem>().FirstAsync(candidate => candidate.Id == itemId && !candidate.IsUserUpload, cancellationToken);
         if (item is null)
             return ApiResults.NotFound(HttpContext);
+        var snapshot = ImportItemEditSnapshot.Capture(item);
+        if (HasActiveLease(item))
+            return ApiResults.Conflict(HttpContext, "This import item is currently owned by a media worker.");
         // 仅终态条目可从列表移除；处理中/待审核的条目不允许 dismiss（应先拒绝或发布）。
         if (!LibraryImportStateMachine.CanDismiss(item.Status))
             return ApiResults.Conflict(HttpContext, "Only rejected, published, or failed items can be dismissed.");
@@ -965,7 +929,11 @@ public sealed class LibraryImportController : ControllerBase
         await db.Ado.BeginTranAsync();
         try
         {
-            await db.Updateable(item).ExecuteCommandAsync(cancellationToken);
+            if (!await TrySaveUnownedAsync(db, item, snapshot, cancellationToken))
+            {
+                await db.Ado.RollbackTranAsync();
+                return ApiResults.Conflict(HttpContext, "The import item changed; reload before dismissing.");
+            }
             AdminAudit.Add(HttpContext, db, "library_import_item.dismissed", "import_item", item.Id, new { item.Status });
             await db.Ado.CommitTranAsync();
         }
@@ -977,6 +945,32 @@ public sealed class LibraryImportController : ControllerBase
         return Results.NoContent();
     }
 
+
+    private static bool HasActiveLease(LibraryImportItem item) => item.LeaseUntilUtc > DateTime.UtcNow;
+
+    private static async Task<bool> TrySaveUnownedAsync(ISqlSugarClient db, LibraryImportItem item,
+        ImportItemEditSnapshot snapshot, CancellationToken cancellationToken)
+    {
+        var now = DateTime.UtcNow;
+        var status = snapshot.Status;
+        var attemptId = snapshot.AttemptId;
+        var updatedAt = snapshot.UpdatedAtUtc;
+        // A successful administrator edit revokes the expired execution too. Keeping
+        // its nonce would allow a heartbeat queued before expiry to revive it later.
+        item.WorkerId = null;
+        item.AttemptId = null;
+        item.LeaseUntilUtc = null;
+        item.LastHeartbeatAtUtc = null;
+        return await db.Updateable(item)
+            .Where(row => row.Id == item.Id && row.Status == status && row.AttemptId == attemptId
+                && row.UpdatedAtUtc == updatedAt && (row.LeaseUntilUtc == null || row.LeaseUntilUtc <= now))
+            .ExecuteCommandAsync(cancellationToken) == 1;
+    }
+
+    private readonly record struct ImportItemEditSnapshot(string Status, Guid? AttemptId, DateTime UpdatedAtUtc)
+    {
+        internal static ImportItemEditSnapshot Capture(LibraryImportItem item) => new(item.Status, item.AttemptId, item.UpdatedAtUtc);
+    }
 
     private sealed record PendingUpload(Guid Id, string DisplayName, string StorageKey, string ContentHash, long SizeBytes);
 }

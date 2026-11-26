@@ -63,7 +63,9 @@ public sealed class NeteaseProvider : LegacySourceProviderAdapter
         IReadOnlyList<SourceDownloadInfo> candidates;
         try
         {
-            candidates = Legacy is IQualityLadderProvider ladder
+            candidates = Legacy is ILazySourceDownloadProvider
+                ? new[] { await Legacy.ResolveDownloadAsync(request.ProviderTrackId, cancellationToken).ConfigureAwait(false) }
+                : Legacy is IQualityLadderProvider ladder
                 ? await ladder.ResolveDownloadCandidatesAsync(request.ProviderTrackId, cancellationToken).ConfigureAwait(false)
                 : new[] { await Legacy.ResolveDownloadAsync(request.ProviderTrackId, cancellationToken).ConfigureAwait(false) };
         }

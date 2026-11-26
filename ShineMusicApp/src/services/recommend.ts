@@ -31,6 +31,7 @@ interface ApiDailyRecommendation {
 // ============ 模块级内存缓存（stale-while-revalidate）============
 let _dailyCache: DailyRecommendation | null = null
 let _dailyInFlight: Promise<DailyRecommendation> | null = null
+let dailyGeneration = 0
 
 async function fetchDailyRaw(limit?: number): Promise<DailyRecommendation> {
   const path = limit == null
@@ -48,8 +49,10 @@ async function fetchDailyRaw(limit?: number): Promise<DailyRecommendation> {
 }
 
 async function refreshDailySilently(limit?: number): Promise<void> {
+  const generation = dailyGeneration
   try {
-    _dailyCache = await fetchDailyRaw(limit)
+    const result = await fetchDailyRaw(limit)
+    if (generation === dailyGeneration) _dailyCache = result
   } catch {
     // 静默失败
   }
@@ -68,15 +71,26 @@ export async function getDailyRecommendations(limit?: number): Promise<DailyReco
     return _dailyCache
   }
   if (!_dailyInFlight) {
-    _dailyInFlight = fetchDailyRaw(limit).finally(() => {
-      _dailyInFlight = null
+    const generation = dailyGeneration
+    const request = fetchDailyRaw(limit).then((result) => {
+      if (generation === dailyGeneration) _dailyCache = result
+      return result
+    }).finally(() => {
+      if (_dailyInFlight === request) _dailyInFlight = null
     })
+    _dailyInFlight = request
   }
-  _dailyCache = await _dailyInFlight
-  return _dailyCache
+  return _dailyInFlight
 }
 
 /** 同步读取每日推荐缓存（页面先用它填充，避免 loading 闪烁）。 */
 export function peekDailyCache(): DailyRecommendation | null {
   return _dailyCache
+}
+
+/** Drop server/account-specific results and make prior responses unable to refill the cache. */
+export function resetDailyRecommendations(): void {
+  dailyGeneration++
+  _dailyCache = null
+  _dailyInFlight = null
 }

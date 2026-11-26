@@ -13,58 +13,120 @@
  * 模块加载时即向 http 层注册 401 刷新处理器，刷新采用单飞 Promise，
  * 多个并发请求遇到 401 时只触发一次 /auth/refresh。
  */
-import { computed, reactive } from 'vue'
 import type { ApiAuthTokens, ApiInvitationValidation, ApiMe } from '@/types/music'
 import { t } from '@/locale'
-import { http, setRefreshHandler } from './http'
+import { ApiContextChangedError, ApiError, assertApiContextCurrent, captureApiContext, http, invalidateApiSession, setApiUserId, setAuthenticationFailureHandler, setAuthenticationUnavailableHandler, setAuthRequestGuard, setRefreshHandler, subscribeApiContextChange } from './http'
 import { syncRemoteTheme } from './user-theme'
 import { clearTokens, getRefreshToken, hasSession, restoreTokens, saveTokens } from './tokens'
+import { resetUserApiState } from './user-state'
+import { isAuthenticated, sessionState as state } from './session-state'
+export { currentUser, isAuthenticated, isAdmin, sessionStatus } from './session-state'
 
-interface SessionState {
-  /** 当前用户资料；null 表示未登录或尚未加载 */
-  user: ApiMe | null
-  /** 会话状态机：unknown=启动未判定 / anonymous=匿名 / authenticated=已登录 */
-  status: 'unknown' | 'anonymous' | 'authenticated'
+let sessionVersion = 0
+let tokensRestored = false
+let restoring: { version: number; promise: Promise<void> } | null = null
+let retryTimer: ReturnType<typeof setTimeout> | null = null
+let retryDelay = 1000
+let recoveryStarted = false
+
+setAuthRequestGuard(() => state.status !== 'unavailable' && state.status !== 'unknown')
+setAuthenticationFailureHandler(() => endSession())
+setAuthenticationUnavailableHandler(() => { if (hasSession()) suspendSession() })
+
+function stopRecoveryTimer() {
+  if (retryTimer !== null) clearTimeout(retryTimer)
+  retryTimer = null
 }
 
-const state = reactive<SessionState>({ user: null, status: 'unknown' })
+/** Synchronous, complete local logout; network completion must never clear a later login. */
+export function endSession(): void {
+  sessionVersion++
+  tokensRestored = true
+  stopRecoveryTimer()
+  retryDelay = 1000
+  clearTokens()
+  state.user = null
+  state.status = 'anonymous'
+  resetUserApiState()
+  invalidateApiSession()
+}
 
-/** 当前登录用户资料（响应式），未登录为 null */
-export const currentUser = computed(() => state.user)
-/** 是否已登录（响应式），用于路由/操作守卫 */
-export const isAuthenticated = computed(() => state.status === 'authenticated')
-/** 当前用户是否具备 admin 角色（响应式；仅控制管理端入口，服务端独立鉴权） */
-export const isAdmin = computed(() => state.user?.roles.includes('admin') ?? false)
-/** 原始会话状态（响应式）：unknown / anonymous / authenticated */
-export const sessionStatus = computed(() => state.status)
+function scheduleRecovery() {
+  if (retryTimer !== null || state.status !== 'unavailable' || !hasSession()) return
+  retryTimer = setTimeout(() => {
+    retryTimer = null
+    void resumeSession()
+  }, retryDelay)
+  retryDelay = Math.min(retryDelay * 2, 30000)
+}
+
+function suspendSession() {
+  // Expire pending private work without deleting the recoverable credentials.
+  sessionVersion++
+  state.user = null
+  state.status = 'unavailable'
+  resetUserApiState()
+  invalidateApiSession()
+  scheduleRecovery()
+}
+
+/** Retry after connectivity returns, foregrounding, or the bounded backoff timer. */
+export async function resumeSession(): Promise<void> {
+  if (state.status !== 'unavailable') return
+  stopRecoveryTimer()
+  await restoreSession()
+}
+
+export function startSessionRecovery(): void {
+  if (recoveryStarted) return
+  recoveryStarted = true
+  uni.onNetworkStatusChange(({ isConnected }) => {
+    if (isConnected) void resumeSession()
+  })
+  // #ifdef H5
+  if (typeof window !== 'undefined') window.addEventListener('online', () => { void resumeSession() })
+  // #endif
+}
 
 // 401 时自动用 refresh token 续期，避免并发刷新。
-let refreshing: Promise<boolean> | null = null
+let refreshing: { revision: number; promise: Promise<boolean> } | null = null
 setRefreshHandler(() => {
-  if (!refreshing) {
-    refreshing = (async () => {
-      const refreshToken = getRefreshToken()
-      if (!refreshToken) return false
-      try {
-        const tokens = await http.post<ApiAuthTokens>(
-          '/api/v1/auth/refresh',
-          { refreshToken },
-          false,
-        )
-        saveTokens(tokens.accessToken, tokens.refreshToken)
-        return true
-      } catch {
-        clearTokens()
-        state.user = null
-        state.status = 'anonymous'
-        return false
-      } finally {
-        refreshing = null
+  const context = captureApiContext()
+  if (refreshing?.revision === context.revision) return refreshing.promise
+  const refreshToken = getRefreshToken()
+  if (!refreshToken) return Promise.resolve(false)
+  let promise!: Promise<boolean>
+  promise = (async () => {
+    try {
+      const tokens = await http.post<ApiAuthTokens>(
+        '/api/v1/auth/refresh',
+        { refreshToken },
+        false,
+      )
+      assertApiContextCurrent(context)
+      saveTokens(tokens.accessToken, tokens.refreshToken, context.origin)
+      return true
+    } catch (error) {
+      if (assertCurrent(context)) {
+        if (error instanceof ApiError && error.status === 401) {
+          endSession()
+          return false
+        }
+        suspendSession()
       }
-    })()
-  }
-  return refreshing
+      // Preserve the refresh failure instead of disguising an outage as the original 401.
+      throw error
+    } finally {
+      if (refreshing?.promise === promise) refreshing = null
+    }
+  })()
+  refreshing = { revision: context.revision, promise }
+  return promise
 })
+
+function assertCurrent(context: ReturnType<typeof captureApiContext>): boolean {
+  try { assertApiContextCurrent(context); return true } catch { return false }
+}
 
 /**
  * 校验邀请令牌是否有效。
@@ -115,13 +177,26 @@ export async function registerWithInvitation(input: {
  * @returns 成功后状态切换为 authenticated；失败抛出 ApiError（由页面提示）
  */
 export async function login(email: string, password: string) {
+  endSession()
+  const version = sessionVersion
+  const context = captureApiContext()
   const tokens = await http.post<ApiAuthTokens>(
     '/api/v1/auth/login',
     { email: email.trim(), password },
     false,
   )
-  saveTokens(tokens.accessToken, tokens.refreshToken)
-  await loadCurrentUser()
+  assertApiContextCurrent(context)
+  saveTokens(tokens.accessToken, tokens.refreshToken, context.origin)
+  try {
+    await loadCurrentUser()
+    if (version !== sessionVersion) throw new ApiContextChangedError()
+  } catch (error) {
+    if (assertCurrent(context) && hasSession()) {
+      if (error instanceof ApiError && error.status === 401) endSession()
+      else suspendSession()
+    }
+    throw error
+  }
   // 登录成功后同步自定义图片主题（远端启用则应用；失败静默）。
   void syncRemoteTheme()
 }
@@ -133,7 +208,10 @@ export async function login(email: string, password: string) {
  * @throws {ApiError} 令牌无效时抛出 401（上层恢复流程会先尝试刷新一次）
  */
 export async function loadCurrentUser() {
+  const context = captureApiContext()
   const me = await http.get<ApiMe>('/api/v1/me')
+  assertApiContextCurrent(context)
+  setApiUserId(me.id)
   state.user = me
   state.status = 'authenticated'
   return me
@@ -146,37 +224,54 @@ export async function loadCurrentUser() {
  */
 export async function logout() {
   const refreshToken = getRefreshToken()
-  try {
-    if (refreshToken) await http.post('/api/v1/auth/logout', { refreshToken }, false)
-  } finally {
-    clearTokens()
-    state.user = null
-    state.status = 'anonymous'
-  }
+  endSession()
+  // Revocation is best effort; neither navigation nor a later login waits for the network.
+  if (refreshToken) void http.post('/api/v1/auth/logout', { refreshToken }, false).catch(() => undefined)
 }
 
 /**
  * App 启动时恢复会话：先从本地存储载入令牌，有凭证则尝试拉取用户资料。
  * 拉取过程中若 access token 过期，http 层会自动用 refresh token 刷新并重试一次；
- * 刷新也失败（refresh token 过期/被吊销）或无凭证时，安全降级为 anonymous。
+ * 明确认证失效才清凭据；临时故障保留凭据、暂停权限并安排重试。
  * 无抛错：所有异常在函数内消化，保证应用启动不被阻断。
  */
-export async function restoreSession() {
-  restoreTokens()
+export function restoreSession(): Promise<void> {
+  if (restoring?.version === sessionVersion) return restoring.promise
+  if (!tokensRestored) {
+    restoreTokens(captureApiContext().origin)
+    tokensRestored = true
+  }
   if (!hasSession()) {
     state.status = 'anonymous'
-    return
+    return Promise.resolve()
   }
-  try {
-    await loadCurrentUser()
-    // 会话恢复成功后同步自定义图片主题（远端启用则应用；失败静默）。
-    void syncRemoteTheme()
-  } catch {
-    clearTokens()
-    state.user = null
-    state.status = 'anonymous'
-  }
+  const version = sessionVersion
+  let promise!: Promise<void>
+  promise = (async () => {
+    try {
+      await loadCurrentUser()
+      // loadCurrentUser intentionally advances the API identity; use the session version here.
+      if (version !== sessionVersion) return
+      stopRecoveryTimer()
+      retryDelay = 1000
+      void syncRemoteTheme()
+    } catch (error) {
+      if (version !== sessionVersion) return
+      if (error instanceof ApiError && error.status === 401) endSession()
+      else suspendSession()
+    } finally {
+      if (restoring?.promise === promise) restoring = null
+    }
+  })()
+  restoring = { version, promise }
+  return promise
 }
+
+// Switching server invalidates the old session synchronously, before any new request is started.
+subscribeApiContextChange(({ reason }) => {
+  if (reason !== 'origin') return
+  endSession()
+})
 
 /**
  * 登录守卫：需要登录的操作前调用。
@@ -185,6 +280,11 @@ export async function restoreSession() {
  */
 export function requireLogin(): boolean {
   if (isAuthenticated.value) return true
+  if (state.status === 'unavailable') {
+    void resumeSession()
+    uni.showToast({ title: t('services.sessionUnavailable'), icon: 'none' })
+    return false
+  }
   uni.showModal({
     title: t('socialErrors.loginRequiredTitle'),
     content: t('socialErrors.loginRequiredContent'),

@@ -2,7 +2,7 @@
 // 文件：ShineMusic.Worker/Program.cs
 // 用途：P5 —— 可独立部署的 Media Worker 宿主。
 //
-// 它只承载 4 个媒体后台任务（音源下载消费、导入转码消费、两者重试扫描），
+// 它承载媒体后台任务（下载/导入消费、重试扫描、租约恢复与音源健康监控），
 // 与 Web 进程通过 RabbitMQ 协作；Web 进程用 Worker__Mode=web 关掉媒体组，
 // 两边不会重复消费同一条队列。若两边都不设置（默认 all），行为与改造前完全一致。
 //
@@ -21,6 +21,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using ShineMusic.Api.Extensions;
+using ShineMusic.Common.Configuration;
+using ShineMusic.Repository.Data;
+using SqlSugar;
 
 var repoRoot = FindRepoRoot(Directory.GetCurrentDirectory());
 var apiContentRoot = Path.Combine(repoRoot, "ShineMusicApi", "ShineMusic.Api");
@@ -28,8 +31,9 @@ var apiContentRoot = Path.Combine(repoRoot, "ShineMusicApi", "ShineMusic.Api");
 var host = Host.CreateDefaultBuilder(args)
     // 与 Web 主机保持同一个 ContentRoot：Storage:LibraryRoot / QuarantineRoot 都是相对路径。
     .UseContentRoot(apiContentRoot)
-    .ConfigureAppConfiguration((_, configuration) =>
+    .ConfigureAppConfiguration((context, configuration) =>
     {
+        configuration.AddLocalInfrastructureEnvironment(repoRoot, context.HostingEnvironment.EnvironmentName);
         // config/hosts.json 是 server.origin / 端口的唯一来源，Web 主机也是这样加载的。
         configuration.AddJsonFile(
             Path.Combine(repoRoot, "config", "hosts.json"),
@@ -49,6 +53,13 @@ host.Services.GetRequiredService<ILoggerFactory>()
     .CreateLogger("Worker.Startup")
     .LogInformation("ShineMusic Media Worker starting | ContentRoot={ContentRoot} | Mode=MediaOnly", apiContentRoot);
 
+// Apply additive schema changes before the media hosted services claim or recover work.
+await using (var scope = host.Services.CreateAsyncScope())
+{
+    SqlSugarSchemaBootstrap.Initialize(
+        scope.ServiceProvider.GetRequiredService<ISqlSugarClient>(),
+        scope.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("Worker.Schema"));
+}
 await host.RunAsync();
 
 // 从当前目录或程序集目录向上找仓库根（以 ShineMusicApi/ShineMusic.slnx 为标志），

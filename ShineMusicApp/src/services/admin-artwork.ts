@@ -6,7 +6,7 @@
  * - 成功响应 { id, artworkUrl }，id 用于后续 PATCH 曲目/专辑/歌单的 artworkId。
  */
 import { t } from '@/locale'
-import { API_PREFIX, resolveUrl } from './http'
+import { API_PREFIX, assertApiContextCurrent, assertApiRequestOrigin, captureApiContext, resolveUrl, trackApiRequest } from './http'
 import { getAccessToken } from './tokens'
 
 /** 上传封面后的返回：新封面 Id 与其读取地址（相对路径，显示时需经 resolveUrl 解析）。 */
@@ -22,10 +22,22 @@ export interface UploadArtworkResult {
  * @throws 任何非 2xx 或网络失败时抛出带可读消息的 Error
  */
 export function uploadArtwork(filePath: string | Blob): Promise<UploadArtworkResult> {
+  const context = captureApiContext()
   return new Promise((resolve, reject) => {
     const url = resolveUrl(`${API_PREFIX}/admin/artwork`)
+    assertApiRequestOrigin(context, url)
     const token = getAccessToken()
-    uni.uploadFile({
+    let settled = false
+    let task: ReturnType<typeof uni.uploadFile> | undefined
+    let unregister: () => void = () => undefined
+    const finish = (fn: (value: any) => void, value: any) => {
+      if (settled) return
+      settled = true
+      unregister()
+      try { assertApiContextCurrent(context) } catch { reject(new Error(t('services.apiContextChanged'))); return }
+      fn(value)
+    }
+    task = uni.uploadFile({
       url,
       filePath: filePath as string,
       name: 'file',
@@ -39,16 +51,21 @@ export function uploadArtwork(filePath: string | Blob): Promise<UploadArtworkRes
           } catch {
             // 解析失败则沿用状态码提示
           }
-          reject(new Error(message))
+          finish(reject, new Error(message))
           return
         }
         try {
-          resolve(JSON.parse(res.data) as UploadArtworkResult)
+          finish(resolve, JSON.parse(res.data) as UploadArtworkResult)
         } catch {
-          reject(new Error(t('services.uploadResponseParseFailed')))
+          finish(reject, new Error(t('services.uploadResponseParseFailed')))
         }
       },
-      fail: (err) => reject(new Error(err.errMsg || t('services.uploadFailed'))),
+      fail: (err) => finish(reject, new Error(err.errMsg || t('services.uploadFailed'))),
     })
+    unregister = trackApiRequest(context, () => {
+      task?.abort?.()
+      finish(reject, new Error(t('services.apiContextChanged')))
+    })
+    if (settled) unregister()
   })
 }

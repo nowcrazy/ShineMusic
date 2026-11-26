@@ -145,7 +145,7 @@ public sealed class ProfileController : ControllerBase
 
     // 【POST /api/v1/me/password】修改登录密码（需提供当前密码）。
     // 新密码先校验密码强度门槛（PasswordPolicy:MinimumStrength，0-4 级），随后校验基础策略（最短 6 位）；
-    // 成功后当前会话保持有效（不强制重新登录）。
+    // 成功后保留当前设备会话，并立即撤销其他设备的 refresh/access session。
     // 返回：204 成功；400 字段缺失/强度不足/旧密码错误/新密码不合规；401 未登录。
     [HttpPost("password", Name = "ChangeMyPassword")]
     public async Task<IResult> ChangePassword(
@@ -155,6 +155,8 @@ public sealed class ProfileController : ControllerBase
         CancellationToken cancellationToken)
     {
         if (!HttpContext.User.TryGetUserId(out var userId))
+            return Results.Unauthorized();
+        if (!Guid.TryParse(HttpContext.User.FindFirst("sid")?.Value, out var sessionId))
             return Results.Unauthorized();
         var user = await userService.FindByIdAsync(userId);
         if (user is null)
@@ -166,9 +168,13 @@ public sealed class ProfileController : ControllerBase
         if (PasswordStrength.Estimate(request.NewPassword) < passwordPolicy.Value.MinimumStrength)
             return ApiResults.Error(HttpContext, StatusCodes.Status400BadRequest, ErrorCodes.PasswordTooWeak, "The new password is too weak.");
 
-        var result = await userService.ChangePasswordAsync(user, request.CurrentPassword, request.NewPassword);
+        var result = await userService.ChangePasswordAsync(user, request.CurrentPassword, request.NewPassword, sessionId);
         if (!result.Succeeded)
+        {
+            if (result.Errors.Any(error => error.Code == "SessionRevoked"))
+                return Results.Unauthorized();
             return ApiResults.ValidationError(HttpContext, "password", string.Join(" ", result.Errors.Select(error => error.Description)));
+        }
         return Results.NoContent();
     }
 

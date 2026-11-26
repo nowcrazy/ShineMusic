@@ -124,6 +124,26 @@ public sealed class ExternalDownloadTask
     /// <summary>任务状态，取值见 <see cref="ExternalDownloadTaskStatuses"/>。</summary>
     public string Status { get; set; } = ExternalDownloadTaskStatuses.Queued;
 
+    /// <summary>当前持有任务租约的媒体 Worker 标识；旧记录为空表示尚未按租约模型认领。</summary>
+    [SugarColumn(IsNullable = true)]
+    public string? WorkerId { get; set; }
+
+    /// <summary>当前租约失效时间（UTC）；只有超过该时间的处理中任务才允许被恢复。</summary>
+    [SugarColumn(IsNullable = true, ColumnDataType = "timestamptz")]
+    public DateTime? LeaseUntilUtc { get; set; }
+
+    /// <summary>本次执行实例的 fencing 标识；状态/结果写入必须带此值，避免迟到实例覆盖新执行。</summary>
+    [SugarColumn(IsNullable = true)]
+    public Guid? AttemptId { get; set; }
+
+    /// <summary>Fenced immutable download-prefix checkpoint metadata; never contains source URLs or request credentials.</summary>
+    [SugarColumn(IsNullable = true, ColumnDataType = "text")]
+    public string? DownloadCheckpointJson { get; set; }
+
+    /// <summary>最近一次租约心跳时间（UTC），用于观测长任务是否仍在运行。</summary>
+    [SugarColumn(IsNullable = true, ColumnDataType = "timestamptz")]
+    public DateTime? LastHeartbeatAtUtc { get; set; }
+
     /// <summary>导入流水线完成后的自动评分（0-100）；未评分为 null。</summary>
     [SugarColumn(IsNullable = true)]
     public int? AutoScore { get; set; }

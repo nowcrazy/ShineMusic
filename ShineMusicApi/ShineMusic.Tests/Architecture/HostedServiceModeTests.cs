@@ -23,9 +23,9 @@ public class HostedServiceModeTests
     }
 
     [Theory]
-    [InlineData(HostedServiceMode.All, 8)]
-    [InlineData(HostedServiceMode.MediaOnly, 5)]
-    [InlineData(HostedServiceMode.NonMediaOnly, 3)]
+    [InlineData(HostedServiceMode.All, 12)]
+    [InlineData(HostedServiceMode.MediaOnly, 7)]
+    [InlineData(HostedServiceMode.NonMediaOnly, 5)]
     [InlineData(HostedServiceMode.None, 0)]
     public void Registers_only_the_requested_hosted_service_group(HostedServiceMode mode, int expected)
     {
@@ -57,8 +57,11 @@ public class HostedServiceModeTests
         var all = Names(HostedServiceMode.All);
         var media = Names(HostedServiceMode.MediaOnly);
         var web = Names(HostedServiceMode.NonMediaOnly);
-        Assert.Equal(5, media.Length);
-        Assert.Equal(3, web.Length);
+        Assert.Equal(7, media.Length);
+        Assert.Equal(5, web.Length);
+        Assert.Contains("MediaQueueRecoveryService", media);
+        Assert.Contains("MessageOutboxService", media);
+        Assert.DoesNotContain("MediaQueueRecoveryService", web);
         Assert.Empty(media.Intersect(web));
         Assert.Equal(all.OrderBy(n => n, StringComparer.Ordinal), media.Concat(web).OrderBy(n => n, StringComparer.Ordinal));
     }

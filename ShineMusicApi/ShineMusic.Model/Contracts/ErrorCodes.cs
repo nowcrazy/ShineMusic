@@ -61,12 +61,18 @@ public static class ErrorCodes
     // ===== 用户上传 / 曲库（User Uploads / Library） =====
     /// <summary>上传文件超过单文件体积上限（上限见系统能力快照 maxUploadSizeBytes）。</summary>
     public const string UploadTooLarge = "upload_too_large";
+    /// <summary>A new retained private original would exceed the user's configured byte limit.</summary>
+    public const string PrivateStorageQuotaExceeded = "private_storage_quota_exceeded";
+    /// <summary>Existing retained files could not be measured safely; do not treat their size as zero.</summary>
+    public const string PrivateStorageUsageUnavailable = "private_storage_usage_unavailable";
     /// <summary>音频容器/标签无法解析，文件可能损坏或不被 ffprobe 支持。</summary>
     /// <remarks>
     /// 值保持为 <c>media_parse_failed</c>（历史契约）。这是抓取时发现的既有代码，
     /// 不要顺手改成更"贴切"的 metadata_parse_failed——线上客户端可能已经在判断它。
     /// </remarks>
     public const string MediaParseFailed = "media_parse_failed";
+    /// <summary>完整解码确认音频帧损坏或文件不完整；重新处理相同内容无法恢复。</summary>
+    public const string MediaCorrupt = "media_corrupt";
     /// <summary>无法引用他人私有曲目（内容哈希命中但归属他人）。</summary>
     public const string PrivateTrackOfAnotherUser = "private_track_of_another_user";
     /// <summary>目标曲目为他人私有，当前用户无权引用或试听。</summary>

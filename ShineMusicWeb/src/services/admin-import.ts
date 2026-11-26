@@ -20,8 +20,7 @@ import type {
 } from '@/types/api.generated'
 import { t } from '@/locale'
 import { getAccessToken } from './tokens'
-import { refreshAccessToken } from './http'
-import { API_PREFIX, http, resolveUrl } from './http'
+import { API_PREFIX, assertSessionRevisionCurrent, captureSessionRevision, fetchWithSession, http, resolveUrl } from './http'
 
 /** 导入源文件信息 */
 export interface ImportSourceFile {
@@ -63,6 +62,7 @@ export interface ImportTranscode {
   outputFormat: string | null
   bitrateKbps: number | null
   errorCode: string | null
+  errorMessage?: string | null
 }
 
 /** 与目标点歌需求的匹配结果（后端读取时实时计算，元数据改动后立即刷新） */
@@ -202,6 +202,7 @@ export async function uploadImportFiles(filePaths: string[], songRequestId?: str
  * @returns 新建的导入批次
  */
 export async function uploadImportFilesBatch(files: File[], songRequestId?: string): Promise<LibraryImportBatch> {
+  const revision = captureSessionRevision()
   if (files.length === 0) throw new Error(t('services.selectAtLeastOneFile'))
   const form = new FormData()
   for (const file of files) form.append('files', file, file.name)
@@ -209,17 +210,14 @@ export async function uploadImportFilesBatch(files: File[], songRequestId?: stri
 
   // 不手动设置 Content-Type，交由浏览器生成带 boundary 的 multipart 头。
   const send = () =>
-    fetch(resolveUrl(`${API_PREFIX}/admin/library/imports`), {
+    fetchWithSession(resolveUrl(`${API_PREFIX}/admin/library/imports`), {
       method: 'POST',
       headers: buildAuthHeader(),
       body: form,
-    })
-  let response = await send()
-  // 上传绕过 http 层，401 时复用统一的单飞刷新并重试一次。
-  if (response.status === 401 && (await refreshAccessToken())) {
-    response = await send()
-  }
+    }, revision)
+  const response = await send()
   const body = await response.json().catch(() => null)
+  assertSessionRevisionCurrent(revision)
   if (!response.ok) {
     throw new Error(body?.error?.message ?? t('services.uploadFailedWithStatus', { status: response.status }))
   }

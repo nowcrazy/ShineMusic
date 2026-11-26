@@ -2,7 +2,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Options;
-using Microsoft.Net.Http.Headers;
+using ShineMusic.Api.Application;
 using ShineMusic.Api.Extensions;
 using ShineMusic.Model.Contracts;
 using ShineMusic.Model.Domain;
@@ -107,9 +107,13 @@ public sealed class CatalogController : ControllerBase
         ITrackPlaybackStore playbackStore,
         IAudioStorage audioStorage,
         IOptions<FeatureOptions> featureOptions,
+        ITemporaryPlaybackService temporaryPlayback,
         Guid trackId,
+        string? format,
         CancellationToken cancellationToken)
     {
+        // All failures and private responses must remain out of shared and browser storage.
+        HttpContext.Response.Headers.CacheControl = "private, no-store";
         // 播放资格规则在领域层；接口层只负责把 HttpContext 折算成简单参数。
         if (PlaybackEligibility.IsAuthenticationRequired(
                 featureOptions.Value.AnonymousPlayback,
@@ -118,9 +122,9 @@ public sealed class CatalogController : ControllerBase
                 ErrorCodes.AuthenticationRequired, "Authentication is required.", HttpContext.TraceIdentifier)),
                 statusCode: StatusCodes.Status401Unauthorized);
 
-        // 私有曲目（用户上传、未公开）的可见性判断：上传者本人与管理员可播放，其他人按 404 处理。
+        // Private originals are visible only to their uploader; candidate audition has a separate admin route.
         var visibility = await playbackStore.GetVisibilityAsync(trackId, cancellationToken);
-        if (visibility is null || !PlaybackEligibility.CanAccess(
+        if (visibility is null || visibility.IsRecycled || !PlaybackEligibility.CanAccess(
                 visibility.PublishedAt,
                 visibility.OwnerUserId,
                 HttpContext.User.IsInRole("admin"),
@@ -139,13 +143,13 @@ public sealed class CatalogController : ControllerBase
                 statusCode: StatusCodes.Status415UnsupportedMediaType);
         }
 
-        // ETag + Last-Modified + 短缓存：重复播放/回拖进度可命中客户端缓存（弱网下少一次整段重下）。
-        // 已发布曲目的音频文件是不可变的，1 小时缓存不会出现明显陈旧。
-        var fileInfo = new FileInfo(filePath);
-        var lastModified = new DateTimeOffset(fileInfo.LastWriteTimeUtc);
-        var entityTag = new EntityTagHeaderValue($"\"{fileInfo.Length:x}-{fileInfo.LastWriteTimeUtc.Ticks:x}\"");
-        HttpContext.Response.Headers.CacheControl = "public, max-age=3600";
-        return Results.File(filePath, contentType, lastModified: lastModified, entityTag: entityTag, enableRangeProcessing: true);
+        // Revalidation keeps visibility and the anonymous-playback switch authoritative on each request.
+        var cacheControl = visibility.PublishedAt is null
+            ? "private, no-store"
+            : featureOptions.Value.AnonymousPlayback ? "public, no-cache" : "private, no-cache";
+        return await PlaybackStreamResults.CreateAsync(HttpContext, filePath, contentType,
+            $"{asset.AssetId:N}:{asset.ContentHash}:{asset.StorageKey}", temporaryPlayback, trackId,
+            format, cacheControl, cancellationToken);
     }
 
     [HttpGet("albums", Name = "GetAlbums")]

@@ -15,7 +15,8 @@ public sealed record MediaProbe(
     string FormatNames,
     int? SampleRateHz = null,
     int? BitsPerSample = null,
-    int? Channels = null);
+    int? Channels = null,
+    string? CodecProfile = null);
 
 /// <summary>音频处理端口。</summary>
 public interface IMediaTranscoder

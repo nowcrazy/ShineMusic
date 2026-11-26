@@ -1,0 +1,414 @@
+{
+  "startedAtUtc": "2026-11-26T00:57:00.8444218+00:00",
+  "resolveOnly": true,
+  "cancelled": false,
+  "acceptancePassed": null,
+  "completedAtUtc": "2026-11-26T00:57:36.6307256+00:00",
+  "configurationScope": "api appsettings.json only; anonymous; no .env, Development, UserSecrets or environment providers",
+  "shortDiscovery": "not_attempted",
+  "shortSample": null,
+  "downloadAttempts": 0,
+  "downloadedBytes": 0,
+  "temporaryAudioDeleted": true,
+  "fatalError": null,
+  "cases": [
+    {
+      "profile": "high-first",
+      "sampleKind": "restricted-reference",
+      "trackId": "186016",
+      "expected": {
+        "title": "\u6674\u5929",
+        "artists": [
+          "\u5468\u6770\u4F26"
+        ],
+        "durationMs": 269000
+      },
+      "metadata": {
+        "providerTrackId": "186016",
+        "title": "\u6674\u5929",
+        "artists": [
+          "\u5468\u6770\u4F26"
+        ],
+        "albumTitle": "\u53F6\u60E0\u7F8E",
+        "durationMs": 269000,
+        "license": null
+      },
+      "platformPrivilege": {
+        "state": -200,
+        "playBitrate": 0,
+        "downloadBitrate": 0,
+        "copyrightStatus": 0
+      },
+      "availabilitySummary": "platform_restricted_and_no_resolver_candidate",
+      "officialResponses": [
+        {
+          "code": 404,
+          "hasUrl": false,
+          "bitrate": 0,
+          "hasTrialInfo": false
+        },
+        {
+          "code": 404,
+          "hasUrl": false,
+          "bitrate": 0,
+          "hasTrialInfo": false
+        }
+      ],
+      "resolutionDiagnostics": [
+        {
+          "resolverId": "netease:fallback:0:gdstudio",
+          "level": "320",
+          "stage": "resolution",
+          "code": "timeout",
+          "httpStatus": null
+        },
+        {
+          "resolverId": "netease:fallback:0:gdstudio",
+          "level": "999",
+          "stage": "fallback_http",
+          "code": "http_ok",
+          "httpStatus": 200
+        },
+        {
+          "resolverId": "netease:fallback:0:gdstudio",
+          "level": "999",
+          "stage": "resolution",
+          "code": "empty_or_invalid_url",
+          "httpStatus": null
+        }
+      ],
+      "identityVerdict": "Matched",
+      "identityReason": "identity_matched",
+      "status": "no_accepted_candidate",
+      "elapsedMs": 22748,
+      "platformHttpRequests": 3,
+      "resolverHttpRequests": 2,
+      "downloadRequests": 0,
+      "potentialResolutionSteps": 4,
+      "resolutionSteps": [
+        "official:br320000",
+        "netease:fallback:0:gdstudio:320",
+        "official:br999000",
+        "netease:fallback:0:gdstudio:999"
+      ],
+      "unrequestedPotentialSteps": 0,
+      "enumerationStoppedOnAccepted": false,
+      "candidates": []
+    },
+    {
+      "profile": "lossless-first",
+      "sampleKind": "restricted-reference",
+      "trackId": "186016",
+      "expected": {
+        "title": "\u6674\u5929",
+        "artists": [
+          "\u5468\u6770\u4F26"
+        ],
+        "durationMs": 269000
+      },
+      "metadata": {
+        "providerTrackId": "186016",
+        "title": "\u6674\u5929",
+        "artists": [
+          "\u5468\u6770\u4F26"
+        ],
+        "albumTitle": "\u53F6\u60E0\u7F8E",
+        "durationMs": 269000,
+        "license": null
+      },
+      "platformPrivilege": {
+        "state": -200,
+        "playBitrate": 0,
+        "downloadBitrate": 0,
+        "copyrightStatus": 0
+      },
+      "availabilitySummary": "platform_restricted_and_no_resolver_candidate",
+      "officialResponses": [
+        {
+          "code": 404,
+          "hasUrl": false,
+          "bitrate": 0,
+          "hasTrialInfo": false
+        },
+        {
+          "code": 404,
+          "hasUrl": false,
+          "bitrate": 0,
+          "hasTrialInfo": false
+        }
+      ],
+      "resolutionDiagnostics": [
+        {
+          "resolverId": "netease:fallback:0:gdstudio",
+          "level": "999",
+          "stage": "resolution",
+          "code": "timeout",
+          "httpStatus": null
+        },
+        {
+          "resolverId": "netease:fallback:0:gdstudio",
+          "level": "320",
+          "stage": "resolution",
+          "code": "timeout",
+          "httpStatus": null
+        }
+      ],
+      "identityVerdict": "Matched",
+      "identityReason": "identity_matched",
+      "status": "no_accepted_candidate",
+      "elapsedMs": 30690,
+      "platformHttpRequests": 3,
+      "resolverHttpRequests": 2,
+      "downloadRequests": 0,
+      "potentialResolutionSteps": 4,
+      "resolutionSteps": [
+        "official:br999000",
+        "netease:fallback:0:gdstudio:999",
+        "official:br320000",
+        "netease:fallback:0:gdstudio:320"
+      ],
+      "unrequestedPotentialSteps": 0,
+      "enumerationStoppedOnAccepted": false,
+      "candidates": []
+    },
+    {
+      "profile": "high-first",
+      "sampleKind": "vip-candidate",
+      "trackId": "65766",
+      "expected": {
+        "title": "\u5BCC\u58EB\u5C71\u4E0B",
+        "artists": [
+          "\u9648\u5955\u8FC5"
+        ],
+        "durationMs": 258902
+      },
+      "metadata": {
+        "providerTrackId": "65766",
+        "title": "\u5BCC\u58EB\u5C71\u4E0B",
+        "artists": [
+          "\u9648\u5955\u8FC5"
+        ],
+        "albumTitle": "What\u0027s Going On\u2026?",
+        "durationMs": 258902,
+        "license": "\u7F51\u6613\u4E91\u4F1A\u5458\u4E13\u4EAB\uFF08fee=1\uFF09"
+      },
+      "platformPrivilege": {
+        "state": 0,
+        "playBitrate": 0,
+        "downloadBitrate": 0,
+        "copyrightStatus": 0
+      },
+      "availabilitySummary": null,
+      "officialResponses": [
+        {
+          "code": -110,
+          "hasUrl": false,
+          "bitrate": 0,
+          "hasTrialInfo": false
+        }
+      ],
+      "resolutionDiagnostics": [
+        {
+          "resolverId": "netease:fallback:0:gdstudio",
+          "level": "320",
+          "stage": "fallback_http",
+          "code": "http_ok",
+          "httpStatus": 200
+        },
+        {
+          "resolverId": "netease:fallback:0:gdstudio",
+          "level": "320",
+          "stage": "resolution",
+          "code": "candidate",
+          "httpStatus": null
+        }
+      ],
+      "identityVerdict": "Matched",
+      "identityReason": "identity_matched",
+      "status": "candidate_available_not_downloaded",
+      "elapsedMs": 1685,
+      "platformHttpRequests": 2,
+      "resolverHttpRequests": 1,
+      "downloadRequests": 0,
+      "potentialResolutionSteps": 4,
+      "resolutionSteps": [
+        "official:br320000",
+        "netease:fallback:0:gdstudio:320"
+      ],
+      "unrequestedPotentialSteps": 2,
+      "enumerationStoppedOnAccepted": false,
+      "candidates": [
+        {
+          "resolverId": "netease:fallback:0:gdstudio",
+          "declaredQuality": "high",
+          "declaredContainer": "mp3",
+          "declaredBitrateKbps": 320,
+          "status": "not_downloaded_resolve_only",
+          "httpStatus": null,
+          "sizeBytes": null,
+          "sha256": null,
+          "probe": null,
+          "durationMatches": false,
+          "qualityAccepted": false,
+          "decodeIntegrity": "not_checked"
+        }
+      ]
+    },
+    {
+      "profile": "lossless-first",
+      "sampleKind": "vip-candidate",
+      "trackId": "65766",
+      "expected": {
+        "title": "\u5BCC\u58EB\u5C71\u4E0B",
+        "artists": [
+          "\u9648\u5955\u8FC5"
+        ],
+        "durationMs": 258902
+      },
+      "metadata": {
+        "providerTrackId": "65766",
+        "title": "\u5BCC\u58EB\u5C71\u4E0B",
+        "artists": [
+          "\u9648\u5955\u8FC5"
+        ],
+        "albumTitle": "What\u0027s Going On\u2026?",
+        "durationMs": 258902,
+        "license": "\u7F51\u6613\u4E91\u4F1A\u5458\u4E13\u4EAB\uFF08fee=1\uFF09"
+      },
+      "platformPrivilege": {
+        "state": 0,
+        "playBitrate": 0,
+        "downloadBitrate": 0,
+        "copyrightStatus": 0
+      },
+      "availabilitySummary": null,
+      "officialResponses": [
+        {
+          "code": -110,
+          "hasUrl": false,
+          "bitrate": 0,
+          "hasTrialInfo": false
+        }
+      ],
+      "resolutionDiagnostics": [
+        {
+          "resolverId": "netease:fallback:0:gdstudio",
+          "level": "999",
+          "stage": "fallback_http",
+          "code": "http_ok",
+          "httpStatus": 200
+        },
+        {
+          "resolverId": "netease:fallback:0:gdstudio",
+          "level": "999",
+          "stage": "resolution",
+          "code": "candidate",
+          "httpStatus": null
+        }
+      ],
+      "identityVerdict": "Matched",
+      "identityReason": "identity_matched",
+      "status": "candidate_available_not_downloaded",
+      "elapsedMs": 4827,
+      "platformHttpRequests": 2,
+      "resolverHttpRequests": 1,
+      "downloadRequests": 0,
+      "potentialResolutionSteps": 4,
+      "resolutionSteps": [
+        "official:br999000",
+        "netease:fallback:0:gdstudio:999"
+      ],
+      "unrequestedPotentialSteps": 2,
+      "enumerationStoppedOnAccepted": false,
+      "candidates": [
+        {
+          "resolverId": "netease:fallback:0:gdstudio",
+          "declaredQuality": "lossless",
+          "declaredContainer": "flac",
+          "declaredBitrateKbps": 900,
+          "status": "not_downloaded_resolve_only",
+          "httpStatus": null,
+          "sizeBytes": null,
+          "sha256": null,
+          "probe": null,
+          "durationMatches": false,
+          "qualityAccepted": false,
+          "decodeIntegrity": "not_checked"
+        }
+      ]
+    },
+    {
+      "profile": "high-first",
+      "sampleKind": "unavailable",
+      "trackId": "0",
+      "expected": {
+        "title": "invalid-id",
+        "artists": [],
+        "durationMs": null
+      },
+      "metadata": null,
+      "platformPrivilege": {
+        "state": -200,
+        "playBitrate": 0,
+        "downloadBitrate": 0,
+        "copyrightStatus": 0
+      },
+      "availabilitySummary": null,
+      "officialResponses": [],
+      "resolutionDiagnostics": [],
+      "identityVerdict": null,
+      "identityReason": null,
+      "status": "expected_unavailable",
+      "elapsedMs": 142,
+      "platformHttpRequests": 1,
+      "resolverHttpRequests": 0,
+      "downloadRequests": 0,
+      "potentialResolutionSteps": 0,
+      "resolutionSteps": [],
+      "unrequestedPotentialSteps": 0,
+      "enumerationStoppedOnAccepted": false,
+      "candidates": []
+    },
+    {
+      "profile": "lossless-first",
+      "sampleKind": "unavailable",
+      "trackId": "0",
+      "expected": {
+        "title": "invalid-id",
+        "artists": [],
+        "durationMs": null
+      },
+      "metadata": null,
+      "platformPrivilege": {
+        "state": -200,
+        "playBitrate": 0,
+        "downloadBitrate": 0,
+        "copyrightStatus": 0
+      },
+      "availabilitySummary": null,
+      "officialResponses": [],
+      "resolutionDiagnostics": [],
+      "identityVerdict": null,
+      "identityReason": null,
+      "status": "expected_unavailable",
+      "elapsedMs": 142,
+      "platformHttpRequests": 1,
+      "resolverHttpRequests": 0,
+      "downloadRequests": 0,
+      "potentialResolutionSteps": 0,
+      "resolutionSteps": [],
+      "unrequestedPotentialSteps": 0,
+      "enumerationStoppedOnAccepted": false,
+      "candidates": []
+    }
+  ],
+  "limitations": [
+    "No library/database writes; bounded live smoke test, not coverage statistics.",
+    "HTTP 200, a .flac name and a lossless codec do not prove a lossless recording source.",
+    "Metadata match precedes transfer; duration and decoding cannot alone prove audio recording identity.",
+    "At most six transfer attempts and 192 MiB globally, 64 MiB per file, four yielded candidates and 60 seconds per case/profile. Byte budget may overshoot by at most two 80 KiB read buffers before cancellation.",
+    "Budget-limited cases are unverified, not proof that the source lacks the song.",
+    "Short-track discovery is a separate 30-second budget; selected ID and search/detail agreement are reported.",
+    "No link-refresh or cross-process resume test is performed by this probe."
+  ]
+}

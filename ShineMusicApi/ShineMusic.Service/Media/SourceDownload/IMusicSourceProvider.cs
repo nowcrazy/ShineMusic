@@ -2,6 +2,8 @@
 // 每个开放版权平台（Audius/Jamendo）实现 IMusicSourceProvider，
 // 对上提供「搜索曲目」与「解析下载地址」两个能力，下载编排层不感知平台差异。
 
+using ShineMusic.Service.SourceProviders.Abstractions;
+
 namespace ShineMusic.Service.SourceDownload;
 
 /// <summary>音质等级：lossless（有无损原文件）/ high（≥256k）/ standard。</summary>
@@ -61,7 +63,23 @@ public sealed record SourceDownloadInfo(
     string Container,
     bool IsLossless,
     int? BitrateKbps,
-    string Quality);
+    string Quality)
+{
+    /// <summary>产生该候选的稳定解析来源标识；不包含 URL 或凭据。</summary>
+    public string? ResolverId { get; init; }
+
+    /// <summary>平台、曲目及具体音质档位的稳定资源标识，用于防止刷新时切换资源。</summary>
+    public string? ResourceId { get; init; }
+
+    /// <summary>上游声明的直链过期时间；未知时为空。</summary>
+    public DateTimeOffset? ExpiresAtUtc { get; init; }
+
+    /// <summary>下载所需的非敏感请求头；传输层只接受明确允许的头。</summary>
+    public IReadOnlyDictionary<string, string>? RequestHeaders { get; init; }
+
+    /// <summary>外部解析候选使用无平台 Cookie 的独立下载客户端。</summary>
+    public bool UseIsolatedDownloadClient { get; init; }
+}
 
 /// <summary>外部音源平台提供者。</summary>
 public interface IMusicSourceProvider
@@ -110,6 +128,23 @@ public interface IQualityLadderProvider
 {
     /// <summary>按音质从高到低返回候选下载信息；全部不可用时抛出 <see cref="SourceUnavailableException"/>。</summary>
     Task<IReadOnlyList<SourceDownloadInfo>> ResolveDownloadCandidatesAsync(string providerTrackId, CancellationToken cancellationToken);
+}
+
+/// <summary>
+/// 按实际下载需要逐个解析候选；成功后停止枚举，不再请求后续来源。
+/// 候选顺序由提供者决定，下载器不得为全量排序而提前物化。
+/// </summary>
+public interface ILazySourceDownloadProvider
+{
+    /// <summary>在消费者请求下一项时才解析对应来源与音质。</summary>
+    IAsyncEnumerable<SourceDownloadInfo> ResolveDownloadCandidatesLazilyAsync(
+        string providerTrackId,
+        IReadOnlyList<AudioQualityLevel> qualityChain,
+        CancellationToken cancellationToken);
+
+    /// <summary>重新解析同一来源、曲目与音质；无法确认资源一致时返回空，不自动换档。</summary>
+    Task<SourceDownloadInfo?> RefreshDownloadAsync(
+        string providerTrackId, SourceDownloadInfo previous, CancellationToken cancellationToken);
 }
 
 /// <summary>provider 自下载结果：最终落地的音频文件与容器格式。</summary>

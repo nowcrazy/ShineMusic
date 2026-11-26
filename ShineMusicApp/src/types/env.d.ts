@@ -3,3 +3,6 @@
  * 值来自仓库根目录 config/hosts.json（唯一地址源），避免在代码里硬编码 IP。
  */
 declare const __SM_API_BASE__: string
+
+/** manifest.json 已配置 Android 音乐通知插件时才启用原生桥探测。 */
+declare const __SM_MUSIC_NOTIFICATION_ENABLED__: boolean

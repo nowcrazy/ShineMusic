@@ -1,5 +1,6 @@
 using System.Net;
 using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -9,6 +10,7 @@ using ShineMusic.Model.Ports;
 using ShineMusic.Repository.Data;
 using ShineMusic.Service;
 using ShineMusic.Service.Messaging;
+using ShineMusic.Service.Media;
 using ShineMusic.Service.SourceDownload;
 using ShineMusic.Service.SourceProviders.Abstractions;
 using ShineMusic.Service.SourceProviders.Engine;
@@ -29,6 +31,7 @@ internal sealed class SourceDownloadAcceptanceFixture : IDisposable
     public LadderProvider Primary { get; } = new("qq");
     public List<IMusicSourceProvider> Legacy { get; } = [];
     public List<FakeV2Provider> SearchProviders { get; } = [];
+    private readonly ServiceProvider _leaseServices;
 
     public SourceDownloadAcceptanceFixture()
     {
@@ -45,7 +48,16 @@ internal sealed class SourceDownloadAcceptanceFixture : IDisposable
                 EntityService = (property, column) => column.DbColumnName = System.Text.Json.JsonNamingPolicy.SnakeCaseLower.ConvertName(property.Name)
             }
         });
-        Db.CodeFirst.InitTables<ExternalDownloadTask, LibraryImportBatch, LibraryImportItem, MediaAsset>();
+        Db.CodeFirst.InitTables<ExternalDownloadTask, LibraryImportBatch, LibraryImportItem, MediaAsset, MessageOutboxEntry>();
+        Db.CodeFirst.InitTables<MessageDeadLetter>();
+        Db.CodeFirst.InitTables<LibraryWorkflowReview>();
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<MediaWorkerIdentity>();
+        services.AddSingleton(Microsoft.Extensions.Options.Options.Create(new MediaLeaseOptions()));
+        services.AddScoped<ISqlSugarClient>(_ => new SqlSugarClient(Db.CurrentConnectionConfig));
+        services.AddScoped<MediaTaskLeaseService>();
+        _leaseServices = services.BuildServiceProvider();
         Storage = new QuarantineStoragePaths(Microsoft.Extensions.Options.Options.Create(
             new StorageOptions { QuarantineRoot = Root }), new TestEnvironment { ContentRootPath = Root });
         Legacy.Add(Primary);
@@ -69,7 +81,11 @@ internal sealed class SourceDownloadAcceptanceFixture : IDisposable
     }
 
     public SourceDownloadJob Job() => new(Db, Aggregator(), Bus, Http,
-        Microsoft.Extensions.Options.Options.Create(Options), Storage, Media, NullLogger<SourceDownloadJob>.Instance, Access());
+        Microsoft.Extensions.Options.Options.Create(Options), Storage, Media, NullLogger<SourceDownloadJob>.Instance, Access(), Lease());
+
+    public MediaTaskLeaseService Lease() => new(Db, _leaseServices.GetRequiredService<IServiceScopeFactory>(),
+        _leaseServices.GetRequiredService<MediaWorkerIdentity>(),
+        Microsoft.Extensions.Options.Options.Create(new MediaLeaseOptions()), NullLogger<MediaTaskLeaseService>.Instance);
 
     public SourceDownloadFallbackService Fallback() => new(Db, Aggregator(),
         new SourceDownloadService(Db, Legacy, Bus, Access()), NullLogger<SourceDownloadFallbackService>.Instance);
@@ -91,6 +107,7 @@ internal sealed class SourceDownloadAcceptanceFixture : IDisposable
     public void Dispose()
     {
         Http.Dispose();
+        _leaseServices.Dispose();
         Db.Dispose();
         Directory.Delete(Root, true);
     }

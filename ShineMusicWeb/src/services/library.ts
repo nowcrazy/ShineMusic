@@ -25,7 +25,7 @@ import type {
   ApiTrack,
   Track,
 } from '@/types/music'
-import { API_PREFIX, http } from './http'
+import { API_PREFIX, assertAuthenticatedRequestAllowed, assertSessionRevisionCurrent, captureSessionRevision, http, isSessionRevisionCurrent } from './http'
 import { mapTrack } from './catalog'
 
 // ---- 收藏状态（module 级单例，全局共享） ----
@@ -57,19 +57,22 @@ export const isFavorite = (trackId: string) => computed(() => favoriteIds.value.
  * @throws 网络或后端错误
  */
 export async function loadFavorites(force = false) {
+  assertAuthenticatedRequestAllowed()
   if ((favoritesLoaded.value || favoritesLoading.value) && !force) return
+  const revision = captureSessionRevision()
   favoritesLoading.value = true
   try {
     // GET /me/favorites?pageSize=100
     const result = await http.get<ApiPageResult<ApiTrack>>(
       `${API_PREFIX}/me/favorites?pageSize=100`,
     )
+    assertSessionRevisionCurrent(revision)
     // 复用 catalog.mapTrack，确保收藏曲目与目录曲目结构一致
     favoriteTracks.value = result.items.map(mapTrack)
     favoriteIds.value = new Set(result.items.map((track) => track.id))
     favoritesLoaded.value = true
   } finally {
-    favoritesLoading.value = false
+    if (isSessionRevisionCurrent(revision)) favoritesLoading.value = false
   }
 }
 
@@ -82,6 +85,7 @@ export function resetLibrary() {
   favoriteIds.value = new Set()
   favoriteTracks.value = []
   favoritesLoaded.value = false
+  favoritesLoading.value = false
 }
 
 /**
@@ -95,6 +99,8 @@ export function resetLibrary() {
  * @throws 请求失败时回滚本地状态并抛出错误
  */
 export async function toggleFavorite(track: Track): Promise<boolean> {
+  assertAuthenticatedRequestAllowed()
+  const revision = captureSessionRevision()
   const liked = favoriteIds.value.has(track.id)
   // 乐观更新，失败回滚
   const next = new Set(favoriteIds.value)
@@ -111,8 +117,10 @@ export async function toggleFavorite(track: Track): Promise<boolean> {
     } else {
       await http.put(`${API_PREFIX}/me/favorites/${track.id}`)
     }
+    assertSessionRevisionCurrent(revision)
     return !liked
   } catch (error) {
+    if (!isSessionRevisionCurrent(revision)) throw error
     const rollback = new Set(favoriteIds.value)
     if (liked) rollback.add(track.id)
     else rollback.delete(track.id)
@@ -176,7 +184,9 @@ export async function createPlaylist(name: string, description?: string, artwork
  * @returns detail 为后端歌单详情，tracks 为经 mapTrack 映射后的曲目数组
  */
 export async function getPlaylist(playlistId: string) {
+  const revision = captureSessionRevision()
   const detail = await http.get<ApiPlaylistDetail>(`${API_PREFIX}/me/playlists/${playlistId}`)
+  assertSessionRevisionCurrent(revision)
   return { detail, tracks: detail.tracks.map(mapTrack) }
 }
 

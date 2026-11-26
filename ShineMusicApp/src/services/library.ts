@@ -112,6 +112,7 @@ export function resetLibrary() {
  * @throws 请求失败时回滚本地状态并抛出错误
  */
 export async function toggleFavorite(track: Track): Promise<boolean> {
+  const generation = favoritesGeneration
   const liked = favoriteIds.value.has(track.id)
   favoritesTotal.value = Math.max(0, favoritesTotal.value + (liked ? -1 : 1))
   // 乐观更新，失败回滚
@@ -131,6 +132,7 @@ export async function toggleFavorite(track: Track): Promise<boolean> {
     }
     return !liked
   } catch (error) {
+    if (generation !== favoritesGeneration) throw error
     favoritesTotal.value = Math.max(0, favoritesTotal.value + (liked ? 1 : -1))
     const rollback = new Set(favoriteIds.value)
     if (liked) rollback.add(track.id)

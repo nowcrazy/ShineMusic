@@ -39,6 +39,23 @@ const state = reactive<{
     minimumPasswordStrength: 2,
   },
 })
+let generation = 0
+
+const defaultCapabilities: ApiCapabilities = {
+  anonymousPlayback: true,
+  userCollections: true,
+  songRequests: true,
+  adminLibraryImport: false,
+  manualReview: true,
+  editorialCollections: true,
+  listeningEvents: false,
+  personalizedRecommendations: false,
+  serverTranscoding: true,
+  userUploads: false,
+  allowedFormats: [],
+  maxUploadSizeBytes: null,
+  minimumPasswordStrength: 2,
+}
 
 /**
  * 拉取系统能力开关并写入缓存。
@@ -47,17 +64,28 @@ const state = reactive<{
  * 无论成败都会把 loaded 置为 true。可在 App 启动时安全调用。
  */
 export async function loadCapabilities() {
+  const requestGeneration = generation
   try {
-    state.capabilities = await http.get<ApiCapabilities>(
+    const capabilities = await http.get<ApiCapabilities>(
       '/api/v1/system/capabilities',
       false,
     )
+    if (requestGeneration !== generation) return
+    state.capabilities = capabilities
     state.online = true
   } catch {
-    state.online = false
+    if (requestGeneration === generation) state.online = false
   } finally {
-    state.loaded = true
+    if (requestGeneration === generation) state.loaded = true
   }
+}
+
+/** Forget server-specific capability data and discard responses from the previous origin. */
+export function resetCapabilities(): void {
+  generation++
+  state.loaded = false
+  state.online = false
+  state.capabilities = { ...defaultCapabilities, allowedFormats: [] }
 }
 
 /**

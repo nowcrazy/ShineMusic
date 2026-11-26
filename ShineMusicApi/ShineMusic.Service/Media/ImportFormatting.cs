@@ -42,9 +42,12 @@ public static class ImportFormatting
     {
         ErrorCodes.UnsupportedMediaFormat => "The file format is not supported.",
         ErrorCodes.UploadTooLarge => "The file exceeded the configured upload limit.",
+        ErrorCodes.PrivateStorageQuotaExceeded => "Your retained original audio would exceed the storage quota. Remove retained files or ask an administrator to increase the quota, then retry.",
+        ErrorCodes.PrivateStorageUsageUnavailable => "Your retained audio storage could not be measured. Ask an administrator to check the retained files before retrying.",
         "media_processor_unavailable" => "The server media processor is not available.",
         "media_processing_timeout" => "Media processing exceeded the configured time limit.",
         ErrorCodes.MediaParseFailed => "The media file could not be parsed.",
+        ErrorCodes.MediaCorrupt => "The audio file is damaged or incomplete. Please export it again and upload the complete file.",
         ErrorCodes.TranscodeFailed => "The media file could not be transcoded.",
         ErrorCodes.ResourceNotFound => "The quarantined file could not be found.",
         _ => "The import item could not be processed."

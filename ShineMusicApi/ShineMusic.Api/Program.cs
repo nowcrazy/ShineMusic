@@ -10,18 +10,23 @@ using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
 using ShineMusic.Api.Extensions;
 using ShineMusic.Api.Services;
+using ShineMusic.Common.Configuration;
 using ShineMusic.Common.Logging;
 using ShineMusic.Model.Options;
 using ShineMusic.Repository.Data;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Local development uses the same credentials as Compose. Explicit per-environment,
+// User Secrets, environment-variable and command-line settings retain priority.
+var repoRoot = Path.GetFullPath(Path.Combine(builder.Environment.ContentRootPath, "..", ".."));
+builder.Configuration.AddLocalInfrastructureEnvironment(repoRoot, builder.Environment.EnvironmentName);
+
 // ===== WebHost 级别配置（不属于服务注册，保留在此）=====
 // Kestrel 请求体上限放宽到 4 GiB：整批无损音频上传需要的理论上限。
 builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 4294967296);
 
 // 全局地址配置：仓库根目录 config/hosts.json 为唯一来源。
-var repoRoot = Path.GetFullPath(Path.Combine(builder.Environment.ContentRootPath, "..", ".."));
 var hostsRelativePath = Path.Combine("config", "hosts.json");
 if (File.Exists(Path.Combine(repoRoot, hostsRelativePath)))
 {
@@ -135,8 +140,8 @@ if (args.Contains("--create-database", StringComparer.OrdinalIgnoreCase))
         return;
 }
 
-// ===== 启动引导：CodeFirst 建表 + 角色播种 + 队列恢复（顺序由实现保证）=====
-// 与重构前两段顶层 await 等价；抽成 IStartupBootstrap 后，WebApplicationFactory 集成测试
+// ===== 启动引导：CodeFirst 建表 + 角色播种；媒体租约恢复由媒体组 HostedService 执行 =====
+// 抽成 IStartupBootstrap 后，WebApplicationFactory 集成测试
 // 可用 ConfigureTestServices 替换为 Noop，避免测试宿主连接真实 PostgreSQL / RabbitMQ。
 var startupBootstrap = app.Services.GetRequiredService<IStartupBootstrap>();
 await startupBootstrap.InitializeAsync(app.Services);

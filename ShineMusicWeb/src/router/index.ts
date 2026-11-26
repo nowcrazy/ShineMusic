@@ -38,6 +38,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '导入审核' },
       },
       {
+        path: 'library-candidates',
+        name: 'library-candidates',
+        component: () => import('@/pages/admin/library-candidates.vue'),
+        meta: { title: '公共曲库待选' },
+      },
+      {
         path: 'requests',
         name: 'requests',
         component: () => import('@/pages/admin/requests.vue'),
@@ -107,11 +113,9 @@ const router = createRouter({
   routes,
 })
 
-/** 会话恢复只执行一次：首个导航前完成令牌恢复与 /me 拉取。 */
-let sessionReady: Promise<void> | null = null
+/** Authenticated calls are cheap; unavailable sessions can retry on navigation. */
 function ensureSession() {
-  if (!sessionReady) sessionReady = restoreSession()
-  return sessionReady
+  return restoreSession()
 }
 
 router.beforeEach(async (to) => {

@@ -295,13 +295,24 @@ public sealed class UserCollectionController : ControllerBase
             .FirstAsync(item => item.Id == playlistId && item.UserId == userId, cancellationToken);
         if (playlist is null)
             return ApiResults.NotFound(HttpContext);
-        // SqlSugar 无 EF 级联删除，显式删关联行再删歌单本体（同事务）。
+        // Lock the parent before its children, matching pending settlement's lock
+        // order so a late promotion cannot recreate links behind this deletion.
         await db.Ado.BeginTranAsync();
         try
         {
+            var locked = await db.Updateable<UserPlaylist>()
+                .SetColumns(item => item.UpdatedAtUtc == item.UpdatedAtUtc)
+                .Where(item => item.Id == playlistId && item.UserId == userId)
+                .ExecuteCommandAsync(cancellationToken);
+            if (locked == 0)
+            {
+                await db.Ado.CommitTranAsync();
+                return ApiResults.NotFound(HttpContext);
+            }
+            // SqlSugar has no implicit cascade: delete links and the playlist in the same transaction.
             await db.Deleteable<UserPlaylistTrack>().Where(link => link.PlaylistId == playlistId).ExecuteCommandAsync(cancellationToken);
             // Deleteable(实体) 主键内联小写 GUID 会绕过转换器（模式 11），必须用 Where 谓词形式。
-            await db.Deleteable<UserPlaylist>().Where(item => item.Id == playlistId).ExecuteCommandAsync(cancellationToken);
+            await db.Deleteable<UserPlaylist>().Where(item => item.Id == playlistId && item.UserId == userId).ExecuteCommandAsync(cancellationToken);
             await db.Ado.CommitTranAsync();
         }
         catch

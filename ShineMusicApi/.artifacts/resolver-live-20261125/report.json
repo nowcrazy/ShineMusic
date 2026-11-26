@@ -1,0 +1,416 @@
+{
+  "startedAtUtc": "2026-11-25T09:47:35.1928172+00:00",
+  "completedAtUtc": "2026-11-25T09:48:47.5184993+00:00",
+  "configurationScope": "api appsettings.json only; anonymous; no .env, Development, UserSecrets or environment providers",
+  "shortDiscovery": "selected_search_and_detail_match",
+  "shortSample": {
+    "providerTrackId": "3370969010",
+    "title": "Intro (Nine Inch Noize Version)",
+    "artists": [
+      "Nine Inch Nails",
+      "Boys Noize"
+    ],
+    "albumTitle": "Nine Inch Noize",
+    "durationMs": 77645,
+    "license": "\u7F51\u6613\u4E91\u4F1A\u5458\u4E13\u4EAB\uFF08fee=1\uFF09"
+  },
+  "downloadAttempts": 4,
+  "downloadedBytes": 31823014,
+  "temporaryAudioDeleted": true,
+  "fatalError": null,
+  "cases": [
+    {
+      "profile": "high-first",
+      "sampleKind": "ordinary",
+      "trackId": "186016",
+      "expected": {
+        "title": "\u6674\u5929",
+        "artists": [
+          "\u5468\u6770\u4F26"
+        ],
+        "durationMs": 269000
+      },
+      "metadata": {
+        "providerTrackId": "186016",
+        "title": "\u6674\u5929",
+        "artists": [
+          "\u5468\u6770\u4F26"
+        ],
+        "albumTitle": "\u53F6\u60E0\u7F8E",
+        "durationMs": 269000,
+        "license": null
+      },
+      "identityVerdict": "Matched",
+      "identityReason": "identity_matched",
+      "status": "no_accepted_candidate",
+      "elapsedMs": 39908,
+      "platformHttpRequests": 3,
+      "resolverHttpRequests": 5,
+      "downloadRequests": 0,
+      "potentialResolutionSteps": 7,
+      "resolutionSteps": [
+        "official:br320000",
+        "netease:fallback:0:gdstudio:320",
+        "netease:fallback:1:gdstudio:320",
+        "official:br999000",
+        "netease:fallback:0:gdstudio:999",
+        "netease:fallback:1:gdstudio:999"
+      ],
+      "unrequestedPotentialSteps": 1,
+      "enumerationStoppedOnAccepted": false,
+      "candidates": []
+    },
+    {
+      "profile": "lossless-first",
+      "sampleKind": "ordinary",
+      "trackId": "186016",
+      "expected": {
+        "title": "\u6674\u5929",
+        "artists": [
+          "\u5468\u6770\u4F26"
+        ],
+        "durationMs": 269000
+      },
+      "metadata": {
+        "providerTrackId": "186016",
+        "title": "\u6674\u5929",
+        "artists": [
+          "\u5468\u6770\u4F26"
+        ],
+        "albumTitle": "\u53F6\u60E0\u7F8E",
+        "durationMs": 269000,
+        "license": null
+      },
+      "identityVerdict": "Matched",
+      "identityReason": "identity_matched",
+      "status": "no_accepted_candidate",
+      "elapsedMs": 47128,
+      "platformHttpRequests": 3,
+      "resolverHttpRequests": 5,
+      "downloadRequests": 0,
+      "potentialResolutionSteps": 7,
+      "resolutionSteps": [
+        "official:br999000",
+        "netease:fallback:0:gdstudio:999",
+        "netease:fallback:1:gdstudio:999",
+        "official:br320000",
+        "netease:fallback:0:gdstudio:320",
+        "netease:fallback:1:gdstudio:320"
+      ],
+      "unrequestedPotentialSteps": 1,
+      "enumerationStoppedOnAccepted": false,
+      "candidates": []
+    },
+    {
+      "profile": "high-first",
+      "sampleKind": "vip-candidate",
+      "trackId": "65766",
+      "expected": {
+        "title": "\u5BCC\u58EB\u5C71\u4E0B",
+        "artists": [
+          "\u9648\u5955\u8FC5"
+        ],
+        "durationMs": 258902
+      },
+      "metadata": {
+        "providerTrackId": "65766",
+        "title": "\u5BCC\u58EB\u5C71\u4E0B",
+        "artists": [
+          "\u9648\u5955\u8FC5"
+        ],
+        "albumTitle": "What\u0027s Going On\u2026?",
+        "durationMs": 258902,
+        "license": "\u7F51\u6613\u4E91\u4F1A\u5458\u4E13\u4EAB\uFF08fee=1\uFF09"
+      },
+      "identityVerdict": "Matched",
+      "identityReason": "identity_matched",
+      "status": "accepted",
+      "elapsedMs": 4461,
+      "platformHttpRequests": 2,
+      "resolverHttpRequests": 1,
+      "downloadRequests": 1,
+      "potentialResolutionSteps": 7,
+      "resolutionSteps": [
+        "official:br320000",
+        "netease:fallback:0:gdstudio:320"
+      ],
+      "unrequestedPotentialSteps": 5,
+      "enumerationStoppedOnAccepted": true,
+      "candidates": [
+        {
+          "resolverId": "netease:fallback:0:gdstudio",
+          "declaredQuality": "high",
+          "declaredContainer": "mp3",
+          "declaredBitrateKbps": 320,
+          "status": "accepted",
+          "httpStatus": 200,
+          "sizeBytes": 10359162,
+          "sha256": "3a3115b9cb4626ae7d5dde66b0c38a9ffc1ef4583453f2f698fa15bd9e09e01d",
+          "probe": {
+            "container": "mp3",
+            "codec": "mp3",
+            "bitrateKbps": 320,
+            "durationMs": 258902,
+            "formatNames": "mp3",
+            "sampleRateHz": 44100,
+            "bitsPerSample": null,
+            "channels": 2,
+            "codecProfile": null
+          },
+          "durationMatches": true,
+          "qualityAccepted": true,
+          "decodeIntegrity": "passed"
+        }
+      ]
+    },
+    {
+      "profile": "lossless-first",
+      "sampleKind": "vip-candidate",
+      "trackId": "65766",
+      "expected": {
+        "title": "\u5BCC\u58EB\u5C71\u4E0B",
+        "artists": [
+          "\u9648\u5955\u8FC5"
+        ],
+        "durationMs": 258902
+      },
+      "metadata": {
+        "providerTrackId": "65766",
+        "title": "\u5BCC\u58EB\u5C71\u4E0B",
+        "artists": [
+          "\u9648\u5955\u8FC5"
+        ],
+        "albumTitle": "What\u0027s Going On\u2026?",
+        "durationMs": 258902,
+        "license": "\u7F51\u6613\u4E91\u4F1A\u5458\u4E13\u4EAB\uFF08fee=1\uFF09"
+      },
+      "identityVerdict": "Matched",
+      "identityReason": "identity_matched",
+      "status": "accepted",
+      "elapsedMs": 20706,
+      "platformHttpRequests": 3,
+      "resolverHttpRequests": 4,
+      "downloadRequests": 1,
+      "potentialResolutionSteps": 7,
+      "resolutionSteps": [
+        "official:br999000",
+        "netease:fallback:0:gdstudio:999",
+        "netease:fallback:1:gdstudio:999",
+        "official:br320000",
+        "netease:fallback:0:gdstudio:320",
+        "netease:fallback:1:gdstudio:320"
+      ],
+      "unrequestedPotentialSteps": 1,
+      "enumerationStoppedOnAccepted": true,
+      "candidates": [
+        {
+          "resolverId": "netease:fallback:1:gdstudio",
+          "declaredQuality": "high",
+          "declaredContainer": "mp3",
+          "declaredBitrateKbps": 320,
+          "status": "accepted",
+          "httpStatus": 200,
+          "sizeBytes": 10359162,
+          "sha256": "3a3115b9cb4626ae7d5dde66b0c38a9ffc1ef4583453f2f698fa15bd9e09e01d",
+          "probe": {
+            "container": "mp3",
+            "codec": "mp3",
+            "bitrateKbps": 320,
+            "durationMs": 258902,
+            "formatNames": "mp3",
+            "sampleRateHz": 44100,
+            "bitsPerSample": null,
+            "channels": 2,
+            "codecProfile": null
+          },
+          "durationMatches": true,
+          "qualityAccepted": true,
+          "decodeIntegrity": "passed"
+        }
+      ]
+    },
+    {
+      "profile": "high-first",
+      "sampleKind": "unavailable",
+      "trackId": "0",
+      "expected": {
+        "title": "invalid-id",
+        "artists": [],
+        "durationMs": null
+      },
+      "metadata": null,
+      "identityVerdict": null,
+      "identityReason": null,
+      "status": "expected_unavailable",
+      "elapsedMs": 666,
+      "platformHttpRequests": 1,
+      "resolverHttpRequests": 0,
+      "downloadRequests": 0,
+      "potentialResolutionSteps": 0,
+      "resolutionSteps": [],
+      "unrequestedPotentialSteps": 0,
+      "enumerationStoppedOnAccepted": false,
+      "candidates": []
+    },
+    {
+      "profile": "lossless-first",
+      "sampleKind": "unavailable",
+      "trackId": "0",
+      "expected": {
+        "title": "invalid-id",
+        "artists": [],
+        "durationMs": null
+      },
+      "metadata": null,
+      "identityVerdict": null,
+      "identityReason": null,
+      "status": "expected_unavailable",
+      "elapsedMs": 665,
+      "platformHttpRequests": 1,
+      "resolverHttpRequests": 0,
+      "downloadRequests": 0,
+      "potentialResolutionSteps": 0,
+      "resolutionSteps": [],
+      "unrequestedPotentialSteps": 0,
+      "enumerationStoppedOnAccepted": false,
+      "candidates": []
+    },
+    {
+      "profile": "high-first",
+      "sampleKind": "short",
+      "trackId": "3370969010",
+      "expected": {
+        "title": "Intro (Nine Inch Noize Version)",
+        "artists": [
+          "Nine Inch Nails",
+          "Boys Noize"
+        ],
+        "durationMs": 77645
+      },
+      "metadata": {
+        "providerTrackId": "3370969010",
+        "title": "Intro (Nine Inch Noize Version)",
+        "artists": [
+          "Nine Inch Nails",
+          "Boys Noize"
+        ],
+        "albumTitle": "Nine Inch Noize",
+        "durationMs": 77645,
+        "license": "\u7F51\u6613\u4E91\u4F1A\u5458\u4E13\u4EAB\uFF08fee=1\uFF09"
+      },
+      "identityVerdict": "Matched",
+      "identityReason": "identity_matched",
+      "status": "accepted",
+      "elapsedMs": 2932,
+      "platformHttpRequests": 2,
+      "resolverHttpRequests": 1,
+      "downloadRequests": 1,
+      "potentialResolutionSteps": 7,
+      "resolutionSteps": [
+        "official:br320000",
+        "netease:fallback:0:gdstudio:320"
+      ],
+      "unrequestedPotentialSteps": 5,
+      "enumerationStoppedOnAccepted": true,
+      "candidates": [
+        {
+          "resolverId": "netease:fallback:0:gdstudio",
+          "declaredQuality": "high",
+          "declaredContainer": "mp3",
+          "declaredBitrateKbps": 320,
+          "status": "accepted",
+          "httpStatus": 200,
+          "sizeBytes": 3108615,
+          "sha256": "803238174af135ea98cc1cc8fe115d754829ea21bd2478d11537a48f536c6ed7",
+          "probe": {
+            "container": "mp3",
+            "codec": "mp3",
+            "bitrateKbps": 320,
+            "durationMs": 77645,
+            "formatNames": "mp3",
+            "sampleRateHz": 44100,
+            "bitsPerSample": null,
+            "channels": 2,
+            "codecProfile": null
+          },
+          "durationMatches": true,
+          "qualityAccepted": true,
+          "decodeIntegrity": "passed"
+        }
+      ]
+    },
+    {
+      "profile": "lossless-first",
+      "sampleKind": "short",
+      "trackId": "3370969010",
+      "expected": {
+        "title": "Intro (Nine Inch Noize Version)",
+        "artists": [
+          "Nine Inch Nails",
+          "Boys Noize"
+        ],
+        "durationMs": 77645
+      },
+      "metadata": {
+        "providerTrackId": "3370969010",
+        "title": "Intro (Nine Inch Noize Version)",
+        "artists": [
+          "Nine Inch Nails",
+          "Boys Noize"
+        ],
+        "albumTitle": "Nine Inch Noize",
+        "durationMs": 77645,
+        "license": "\u7F51\u6613\u4E91\u4F1A\u5458\u4E13\u4EAB\uFF08fee=1\uFF09"
+      },
+      "identityVerdict": "Matched",
+      "identityReason": "identity_matched",
+      "status": "accepted",
+      "elapsedMs": 2408,
+      "platformHttpRequests": 2,
+      "resolverHttpRequests": 1,
+      "downloadRequests": 1,
+      "potentialResolutionSteps": 7,
+      "resolutionSteps": [
+        "official:br999000",
+        "netease:fallback:0:gdstudio:999"
+      ],
+      "unrequestedPotentialSteps": 5,
+      "enumerationStoppedOnAccepted": true,
+      "candidates": [
+        {
+          "resolverId": "netease:fallback:0:gdstudio",
+          "declaredQuality": "lossless",
+          "declaredContainer": "flac",
+          "declaredBitrateKbps": 900,
+          "status": "accepted",
+          "httpStatus": 200,
+          "sizeBytes": 7996075,
+          "sha256": "118039653edccf0a3a7cf990804dedf6551498aa0a35b7cfae5858bd31b6b2c7",
+          "probe": {
+            "container": "flac",
+            "codec": "flac",
+            "bitrateKbps": 823,
+            "durationMs": 77645,
+            "formatNames": "flac",
+            "sampleRateHz": 44100,
+            "bitsPerSample": 16,
+            "channels": 2,
+            "codecProfile": null
+          },
+          "durationMatches": true,
+          "qualityAccepted": true,
+          "decodeIntegrity": "passed"
+        }
+      ]
+    }
+  ],
+  "limitations": [
+    "No library/database writes; bounded live smoke test, not coverage statistics.",
+    "HTTP 200, a .flac name and a lossless codec do not prove a lossless recording source.",
+    "Metadata match precedes transfer; duration and decoding cannot alone prove audio recording identity.",
+    "At most six transfer attempts and 192 MiB globally, 64 MiB per file, four yielded candidates and 60 seconds per case/profile. Byte budget may overshoot by at most two 80 KiB read buffers before cancellation.",
+    "Budget-limited cases are unverified, not proof that the source lacks the song.",
+    "Short-track discovery is a separate 30-second budget; selected ID and search/detail agreement are reported.",
+    "No link-refresh or cross-process resume test is performed by this probe."
+  ]
+}

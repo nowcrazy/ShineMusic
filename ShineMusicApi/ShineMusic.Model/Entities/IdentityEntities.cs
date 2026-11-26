@@ -65,6 +65,9 @@ public sealed class RefreshToken
     public Guid Id { get; set; } = Guid.NewGuid();
     /// <summary>所属用户 Id 外键。</summary>
     public Guid UserId { get; set; }
+    /// <summary>颁发该 refresh/access token 对的登录会话标识；轮换令牌沿用，撤销后关联 access token 立即无效。</summary>
+    [SugarColumn(IsNullable = true)]
+    public Guid? SessionId { get; set; }
     /// <summary>所属用户导航属性（配置为无反向集合的一对多关系）。</summary>
     [SugarColumn(IsIgnore = true)]
     public ApplicationUser User { get; set; } = null!;

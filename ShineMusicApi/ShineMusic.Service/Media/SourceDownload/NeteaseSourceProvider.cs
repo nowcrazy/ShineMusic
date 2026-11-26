@@ -6,9 +6,13 @@
 // 覆盖：主流中文曲库；VIP 曲（fee≠0）搜索可见但下载可能返回空 url → 判定不可下载。
 // 注：网易云部分曲目因版权转移（如周杰伦原曲）可能只返回翻唱版本，属平台版权限制非代码缺陷。
 
+using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
 using ShineMusic.Model.Options;
+using ShineMusic.Service.SourceProviders.Abstractions;
 
 namespace ShineMusic.Service.SourceDownload;
 
@@ -16,7 +20,8 @@ namespace ShineMusic.Service.SourceDownload;
 public sealed class NeteaseSourceProvider(
     IHttpClientFactory httpClientFactory,
     IOptions<SourceDownloadOptions> options,
-    ILogger<NeteaseSourceProvider> logger) : IMusicSourceProvider, IQualityLadderProvider
+    ILogger<NeteaseSourceProvider> logger,
+    IAudioUrlResolver? audioUrlResolver = null) : IMusicSourceProvider, IQualityLadderProvider, ILazySourceDownloadProvider
 {
     /// <summary>命名 HttpClient（Program.cs 注册，统一超时与 Referer/UA 头）。</summary>
     public const string HttpClientName = "netease";
@@ -79,55 +84,251 @@ public sealed class NeteaseSourceProvider(
     /// <inheritdoc />
     public async Task<SourceDownloadInfo> ResolveDownloadAsync(string providerTrackId, CancellationToken cancellationToken)
     {
-        var candidates = await ResolveDownloadCandidatesAsync(providerTrackId, cancellationToken);
-        return candidates[0];
+        await foreach (var candidate in ResolveDownloadCandidatesLazilyAsync(
+            providerTrackId, [], cancellationToken))
+            return candidate;
+        throw new SourceUnavailableException("未取得可用下载地址；原因未知。");
     }
 
-    /// <summary>
-    /// 按「官方直链 → 各 VIP 回退端点 × 各音质档」顺序返回全部可用下载地址。
-    /// 官方接口无直链时收集回退链里的**所有**成功结果（不再首个即返回）：
-    /// haitangw 等端点可能返回 60s 试听，下载阶段时长校验会判无效并自动落到下一档/下一端点，
-    /// 而不是把这唯一候选直接判死。
-    /// </summary>
+    /// <summary>兼容需要物化所有候选的调用方；下载队列使用按需枚举以避免提前取链。</summary>
     public async Task<IReadOnlyList<SourceDownloadInfo>> ResolveDownloadCandidatesAsync(
         string providerTrackId, CancellationToken cancellationToken)
     {
         var candidates = new List<SourceDownloadInfo>();
-        var ids = JsonSerializer.Serialize(new[] { long.Parse(providerTrackId) });
-        var url = $"{PlayerUrlBase()}?ids={Uri.EscapeDataString(ids)}&br={options.Value.Netease.Bitrate}";
-        using var doc = await GetJsonAsync(url, cancellationToken);
-        if (doc is null || !doc.RootElement.TryGetProperty("data", out var data)
-            || data.ValueKind != JsonValueKind.Array || data.GetArrayLength() == 0)
-        {
-            Report("official", "missing_data", count: 0);
-            throw new SourceUnavailableException("网易云未返回播放地址；原因未知。");
-        }
-
-        var item = data[0];
-        var downloadUrl = GetString(item, "url");
-        if (!string.IsNullOrWhiteSpace(downloadUrl))
-        {
-            var br = GetInt(item, "br") ?? options.Value.Netease.Bitrate;
-            var type = GetString(item, "type") ?? "mp3";
-            var isLossless = br >= 800000;
-            candidates.Add(new SourceDownloadInfo(
-                downloadUrl,
-                type,
-                IsLossless: isLossless,
-                BitrateKbps: br / 1000,
-                Quality: isLossless ? SourceQualities.Lossless : SourceQualities.High));
-        }
-        else
-        {
-            Report("official", "empty_url", count: 0);
-            candidates.AddRange(await CollectVipFallbackCandidatesAsync(providerTrackId, cancellationToken));
-        }
-
-        Report("resolution", candidates.Count == 0 ? "no_candidates_reason_unknown" : "candidates", count: candidates.Count);
+        await foreach (var candidate in ResolveDownloadCandidatesLazilyAsync(
+            providerTrackId, [], cancellationToken))
+            candidates.Add(candidate);
         if (candidates.Count == 0)
             throw new SourceUnavailableException("未取得可用下载地址；原因未知。");
         return candidates;
     }
+
+    /// <summary>
+    /// 按配置的音质优先级逐档解析，先复用此前降档候选，新请求先官方再按端点配置顺序；
+    /// 调用方下载校验成功后停止枚举，
+    /// 尚未枚举的端点不会收到请求。官方缺失数据或直链无效不会阻断后续候选。
+    /// </summary>
+    public async IAsyncEnumerable<SourceDownloadInfo> ResolveDownloadCandidatesLazilyAsync(
+        string providerTrackId,
+        IReadOnlyList<AudioQualityLevel> qualityChain,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var count = 0;
+        var seenUrls = new HashSet<string>(StringComparer.Ordinal);
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var tiers = qualityChain.Count == 0
+                ? DefaultQualityChain()
+                : qualityChain.Where(level => level is AudioQualityLevel.High320K or AudioQualityLevel.Lossless or AudioQualityLevel.Below320K)
+                    .Distinct().ToArray();
+            var deferred = new Dictionary<AudioQualityLevel, List<SourceDownloadInfo>>();
+            void DeferCandidate(SourceDownloadInfo candidate, int currentTierIndex)
+            {
+                var actualTier = CandidateTier(candidate);
+                if (Array.IndexOf(tiers, actualTier) <= currentTierIndex) return;
+                if (!deferred.TryGetValue(actualTier, out var candidates)) deferred[actualTier] = candidates = [];
+                candidates.Add(candidate);
+            }
+            var fallback = options.Value.Netease.VipFallback;
+            for (var tierIndex = 0; tierIndex < tiers.Length; tierIndex++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var tier = tiers[tierIndex];
+                // 先前请求被降档时保留结果，直到该档成为当前优先级才返回，避免重取及误丢合格资源。
+                if (deferred.Remove(tier, out var savedCandidates))
+                {
+                    foreach (var saved in savedCandidates)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        if (!seenUrls.Add(saved.DownloadUrl)) continue;
+                        count++;
+                        yield return saved;
+                    }
+                }
+                var requestedBitrate = RequestedBitrate(tier);
+                // 每档内官方源先行，不能越过调用方指定的更高优先级档位。
+                var official = await ResolveOfficialAsync(providerTrackId, requestedBitrate, cancellationToken);
+                if (official is not null)
+                {
+                    if (CandidateTier(official) != tier) DeferCandidate(official, tierIndex);
+                    else if (seenUrls.Add(official.DownloadUrl))
+                    {
+                        count++;
+                        yield return official;
+                    }
+                }
+
+                if (!fallback.Enabled || fallback.Endpoints is null) continue;
+                for (var index = 0; index < fallback.Endpoints.Count; index++)
+                {
+                    var endpoint = fallback.Endpoints[index];
+                    if (endpoint is null || !endpoint.Enabled) continue;
+                    foreach (var level in endpoint.Levels ?? [])
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        if (string.IsNullOrWhiteSpace(level) || TierForLevel(level) != tier) continue;
+                        var candidate = await ResolveFallbackAsync(providerTrackId, endpoint, index, level,
+                            fallback.TimeoutSeconds, cancellationToken);
+                        if (candidate is null) continue;
+                        if (CandidateTier(candidate) != tier)
+                        {
+                            DeferCandidate(candidate, tierIndex);
+                            continue;
+                        }
+                        if (!seenUrls.Add(candidate.DownloadUrl)) continue;
+                        count++;
+                        yield return candidate;
+                    }
+                }
+            }
+        }
+        finally
+        {
+            Report("resolution", count == 0 ? "no_candidates_reason_unknown" : "candidates", count: count);
+        }
+    }
+
+    /// <summary>仅刷新原来源和原音质；配置或响应的资源身份变化时返回 null。</summary>
+    public async Task<SourceDownloadInfo?> RefreshDownloadAsync(
+        string providerTrackId, SourceDownloadInfo previous, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(previous.ResolverId) || string.IsNullOrWhiteSpace(previous.ResourceId))
+            return null;
+        SourceDownloadInfo? refreshed = null;
+        if (string.Equals(previous.ResolverId, OfficialResolverId, StringComparison.Ordinal))
+        {
+            if (!TryGetOfficialRequestBitrate(providerTrackId, previous.ResourceId, out var requestedBitrate)) return null;
+            refreshed = await ResolveOfficialAsync(providerTrackId, requestedBitrate, cancellationToken);
+        }
+        else
+        {
+            var fallback = options.Value.Netease.VipFallback;
+            if (!fallback.Enabled || fallback.Endpoints is null) return null;
+            for (var index = 0; index < fallback.Endpoints.Count; index++)
+            {
+                var endpoint = fallback.Endpoints[index];
+                if (endpoint is null || !endpoint.Enabled ||
+                    !string.Equals(previous.ResolverId, GetResolverId(endpoint, index), StringComparison.Ordinal)) continue;
+                foreach (var level in endpoint.Levels ?? [])
+                {
+                    if (string.IsNullOrWhiteSpace(level) || !string.Equals(previous.ResourceId,
+                        GetFallbackResourceId(providerTrackId, endpoint, level), StringComparison.Ordinal)) continue;
+                    refreshed = await ResolveFallbackAsync(providerTrackId, endpoint, index, level,
+                        fallback.TimeoutSeconds, cancellationToken);
+                    break;
+                }
+                if (refreshed is not null) break;
+            }
+        }
+        return refreshed is not null && SameResource(previous, refreshed) ? refreshed : null;
+    }
+
+    private const string OfficialResolverId = "netease:official";
+
+    private async Task<SourceDownloadInfo?> ResolveOfficialAsync(
+        string providerTrackId, int requestedBitrate, CancellationToken cancellationToken)
+    {
+        var ids = JsonSerializer.Serialize(new[] { long.Parse(providerTrackId) });
+        var url = $"{PlayerUrlBase()}?ids={Uri.EscapeDataString(ids)}&br={requestedBitrate}";
+        using var doc = await GetJsonAsync(url, cancellationToken);
+        if (doc is null || doc.RootElement.ValueKind != JsonValueKind.Object
+            || !doc.RootElement.TryGetProperty("data", out var data)
+            || data.ValueKind != JsonValueKind.Array || data.GetArrayLength() == 0
+            || data[0].ValueKind != JsonValueKind.Object)
+        {
+            Report("official", "missing_data", count: 0);
+            return null;
+        }
+
+        var item = data[0];
+        var downloadUrl = GetString(item, "url");
+        if (!IsHttpUrl(downloadUrl))
+        {
+            Report("official", string.IsNullOrWhiteSpace(downloadUrl) ? "empty_url" : "invalid_url", count: 0);
+            return null;
+        }
+        var bitrate = GetInt(item, "br") ?? requestedBitrate;
+        var type = (GetString(item, "type") ?? "mp3").ToLowerInvariant();
+        var tier = IsLosslessContainer(type) ? AudioQualityLevel.Lossless
+            : bitrate >= 320000 ? AudioQualityLevel.High320K : AudioQualityLevel.Below320K;
+        var isLossless = tier == AudioQualityLevel.Lossless;
+        var expirySeconds = GetInt(item, "expi");
+        return new SourceDownloadInfo(downloadUrl!, type, isLossless, bitrate / 1000,
+            isLossless ? SourceQualities.Lossless : tier == AudioQualityLevel.High320K ? SourceQualities.High : SourceQualities.Standard)
+        {
+            ResolverId = OfficialResolverId,
+            ResourceId = $"netease:{providerTrackId}:official:{requestedBitrate}:{bitrate}:{type}:{OfficialEndpointFingerprint()}",
+            UseIsolatedDownloadClient = true,
+            ExpiresAtUtc = expirySeconds is > 0 and <= 604800
+                ? DateTimeOffset.UtcNow.AddSeconds(expirySeconds.Value) : null
+        };
+    }
+
+    private static bool SameResource(SourceDownloadInfo previous, SourceDownloadInfo refreshed)
+        => string.Equals(previous.ResolverId, refreshed.ResolverId, StringComparison.Ordinal)
+            && string.Equals(previous.ResourceId, refreshed.ResourceId, StringComparison.Ordinal)
+            && string.Equals(previous.Container, refreshed.Container, StringComparison.OrdinalIgnoreCase)
+            && previous.IsLossless == refreshed.IsLossless
+            && previous.BitrateKbps == refreshed.BitrateKbps
+            && string.Equals(previous.Quality, refreshed.Quality, StringComparison.Ordinal);
+
+    private AudioQualityLevel[] DefaultQualityChain()
+        => new[] { ConfiguredBitrateTier(), AudioQualityLevel.High320K, AudioQualityLevel.Lossless, AudioQualityLevel.Below320K }
+            .Distinct().ToArray();
+
+    private AudioQualityLevel ConfiguredBitrateTier()
+        => options.Value.Netease.Bitrate >= 999000 ? AudioQualityLevel.Lossless
+            : options.Value.Netease.Bitrate >= 320000 ? AudioQualityLevel.High320K : AudioQualityLevel.Below320K;
+
+    private int RequestedBitrate(AudioQualityLevel tier)
+    {
+        var configuredBitrate = options.Value.Netease.Bitrate;
+        if (configuredBitrate is > 0 and <= 10000000 && ConfiguredBitrateTier() == tier) return configuredBitrate;
+        return tier switch
+        {
+            AudioQualityLevel.Lossless => 999000,
+            AudioQualityLevel.High320K => 320000,
+            AudioQualityLevel.Below320K => 192000,
+            _ => throw new ArgumentOutOfRangeException(nameof(tier), tier, "Unsupported quality tier.")
+        };
+    }
+
+    private static AudioQualityLevel? TierForLevel(string level) => level.Trim().ToLowerInvariant() switch
+    {
+        "lossless" or "flac" or "999" => AudioQualityLevel.Lossless,
+        "exhigh" or "320" or "740" => AudioQualityLevel.High320K,
+        "standard" or "256" or "192" or "128" => AudioQualityLevel.Below320K,
+        _ => null
+    };
+
+    private static AudioQualityLevel CandidateTier(SourceDownloadInfo candidate)
+        => candidate.IsLossless ? AudioQualityLevel.Lossless
+            : candidate.BitrateKbps is >= 320 ? AudioQualityLevel.High320K : AudioQualityLevel.Below320K;
+
+    private static bool IsLosslessContainer(string container)
+        => container is "flac" or "wav" or "ape" or "alac" or "aiff" or "aif" or "wv";
+
+    private string OfficialEndpointFingerprint()
+        => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(PlayerUrlBase())));
+
+    private bool TryGetOfficialRequestBitrate(string providerTrackId, string? resourceId, out int requestedBitrate)
+    {
+        requestedBitrate = 0;
+        var prefix = $"netease:{providerTrackId}:official:";
+        if (resourceId is null || !resourceId.StartsWith(prefix, StringComparison.Ordinal)
+            || !resourceId.EndsWith($":{OfficialEndpointFingerprint()}", StringComparison.Ordinal)) return false;
+        var suffix = resourceId[prefix.Length..];
+        var separator = suffix.IndexOf(':');
+        return separator > 0 && int.TryParse(suffix.AsSpan(0, separator), out requestedBitrate)
+            && requestedBitrate is > 0 and <= 10000000;
+    }
+
+    private static bool IsHttpUrl(string? value)
+        => Uri.TryCreate(value, UriKind.Absolute, out var uri)
+            && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
+            && string.IsNullOrEmpty(uri.UserInfo);
 
     /// <summary>
     /// 轻量预判：调 enhance/player/url 检查官方 API 是否返回有效下载直链。
@@ -158,204 +359,46 @@ public sealed class NeteaseSourceProvider(
         }
     }
 
-    /// <summary>
-    /// VIP 曲目回退解析：按配置的端点链依次尝试第三方「解锁」服务获取下载直链。
-    /// 端点类型：
-    ///   - gdstudio：GET 单步，根级 url（2026-11 实测对 VIP 曲返回完整 320k/无损 flac，当前主力）。
-    ///   - nextmusic：共享 VIP 账号，POST 两步（/api/ip 取 IP → /api/getSongUrl 取 url），返回完整歌曲（320k/无损）。
-    ///   - haitangw：GET 单步，返回 data.url（实测仅 60s 预览，作兜底）。
-    ///   - zmusic：兼容官方格式 GET，返回 data[0].url。
-    /// 收集所有端点 × 档位的成功直链（按配置顺序），交由下载阶段的时长校验逐档淘汰，
-    /// 避免「首个返回的 60s 预览被直接采纳」导致整源被判死。
-    /// </summary>
-    private async Task<List<SourceDownloadInfo>> CollectVipFallbackCandidatesAsync(
-        string providerTrackId, CancellationToken cancellationToken)
-    {
-        var fb = options.Value.Netease.VipFallback;
-        var candidates = new List<SourceDownloadInfo>();
-        if (!fb.Enabled || fb.Endpoints is null || fb.Endpoints.Count == 0) return candidates;
-
-        var client = httpClientFactory.CreateClient(HttpClientName);
-        var seenUrls = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var endpoint in fb.Endpoints)
-        {
-            foreach (var level in endpoint.Levels ?? [])
-            {
-                var url = await ResolveViaEndpointAsync(client, endpoint, providerTrackId, level, fb.TimeoutSeconds, cancellationToken);
-                Report($"fallback:{endpoint.Type}:{level}", url is null ? "empty_or_unavailable" : "candidate", count: url is null ? 0 : 1);
-                if (url is null || !seenUrls.Add(url)) continue;
-                var (bitrate, isLossless, container) = InferQuality(level, endpoint.Type);
-                logger.LogInformation(
-                    "Netease VIP fallback candidate for track {Id} via {Type} (level={Level}, {Bitrate}kbps)",
-                    providerTrackId, endpoint.Type, level, bitrate / 1000);
-                candidates.Add(new SourceDownloadInfo(
-                    url,
-                    container,
-                    IsLossless: isLossless,
-                    BitrateKbps: bitrate / 1000,
-                    Quality: isLossless ? SourceQualities.Lossless : SourceQualities.High));
-            }
-        }
-        return candidates;
-    }
-
-    /// <summary>按端点类型分发请求，返回下载直链或 null。</summary>
-    private async Task<string?> ResolveViaEndpointAsync(
-        HttpClient client, NeteaseVipFallbackEndpoint endpoint, string trackId, string level,
+    /// <summary>平台内只保留候选编排，端点协议由通用解析器执行。</summary>
+    private async Task<SourceDownloadInfo?> ResolveFallbackAsync(
+        string providerTrackId, NeteaseVipFallbackEndpoint endpoint, int endpointIndex, string level,
         int timeoutSeconds, CancellationToken cancellationToken)
     {
+        var resolver = audioUrlResolver ?? new HttpAudioUrlResolver(httpClientFactory);
+        var request = new AudioUrlResolveRequest(Provider, providerTrackId, level,
+            GetResolverId(endpoint, endpointIndex), endpoint, timeoutSeconds,
+            Diagnostic: diagnostic => Report(diagnostic.Stage, diagnostic.Code, diagnostic.HttpStatus));
         try
         {
-            return endpoint.Type switch
+            var candidate = await resolver.ResolveAsync(request, cancellationToken);
+            Report("fallback", candidate is null ? "empty_or_unavailable" : "candidate", count: candidate is null ? 0 : 1);
+            if (candidate is null) return null;
+            return candidate with
             {
-                VipFallbackEndpointTypes.NextMusic => await ResolveViaNextMusicAsync(client, endpoint.BaseUrl!, trackId, level, timeoutSeconds, cancellationToken),
-                VipFallbackEndpointTypes.HaiTangW => await ResolveViaGetDataUrlAsync(client, endpoint.Url!, trackId, level, timeoutSeconds, cancellationToken),
-                VipFallbackEndpointTypes.ZMusic => await ResolveViaZMusicAsync(client, endpoint.Url!, trackId, level, timeoutSeconds, cancellationToken),
-                VipFallbackEndpointTypes.GdStudio => await ResolveViaGdStudioAsync(client, endpoint.Url!, trackId, level, timeoutSeconds, cancellationToken),
-                _ => null,
+                ResolverId = request.ResolverId,
+                ResourceId = GetFallbackResourceId(providerTrackId, endpoint, level)
             };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
-        catch (Exception ex)
+        catch (Exception exception)
         {
-            Report($"fallback:{endpoint.Type}:{level}", ex is OperationCanceledException ? "timeout" : ex.GetType().Name);
-            logger.LogWarning("Netease fallback error via {Type}: {ErrorType}", endpoint.Type, ex.GetType().Name);
+            Report("fallback", exception is OperationCanceledException ? "timeout" : exception.GetType().Name);
+            logger.LogWarning("Netease fallback failed: {ErrorType}", exception.GetType().Name);
             return null;
         }
     }
 
-    /// <summary>
-    /// nextmusic.toubiec.cn：POST 两步。
-    /// 1) POST {BaseUrl}/api/ip  body={timestamp} → data.ip
-    /// 2) POST {BaseUrl}/api/getSongUrl  body={id,level,timestamp,ip} → data.url
-    /// 需 Origin/Referer 头指向 wyapi.toubiec.cn。
-    /// </summary>
-    private static async Task<string?> ResolveViaNextMusicAsync(
-        HttpClient client, string baseUrl, string trackId, string level,
-        int timeoutSeconds, CancellationToken cancellationToken)
+    private static string GetResolverId(NeteaseVipFallbackEndpoint endpoint, int endpointIndex)
+        => string.IsNullOrWhiteSpace(endpoint.Id) ? $"netease:fallback:{endpointIndex}:{endpoint.Type}" : $"netease:fallback:{endpoint.Id}";
+
+    private static string GetFallbackResourceId(string trackId, NeteaseVipFallbackEndpoint endpoint, string level)
     {
-        var headers = new Dictionary<string, string>
-        {
-            ["Origin"] = "https://wyapi.toubiec.cn",
-            ["Referer"] = "https://wyapi.toubiec.cn/",
-        };
-        var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-
-        // Step 1: get IP
-        var ip = await PostJsonAsync<string?>(client, $"{baseUrl.TrimEnd('/')}/api/ip",
-            new { timestamp = ts }, headers, timeoutSeconds,
-            doc => doc.RootElement.TryGetProperty("data", out var d) ? GetString(d, "ip") : null,
-            cancellationToken);
-        if (string.IsNullOrWhiteSpace(ip)) return null;
-
-        // Step 2: get song url
-        return await PostJsonAsync<string?>(client, $"{baseUrl.TrimEnd('/')}/api/getSongUrl",
-            new { id = trackId, level, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), ip },
-            headers, timeoutSeconds,
-            doc =>
-            {
-                if (!doc.RootElement.TryGetProperty("data", out var d)) return null;
-                var url = GetString(d, "url");
-                return !string.IsNullOrWhiteSpace(url) && url.StartsWith("http", StringComparison.OrdinalIgnoreCase) ? url : null;
-            },
-            cancellationToken);
-    }
-
-    /// <summary>haitangw 等 GET 型端点：URL 含 id/level 占位符，响应 data.url。</summary>
-    private static async Task<string?> ResolveViaGetDataUrlAsync(
-        HttpClient client, string urlTemplate, string trackId, string level,
-        int timeoutSeconds, CancellationToken cancellationToken)
-    {
-        var url = urlTemplate
-            .Replace("{id}", Uri.EscapeDataString(trackId))
-            .Replace("{level}", Uri.EscapeDataString(level));
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        cts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
-        using var response = await client.GetAsync(url, cts.Token);
-        Report("fallback_http", response.IsSuccessStatusCode ? "http_ok" : "http_error", (int)response.StatusCode);
-        if (!response.IsSuccessStatusCode) return null;
-        var json = await response.Content.ReadAsStringAsync(cts.Token);
-        using var doc = JsonDocument.Parse(json);
-        if (!doc.RootElement.TryGetProperty("data", out var dataEl)) return null;
-        var fallbackUrl = GetString(dataEl, "url");
-        return !string.IsNullOrWhiteSpace(fallbackUrl) && fallbackUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase)
-            ? fallbackUrl : null;
-    }
-
-    /// <summary>GD Studio GET 型端点：URL 含 {id}/{level}（br）占位符，响应根级 url（br=999 返回无损 flac）。</summary>
-    private static async Task<string?> ResolveViaGdStudioAsync(
-        HttpClient client, string urlTemplate, string trackId, string level,
-        int timeoutSeconds, CancellationToken cancellationToken)
-    {
-        var url = urlTemplate
-            .Replace("{id}", Uri.EscapeDataString(trackId))
-            .Replace("{level}", Uri.EscapeDataString(level));
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        cts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
-        using var response = await client.GetAsync(url, cts.Token);
-        Report("fallback_http", response.IsSuccessStatusCode ? "http_ok" : "http_error", (int)response.StatusCode);
-        if (!response.IsSuccessStatusCode) return null;
-        var json = await response.Content.ReadAsStringAsync(cts.Token);
-        using var doc = JsonDocument.Parse(json);
-        var fallbackUrl = GetString(doc.RootElement, "url");
-        return !string.IsNullOrWhiteSpace(fallbackUrl) && fallbackUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase)
-            ? fallbackUrl : null;
-    }
-
-    /// <summary>ZMusic 兼容官方格式：GET /song/url，参数 id 与 level，响应 data[0].url。</summary>
-    private static async Task<string?> ResolveViaZMusicAsync(
-        HttpClient client, string urlTemplate, string trackId, string level,
-        int timeoutSeconds, CancellationToken cancellationToken)
-    {
-        var url = urlTemplate
-            .Replace("{id}", Uri.EscapeDataString(trackId))
-            .Replace("{level}", Uri.EscapeDataString(level));
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        cts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
-        using var response = await client.GetAsync(url, cts.Token);
-        Report("fallback_http", response.IsSuccessStatusCode ? "http_ok" : "http_error", (int)response.StatusCode);
-        if (!response.IsSuccessStatusCode) return null;
-        var json = await response.Content.ReadAsStringAsync(cts.Token);
-        using var doc = JsonDocument.Parse(json);
-        if (!doc.RootElement.TryGetProperty("data", out var dataEl) || dataEl.ValueKind != JsonValueKind.Array || dataEl.GetArrayLength() == 0)
-            return null;
-        var fallbackUrl = GetString(dataEl[0], "url");
-        return !string.IsNullOrWhiteSpace(fallbackUrl) && fallbackUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase)
-            ? fallbackUrl : null;
-    }
-
-    /// <summary>带自定义头的 POST JSON 请求，解析函数从 JsonDocument 提取结果。</summary>
-    private static async Task<T?> PostJsonAsync<T>(
-        HttpClient client, string url, object body, Dictionary<string, string> headers,
-        int timeoutSeconds, Func<JsonDocument, T?> parser, CancellationToken cancellationToken)
-    {
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        cts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
-        using var request = new HttpRequestMessage(HttpMethod.Post, url);
-        foreach (var (key, value) in headers)
-            request.Headers.TryAddWithoutValidation(key, value);
-        request.Content = new StringContent(JsonSerializer.Serialize(body), System.Text.Encoding.UTF8, "application/json");
-        using var response = await client.SendAsync(request, cts.Token);
-        Report(url.EndsWith("/api/ip", StringComparison.Ordinal) ? "fallback_ip_http" : "fallback_song_http", response.IsSuccessStatusCode ? "http_ok" : "http_error", (int)response.StatusCode);
-        if (!response.IsSuccessStatusCode) return default;
-        var json = await response.Content.ReadAsStringAsync(cts.Token);
-        using var doc = JsonDocument.Parse(json);
-        return parser(doc);
-    }
-
-    /// <summary>根据 level 与端点类型推断码率/容器。nextmusic 的 level 是网易云命名（standard/exhigh/lossless）。</summary>
-    private static (int Bitrate, bool IsLossless, string Container) InferQuality(string level, string endpointType)
-    {
-        return level.ToLowerInvariant() switch
-        {
-            "lossless" or "flac" or "999" => (900000, true, "flac"),
-            "exhigh" or "320" or "740" => (320000, false, "mp3"),
-            "standard" or "192" => (192000, false, "mp3"),
-            _ => (128000, false, "mp3"),
-        };
+        // Include a one-way configuration fingerprint so a same-ID endpoint edit cannot refresh into another resource.
+        var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(endpoint))));
+        return $"netease:{trackId}:fallback:{Uri.EscapeDataString(level)}:{fingerprint}";
     }
 
     /// <summary>解析搜索结果条目（artists/album/duration 全字段）。</summary>

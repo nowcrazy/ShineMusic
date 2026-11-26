@@ -25,6 +25,7 @@ using ShineMusic.Repository.Persistence;
 using ShineMusic.Repository.Storage;
 using ShineMusic.Service;
 using ShineMusic.Service.Lyrics;
+using ShineMusic.Service.Media;
 using ShineMusic.Service.Messaging;
 using ShineMusic.Service.PlaylistImport;
 using ShineMusic.Service.SourceDownload;
@@ -272,6 +273,39 @@ public static class ServiceCollectionExtensions
             .Validate(options => options.BitrateKbps is >= 96 and <= 320, "Transcoding:BitrateKbps must be between 96 and 320.")
             .Validate(options => options.MaxConcurrentJobs is >= 1 and <= 4, "Transcoding:MaxConcurrentJobs must be between 1 and 4.")
             .ValidateOnStart();
+        services
+            .AddOptions<MediaLeaseOptions>()
+            .BindConfiguration(MediaLeaseOptions.SectionName)
+            .Validate(options => options.LeaseSeconds is >= 30 and <= 3600,
+                "MediaLease:LeaseSeconds must be between 30 and 3600.")
+            .Validate(options => options.HeartbeatSeconds is >= 5 && options.HeartbeatSeconds < options.LeaseSeconds,
+                "MediaLease:HeartbeatSeconds must be at least 5 and less than LeaseSeconds.")
+            .Validate(options => options.RecoveryBatchSize is >= 1 and <= 1000,
+                "MediaLease:RecoveryBatchSize must be between 1 and 1000.")
+            .ValidateOnStart();
+        services
+            .AddOptions<LibraryWorkflowOptions>()
+            .BindConfiguration(LibraryWorkflowOptions.SectionName)
+            .Validate(options => options.MaxPrivateOriginalBytesPerUser >= 0,
+                "LibraryWorkflow:MaxPrivateOriginalBytesPerUser must be zero or positive.")
+            .Validate(options => options.PrivateReviewDays is >= 1 and <= 365, "LibraryWorkflow:PrivateReviewDays must be between 1 and 365.")
+            .Validate(options => options.PublicReviewDays is >= 1 and <= 365, "LibraryWorkflow:PublicReviewDays must be between 1 and 365.")
+            .Validate(options => options.RecycleDays is >= 1 and <= 365, "LibraryWorkflow:RecycleDays must be between 1 and 365.")
+            .Validate(options => options.ReminderHours is >= 1 and <= 168, "LibraryWorkflow:ReminderHours must be between 1 and 168.")
+            .Validate(options => options.Mp3MinimumKbps is >= 96 and <= 320 && options.AacLcMinimumKbps is >= 96 and <= 512
+                && options.OpusMinimumKbps is >= 64 and <= 512 && options.VorbisMinimumKbps is >= 64 and <= 512,
+                "LibraryWorkflow: lossless nomination thresholds are outside the supported range.")
+            .ValidateOnStart();
+        services
+            .AddOptions<TemporaryPlaybackOptions>()
+            .BindConfiguration(TemporaryPlaybackOptions.SectionName)
+            .Validate(options => options.AacBitrateKbps is >= 96 and <= 320, "TemporaryPlayback:AacBitrateKbps must be between 96 and 320.")
+            .Validate(options => options.MaxCacheBytes > 0, "TemporaryPlayback:MaxCacheBytes must be positive.")
+            .Validate(options => options.MaxEntryBytes > 0 && options.MaxEntryBytes <= options.MaxCacheBytes, "TemporaryPlayback:MaxEntryBytes must be positive and no larger than MaxCacheBytes.")
+            .Validate(options => options.IdleMinutes is >= 1 and <= 1440, "TemporaryPlayback:IdleMinutes must be between 1 and 1440.")
+            .Validate(options => options.CleanupIntervalMinutes is >= 1 and <= 1440, "TemporaryPlayback:CleanupIntervalMinutes must be between 1 and 1440.")
+            .Validate(options => options.MaxConcurrentTranscodes is >= 1 and <= 8, "TemporaryPlayback:MaxConcurrentTranscodes must be between 1 and 8.")
+            .ValidateOnStart();
         services.Configure<FfmpegOptions>(configuration.GetSection(FfmpegOptions.SectionName));
         services
             .AddOptions<LyricsOptions>()
@@ -289,6 +323,8 @@ public static class ServiceCollectionExtensions
         services
             .AddOptions<SourceDownloadOptions>()
             .BindConfiguration(SourceDownloadOptions.SectionName)
+            .Configure<IConfiguration>((options, sourceConfiguration) =>
+                SourceDownloadOptionsBinding.ReplaceConfiguredNeteaseEndpoints(sourceConfiguration, options))
             .Validate(options => !options.Audius.Enabled || !string.IsNullOrWhiteSpace(options.Audius.BaseUrl),
                 "SourceDownload:Audius:BaseUrl is required when Audius is enabled.")
             .Validate(options => !options.Jamendo.Enabled || !string.IsNullOrWhiteSpace(options.Jamendo.ClientId),
@@ -355,7 +391,8 @@ public static class ServiceCollectionExtensions
         {
             // 未配置任何来源时不放行任何跨域请求（失败即关闭），避免开发期宽松配置被误带到生产环境。
             if (allowedOrigins.Length > 0)
-                policy.WithOrigins(allowedOrigins).AllowAnyHeader().AllowAnyMethod();
+                policy.WithOrigins(allowedOrigins).AllowAnyHeader().AllowAnyMethod()
+                    .WithExposedHeaders("Content-Disposition", "ETag", "Accept-Ranges", "Content-Range");
         }));
         return services;
     }
@@ -399,15 +436,22 @@ public static class ServiceCollectionExtensions
         // ===== RabbitMQ：持久化消息队列 =====
         services.AddSingleton<RabbitMessageBus>();
         services.AddSingleton<IRabbitMessageBus>(sp => sp.GetRequiredService<RabbitMessageBus>());
+        services.AddScoped<MessageOutboxDispatcher>();
+        services.AddScoped<MessageDeadLetterStore>();
+        services.AddSingleton<MediaWorkerIdentity>();
+        services.AddScoped<MediaTaskLeaseService>();
+        services.AddTransient<MediaQueueRecoveryJob>();
         // ===== 后台任务按组注册（P5：Web 与 Media Worker 可分别部署，避免重复消费队列）=====
         var runMedia = mode is HostedServiceMode.All or HostedServiceMode.MediaOnly;
         var runNonMedia = mode is HostedServiceMode.All or HostedServiceMode.NonMediaOnly;
         if (runMedia)
         {
+            services.AddHostedService<ShineMusic.Tasks.MessageOutboxService>();
             services.AddHostedService<ShineMusic.Tasks.SourceDownloadConsumerService>();
             services.AddHostedService<ShineMusic.Tasks.LibraryImportConsumerService>();
             services.AddHostedService<ShineMusic.Tasks.SourceDownloadRetrySweepService>();
             services.AddHostedService<ShineMusic.Tasks.LibraryImportRetrySweepService>();
+            services.AddHostedService<ShineMusic.Tasks.MediaQueueRecoveryService>();
             // Phase 5：Provider 健康监控器（自动熔断恢复），与音源调用在同一进程。
             services.AddHostedService<ShineMusic.Service.SourceDownload.ProviderHealthMonitor>();
         }
@@ -417,6 +461,8 @@ public static class ServiceCollectionExtensions
             services.AddHostedService<ShineMusic.Tasks.LyricsBackfillService>();
             services.AddHostedService<ShineMusic.Tasks.SongRequestArchiveService>();
             services.AddHostedService<ShineMusic.Tasks.PlaylistPendingBackfillService>();
+            services.AddHostedService<TemporaryPlaybackCleanupService>();
+            services.AddHostedService<ShineMusic.Tasks.LibraryWorkflowSweepService>();
         }
         // 业务处理器注册。
         services.AddTransient<LibraryImportJob>();
@@ -483,6 +529,35 @@ public static class ServiceCollectionExtensions
                             }
                         }
                         return Task.CompletedTask;
+                    },
+                    // Access JWTs are bound to a live refresh-token session. Read the indexed session
+                    // row on every protected request so admin lock/role revocation is immediate across nodes.
+                    OnTokenValidated = async context =>
+                    {
+                        var subject = context.Principal?.FindFirstValue(JwtRegisteredClaimNames.Sub);
+                        var sessionClaim = context.Principal?.FindFirstValue(JwtRegisteredClaimNames.Sid);
+                        if (!Guid.TryParse(subject, out var userId) || !Guid.TryParse(sessionClaim, out var sessionId))
+                        {
+                            context.Fail("The access token has no valid session identity.");
+                            return;
+                        }
+
+                        var userService = context.HttpContext.RequestServices.GetRequiredService<UserService>();
+                        var sessionIsActive = await userService.IsSessionActiveAsync(
+                            userId, sessionId, DateTime.UtcNow, context.HttpContext.RequestAborted);
+                        if (!sessionIsActive)
+                        {
+                            context.Fail("The access-token session has been revoked or expired.");
+                            return;
+                        }
+
+                        // Temp-admin grants are time-bound even when no request has yet persisted the lazy downgrade.
+                        var adminUntil = context.Principal?.FindFirst("admin_until_utc")?.Value;
+                        if (DateTimeOffset.TryParse(adminUntil, out var expiresAt) && expiresAt <= DateTimeOffset.UtcNow)
+                        {
+                            await userService.RevokeAllSessionsAsync(userId, DateTime.UtcNow);
+                            context.Fail("The temporary administrator session has expired.");
+                        }
                     },
                     // 未携带/无效令牌：统一返回 ApiErrorResponse JSON。
                     OnChallenge = async context =>

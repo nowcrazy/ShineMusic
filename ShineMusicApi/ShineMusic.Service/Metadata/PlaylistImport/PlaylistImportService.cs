@@ -113,16 +113,19 @@ public sealed partial class PlaylistImportService(
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
-    /// <summary>选择 parser 并解析歌单，逐曲匹配曲库后返回预览；解析结果写入缓存供导入复用。</summary>
+    /// <summary>选择 parser 并解析歌单，批量读取候选并匹配曲库；解析结果写入缓存供导入复用。</summary>
     public async Task<PlaylistParsePreview> ParsePreviewAsync(string url, Guid userId, CancellationToken cancellationToken)
     {
         var (platform, parsed) = await ParseAsync(url, cancellationToken);
         parseCache.Set(userId, url, platform, parsed);
 
+        var matchedIds = await MatchLibraryBatchAsync(parsed.Tracks, cancellationToken);
         var tracks = new List<PlaylistPreviewTrack>(parsed.Tracks.Count);
-        foreach (var track in parsed.Tracks)
+        for (var index = 0; index < parsed.Tracks.Count; index++)
         {
-            var matchedId = await MatchLibraryAsync(track.Title, track.Artists, track.DurationMs, cancellationToken, track.AlbumTitle);
+            cancellationToken.ThrowIfCancellationRequested();
+            var track = parsed.Tracks[index];
+            var matchedId = matchedIds[index];
             tracks.Add(new PlaylistPreviewTrack(
                 track.Title, track.Artists, track.AlbumTitle, track.DurationMs,
                 matchedId.HasValue, matchedId));
@@ -171,21 +174,33 @@ public sealed partial class PlaylistImportService(
             CreatedAtUtc = now,
             UpdatedAtUtc = now
         };
+        var transactionStopwatch = Stopwatch.StartNew();
         await db.Ado.BeginTranAsync();
         try
         {
         await db.Insertable(playlist).ExecuteCommandAsync(cancellationToken);
 
+        var matchedIds = await MatchLibraryBatchAsync(parsed.Tracks, cancellationToken);
         var matchedCount = 0;
         var pendingCount = 0;
+        var linkedTrackIds = new HashSet<Guid>();
+        var playlistTracks = new List<UserPlaylistTrack>();
+        var pendingTracks = new List<UserPlaylistPendingTrack>();
         for (var index = 0; index < parsed.Tracks.Count; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var track = parsed.Tracks[index];
-            var matchedId = await MatchLibraryAsync(track.Title, track.Artists, track.DurationMs, cancellationToken, track.AlbumTitle);
+            var matchedId = matchedIds[index];
             if (matchedId.HasValue)
             {
-                await TryInsertPlaylistTrackAsync(playlist.Id, matchedId.Value, index, cancellationToken);
+                if (linkedTrackIds.Add(matchedId.Value))
+                    playlistTracks.Add(new UserPlaylistTrack
+                    {
+                        PlaylistId = playlist.Id,
+                        TrackId = matchedId.Value,
+                        SortOrder = index,
+                        AddedAtUtc = now
+                    });
                 matchedCount++;
                 continue;
             }
@@ -207,11 +222,14 @@ public sealed partial class PlaylistImportService(
                 CreatedAtUtc = now,
                 UpdatedAtUtc = now
             };
-            await db.Insertable(pending).ExecuteCommandAsync(cancellationToken);
+            pendingTracks.Add(pending);
             pendingCount++;
         }
 
+        await InsertPlaylistRowsAsync(playlistTracks, cancellationToken);
+        await InsertPlaylistRowsAsync(pendingTracks, cancellationToken);
         await db.Ado.CommitTranAsync();
+        RecordPlaylistTransaction("import", transactionStopwatch, parsed.Tracks.Count);
         return new PlaylistImportResult(playlist.Id, parsed.Tracks.Count, matchedCount, pendingCount);
         }
         catch
@@ -248,11 +266,12 @@ public sealed partial class PlaylistImportService(
         var now = DateTime.UtcNow;
         var matchedCount = 0;
         var queueItems = new List<PlaylistDownloadQueueItem>();
-        foreach (var track in tracks)
+        var matchedIds = await MatchLibraryBatchAsync(tracks, cancellationToken);
+        for (var index = 0; index < tracks.Count; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (await MatchLibraryAsync(
-                    track.Title, track.Artists, track.DurationMs, cancellationToken, track.AlbumTitle) is not null)
+            var track = tracks[index];
+            if (matchedIds[index] is not null)
             {
                 matchedCount++;
                 continue;
@@ -274,8 +293,23 @@ public sealed partial class PlaylistImportService(
             });
         }
 
+        // Keep all write batches atomic, as the previous single bulk INSERT was.
         if (queueItems.Count > 0)
-            await db.Insertable(queueItems).ExecuteCommandAsync(cancellationToken);
+        {
+            var transactionStopwatch = Stopwatch.StartNew();
+            await db.Ado.BeginTranAsync();
+            try
+            {
+                await InsertPlaylistRowsAsync(queueItems, cancellationToken);
+                await db.Ado.CommitTranAsync();
+                RecordPlaylistTransaction("queue", transactionStopwatch, tracks.Count);
+            }
+            catch
+            {
+                await db.Ado.RollbackTranAsync();
+                throw;
+            }
+        }
 
         return new PlaylistDownloadQueueResult(tracks.Count, matchedCount, queueItems.Count);
     }
@@ -481,11 +515,56 @@ public sealed partial class PlaylistImportService(
                 || (item.AlbumTitle != null && item.AlbumTitle.Contains(term)));
         }
 
-        var queueItems = await queueQuery.OrderBy(item => item.CreatedAtUtc, OrderByType.Desc).ToListAsync(cancellationToken);
-        var pendingItems = await pendingQuery.OrderBy(item => item.CreatedAtUtc, OrderByType.Desc).ToListAsync(cancellationToken);
+        // Project both sources to the same SQL shape; UNION ALL preserves separate
+        // occurrences, including the same id in the two source tables.
+        var rowsQuery = db.UnionAll(
+            queueQuery.Select(item => new
+            {
+                item.Id,
+                Origin = "queue",
+                item.Title,
+                item.ArtistsJson,
+                item.AlbumTitle,
+                item.SourcePlatform,
+                // Not a playlist row. Use a typed UUID marker rather than an
+                // untyped NULL parameter in PostgreSQL's UNION type resolution.
+                PlaylistId = Guid.Empty,
+                item.Status,
+                item.SearchDiagnosticsJson,
+                item.CreatedAtUtc
+            }),
+            pendingQuery.Select(item => new
+            {
+                item.Id,
+                Origin = "playlist",
+                item.Title,
+                item.ArtistsJson,
+                item.AlbumTitle,
+                item.SourcePlatform,
+                item.PlaylistId,
+                item.Status,
+                item.SearchDiagnosticsJson,
+                item.CreatedAtUtc
+            }));
 
-        // 歌单名批量查回，避免逐行 N+1。
-        var playlistIds = pendingItems.Select(item => item.PlaylistId).Distinct().ToList();
+        var total = await rowsQuery.Clone().CountAsync(cancellationToken);
+        // Page is an int supplied by the caller, so compute the offset before
+        // narrowing it. An out-of-range page must not wrap back to early rows.
+        var offset = ((long)effectivePage - 1) * effectivePageSize;
+        if (offset >= total)
+            return new UnmatchedTrackListDto([], total, effectivePage, effectivePageSize, noSource, taskFailed);
+
+        var rows = await rowsQuery
+            .OrderBy(item => item.CreatedAtUtc, OrderByType.Desc)
+            .OrderBy(item => item.Id)
+            .OrderBy(item => item.Origin)
+            .Skip(checked((int)offset))
+            .Take(effectivePageSize)
+            .ToListAsync(cancellationToken);
+
+        // Fetch names only for playlists represented on this page.
+        var playlistIds = rows.Where(item => item.Origin == "playlist")
+            .Select(item => item.PlaylistId).Distinct().ToList();
         var playlistNames = playlistIds.Count == 0
             ? new Dictionary<Guid, string>()
             : (await db.Queryable<UserPlaylist>()
@@ -494,22 +573,12 @@ public sealed partial class PlaylistImportService(
                 .ToListAsync(cancellationToken))
                 .ToDictionary(item => item.Id, item => item.Name);
 
-        var rows = new List<UnmatchedTrackDto>(queueItems.Count + pendingItems.Count);
-        rows.AddRange(queueItems.Select(item => new UnmatchedTrackDto(
-            item.Id, "queue", item.Title, DeserializeArtists(item.ArtistsJson), item.AlbumTitle,
-            item.SourcePlatform, null, item.Status,
-            BuildUnmatchedReason(item.Status, item.SearchDiagnosticsJson), item.CreatedAtUtc)));
-        rows.AddRange(pendingItems.Select(item => new UnmatchedTrackDto(
-            item.Id, "playlist", item.Title, DeserializeArtists(item.ArtistsJson), item.AlbumTitle,
-            item.SourcePlatform, playlistNames.GetValueOrDefault(item.PlaylistId), item.Status,
-            BuildUnmatchedReason(item.Status, item.SearchDiagnosticsJson), item.CreatedAtUtc)));
-
-        var ordered = rows.OrderByDescending(item => item.CreatedAtUtc).ToList();
-        var pageItems = ordered
-            .Skip((effectivePage - 1) * effectivePageSize)
-            .Take(effectivePageSize)
-            .ToList();
-        return new UnmatchedTrackListDto(pageItems, ordered.Count, effectivePage, effectivePageSize, noSource, taskFailed);
+        // Decode artists/diagnostics only after the database has selected the page.
+        var pageItems = rows.Select(item => new UnmatchedTrackDto(
+            item.Id, item.Origin, item.Title, DeserializeArtists(item.ArtistsJson), item.AlbumTitle,
+            item.SourcePlatform, item.Origin == "playlist" ? playlistNames.GetValueOrDefault(item.PlaylistId) : null,
+            item.Status, BuildUnmatchedReason(item.Status, item.SearchDiagnosticsJson), item.CreatedAtUtc)).ToList();
+        return new UnmatchedTrackListDto(pageItems, total, effectivePage, effectivePageSize, noSource, taskFailed);
     }
 
     /// <summary>未匹配原因摘要：基于落库的逐源诊断生成中文说明；无诊断（历史数据）时给出保守提示。</summary>
@@ -565,104 +634,6 @@ public sealed partial class PlaylistImportService(
         _ => provider
     };
 
-    /// <summary>
-    /// 懒结算：歌单详情读取时调用，把下载已发布完成的 pending 行转正为正式曲目，
-    /// 下载失败（含哈希重复后重匹配）的行更新为终态。
-    /// </summary>
-    public async Task ResolvePendingAsync(Guid playlistId, CancellationToken cancellationToken)
-    {
-        var pendings = await db.Queryable<UserPlaylistPendingTrack>()
-            .Where(item => item.PlaylistId == playlistId
-                && (item.Status == PendingStatuses.Pending
-                    || item.Status == PendingStatuses.Downloading
-                    || item.Status == PendingStatuses.Failed
-                    || item.Status == PendingStatuses.Rejected
-                    || item.Status == PendingStatuses.NeedsReview))
-            .ToListAsync(cancellationToken);
-        if (pendings.Count == 0)
-            return;
-
-        foreach (var pending in pendings)
-        {
-            if (pending.DownloadTaskId is not { } taskId)
-                continue;
-            var task = await db.Queryable<ExternalDownloadTask>()
-                .FirstAsync(candidate => candidate.Id == taskId, cancellationToken);
-            if (task is null)
-            {
-                // 任务记录已被清理：退回 pending 让补齐重新排队（不能直接判失败，否则这首歌就永久丢了）。
-                if (pending.Status != PendingStatuses.Pending)
-                    await MarkPendingAsync(pending, PendingStatuses.Pending, cancellationToken);
-                continue;
-            }
-
-            // 下载完成链路：task.ImportItemId → LibraryImportItem 的状态决定能否转正。
-            if (task.ImportItemId is { } importItemId)
-            {
-                var importItem = await db.Queryable<LibraryImportItem>()
-                    .Where(item => item.Id == importItemId)
-                    .Select(item => new { item.Status, item.PublishedTrackId })
-                    .FirstAsync(cancellationToken);
-
-                if (importItem?.PublishedTrackId is { } trackId)
-                {
-                    await PromotePendingAsync(pending, trackId, cancellationToken);
-                    continue;
-                }
-
-                switch (importItem?.Status)
-                {
-                    case LibraryImportItemStatuses.IdentityRejected:
-                    case LibraryImportItemStatuses.Rejected:
-                        // 人工拒绝与处理异常必须区分。
-                        if (pending.Status != PendingStatuses.Rejected)
-                            await MarkPendingAsync(pending, PendingStatuses.Rejected, cancellationToken);
-                        continue;
-                    case LibraryImportItemStatuses.ProcessingFailed:
-                        await MarkPendingAsync(pending, PendingStatuses.Failed, cancellationToken);
-                        continue;
-                    case LibraryImportItemStatuses.ReadyToPublish:
-                    case LibraryImportItemStatuses.PendingReview:
-                    case LibraryImportItemStatuses.PendingPublication:
-                        // 音频已下载落地，但自动评分低于自动发布阈值，等管理员在「曲库导入」页发布。
-                        // 这里标记 needs_review：不再重复下载，也不假装还在下载；发布后下一轮结算自动转正。
-                        if (pending.Status != PendingStatuses.NeedsReview)
-                            await MarkPendingAsync(pending, PendingStatuses.NeedsReview, cancellationToken);
-                        continue;
-                }
-            }
-
-            if (task.Status == ExternalDownloadTaskStatuses.Failed)
-            {
-                // 哈希重复终态：说明曲库已有同内容音频，按标题+艺人重匹配一次尝试直接转正。
-                if (task.ErrorCode == ErrorCodes.SourceDuplicate)
-                {
-                    var artists = DeserializeArtists(pending.ArtistsJson);
-                    var rematched = await MatchLibraryAsync(
-                        pending.Title, artists, pending.DurationMs, cancellationToken, pending.AlbumTitle);
-                    if (rematched.HasValue)
-                    {
-                        await PromotePendingAsync(pending, rematched.Value, cancellationToken);
-                        continue;
-                    }
-                }
-                await MarkPendingAsync(pending, PendingStatuses.Failed, cancellationToken);
-                continue;
-            }
-
-            // 下载已完成却没有关联导入条目：既无法发布也无法转正，标记失败避免行永久卡在 downloading。
-            if (task.Status == ExternalDownloadTaskStatuses.Completed)
-            {
-                await MarkPendingAsync(pending, PendingStatuses.Failed, cancellationToken);
-                continue;
-            }
-
-            // 仍在流水线中（queued / downloading / import_queued）：标记 downloading，下一轮继续结算。
-            if (pending.Status != PendingStatuses.Downloading)
-                await MarkPendingAsync(pending, PendingStatuses.Downloading, cancellationToken);
-        }
-    }
-
     /// <summary>按 URL 选择解析器并解析；不支持的平台抛中文友好错误。返回平台标识与解析结果。</summary>
     private async Task<(string Platform, ParsedPlaylist Playlist)> ParseAsync(string url, CancellationToken cancellationToken)
     {
@@ -696,72 +667,9 @@ public sealed partial class PlaylistImportService(
         CancellationToken cancellationToken,
         string? albumTitle = null)
     {
-        var normalizedTitle = Normalize(title);
-        var targetArtists = artists.Select(NormalizeLoose).Where(value => value.Length > 0).ToHashSet(StringComparer.Ordinal);
-        if (normalizedTitle.Length == 0 || targetArtists.Count == 0)
-            return null;
-
-        var candidateTracks = await db.Queryable<Track>()
-            .Where(track => track.PublishedAt != null && track.Title.ToLower() == normalizedTitle)
-            .Select(track => new { track.Id, track.DurationMs, track.AlbumId })
-            .ToListAsync(cancellationToken);
-        if (candidateTracks.Count == 0)
-            return null;
-        var albumIds = candidateTracks
-            .Where(candidate => candidate.AlbumId.HasValue)
-            .Select(candidate => candidate.AlbumId!.Value)
-            .Distinct()
-            .ToList();
-        var albumTitles = albumIds.Count == 0
-            ? new Dictionary<Guid, string>()
-            : (await db.Queryable<Album>()
-                .Where(album => albumIds.Contains(album.Id))
-                .Select(album => new { album.Id, album.Title })
-                .ToListAsync(cancellationToken))
-                .ToDictionary(album => album.Id, album => album.Title);
-        var candidates = candidateTracks
-            .Select(candidate => new
-            {
-                candidate.Id,
-                candidate.DurationMs,
-                AlbumTitle = candidate.AlbumId is { } albumId && albumTitles.TryGetValue(albumId, out var albumTitle)
-                    ? albumTitle
-                    : null
-            })
-            .ToList();
-
-        // 艺人必须精确命中；不再用包含关系把不同艺人误认为同一人。
-        var candidateIds = candidates.Select(candidate => candidate.Id).ToList();
-        var artistRows = await db.Queryable<TrackArtist, Artist>((link, artist) => link.ArtistId == artist.Id)
-            .Where((link, artist) => candidateIds.Contains(link.TrackId))
-            .Select((link, artist) => new { link.TrackId, artist.Name })
-            .ToListAsync(cancellationToken);
-        var songAndArtistMatches = candidates.Where(candidate =>
-        {
-            var names = artistRows.Where(row => row.TrackId == candidate.Id)
-                .Select(row => NormalizeLoose(row.Name)).ToList();
-            return names.Any(targetArtists.Contains);
-        }).ToList();
-        var normalizedAlbum = NormalizeLoose(albumTitle);
-        var albumMatches = normalizedAlbum.Length == 0
-            ? []
-            : songAndArtistMatches
-                .Where(candidate => NormalizeLoose(candidate.AlbumTitle) == normalizedAlbum)
-                .ToList();
-        var matched = albumMatches.Count > 0 ? albumMatches : songAndArtistMatches;
-        if (matched.Count == 0)
-            return null;
-        if (durationMs is null)
-            return matched.Count == 1 ? matched[0].Id : null;
-
-        // 有时长基准时必须落入窗口；歧义或明显不一致不自动匹配。
-        return matched
-            .Where(candidate => candidate.DurationMs.HasValue)
-            .Select(candidate => (candidate.Id, Diff: Math.Abs(candidate.DurationMs!.Value - durationMs.Value)))
-            .Where(entry => entry.Diff < 5000)
-            .OrderBy(entry => entry.Diff)
-            .Select(entry => (Guid?)entry.Id)
-            .FirstOrDefault();
+        var matches = await MatchLibraryBatchAsync(
+            [new ParsedPlaylistTrack(title, artists, albumTitle, durationMs, null, null)], cancellationToken);
+        return matches[0];
     }
 
     /// <summary>
@@ -899,7 +807,8 @@ public sealed partial class PlaylistImportService(
                 || !MatchesSongAndArtist(track, detail))
                 return null;
 
-            if (provider is IQualityLadderProvider ladder)
+            // 按需取链源在任务真正下载时才访问解析端点，歌单匹配保留搜索/详情的能力快照。
+            if (provider is IQualityLadderProvider ladder && provider is not ILazySourceDownloadProvider)
             {
                 var qualities = await ladder.ResolveDownloadCandidatesAsync(detail.ProviderTrackId, budget.Token).WaitAsync(budget.Token);
                 if (qualities.Count > 0)
@@ -1052,7 +961,7 @@ public sealed partial class PlaylistImportService(
             // Search metadata cannot know whether a Kuwo track has an actual FLAC URL.
             // Resolve its quality ladder before cross-provider sorting; keep the conservative
             // search quality if this optional enrichment times out or fails.
-            if (provider is IQualityLadderProvider ladder)
+            if (provider is IQualityLadderProvider ladder && provider is not ILazySourceDownloadProvider)
             {
                 try
                 {
@@ -1373,131 +1282,6 @@ public sealed partial class PlaylistImportService(
         if (separatorIndex > 0)
             text = text[..separatorIndex].Trim();
         return text.Length == 0 ? title.Trim() : text;
-    }
-
-    /// <summary>转正：pending → UserPlaylistTrack（保留原 SortOrder），随后删除 pending 行。</summary>
-    private async Task PromotePendingAsync(UserPlaylistPendingTrack pending, Guid trackId, CancellationToken cancellationToken)
-    {
-        var alreadyLinked = await db.Queryable<UserPlaylistTrack>()
-            .AnyAsync(link => link.PlaylistId == pending.PlaylistId && link.TrackId == trackId, cancellationToken);
-        if (!alreadyLinked)
-        {
-            await db.Insertable(new UserPlaylistTrack
-            {
-                PlaylistId = pending.PlaylistId,
-                TrackId = trackId,
-                SortOrder = pending.SortOrder,
-                AddedAtUtc = DateTime.UtcNow
-            }).ExecuteCommandAsync(cancellationToken);
-        }
-        await db.Deleteable<UserPlaylistPendingTrack>()
-            .Where(item => item.Id == pending.Id)
-            .ExecuteCommandAsync(cancellationToken);
-    }
-
-    /// <summary>幂等插轨：同 (PlaylistId, TrackId) 已存在则跳过。</summary>
-    private async Task TryInsertPlaylistTrackAsync(Guid playlistId, Guid trackId, int sortOrder, CancellationToken cancellationToken)
-    {
-        var exists = await db.Queryable<UserPlaylistTrack>()
-            .AnyAsync(link => link.PlaylistId == playlistId && link.TrackId == trackId, cancellationToken);
-        if (exists)
-            return;
-        await db.Insertable(new UserPlaylistTrack
-        {
-            PlaylistId = playlistId,
-            TrackId = trackId,
-            SortOrder = sortOrder,
-            AddedAtUtc = DateTime.UtcNow
-        }).ExecuteCommandAsync(cancellationToken);
-    }
-
-    /// <summary>
-    /// 重新补齐歌单的待处理曲目：对 pending / no_source / failed 以及「下载任务已丢失」的 downloading 行重跑匹配——
-    /// 先按标题+艺人+时长匹配曲库直接转正；未命中则重置为 pending，交由后台补齐任务异步搜索建任务。
-    /// </summary>
-    /// <remarks>
-    /// 与导入一致：本方法不做音源搜索，避免 200+ 首在请求线程内串行执行导致超时中断。
-    /// 返回的 Retried 表示「已排入后台补齐队列」的数量。
-    /// </remarks>
-    public async Task<PlaylistRematchResult> RematchPendingAsync(Guid playlistId, CancellationToken cancellationToken)
-    {
-        var playlist = await db.Queryable<UserPlaylist>()
-            .FirstAsync(candidate => candidate.Id == playlistId, cancellationToken)
-            ?? throw new InvalidOperationException("歌单不存在。");
-        await ResolvePendingAsync(playlistId, cancellationToken);
-        var pendings = await db.Queryable<UserPlaylistPendingTrack>()
-            .Where(item => item.PlaylistId == playlistId)
-            .OrderBy(item => item.SortOrder)
-            .ToListAsync(cancellationToken);
-
-        int promoted = 0, retried = 0, noSource = 0, unchanged = 0;
-        foreach (var pending in pendings)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            // 下载中的行：任务仍在流水线就保持不动；任务已被删除则视为丢失，重新排队。
-            if (pending.Status == PendingStatuses.Downloading && pending.DownloadTaskId is { } taskId)
-            {
-                var alive = await db.Queryable<ExternalDownloadTask>()
-                    .AnyAsync(candidate => candidate.Id == taskId &&
-                        (candidate.Status == ExternalDownloadTaskStatuses.Queued ||
-                         candidate.Status == ExternalDownloadTaskStatuses.Downloading ||
-                         candidate.Status == ExternalDownloadTaskStatuses.ImportQueued), cancellationToken);
-                if (alive)
-                {
-                    unchanged++;
-                    continue;
-                }
-            }
-
-            // 待审核的行：音频已下载完成、等管理员发布。重跑一次曲库匹配，命中则直接转正；
-            // 否则保持不动——重复下载只会产生重复导入条目。
-            if (pending.Status == PendingStatuses.NeedsReview)
-            {
-                var reviewArtists = DeserializeArtists(pending.ArtistsJson);
-                var reviewMatched = await MatchLibraryAsync(
-                    pending.Title, reviewArtists, pending.DurationMs, cancellationToken, pending.AlbumTitle);
-                if (reviewMatched.HasValue)
-                {
-                    await PromotePendingAsync(pending, reviewMatched.Value, cancellationToken);
-                    promoted++;
-                }
-                else
-                {
-                    unchanged++;
-                }
-                continue;
-            }
-
-            var artists = DeserializeArtists(pending.ArtistsJson);
-            var matched = await MatchLibraryAsync(
-                pending.Title, artists, pending.DurationMs, cancellationToken, pending.AlbumTitle);
-            if (matched.HasValue)
-            {
-                await PromotePendingAsync(pending, matched.Value, cancellationToken);
-                promoted++;
-                continue;
-            }
-
-            // 未命中曲库：重置为 pending 排队，后台补齐任务会搜索音源并建下载任务。
-            pending.DownloadTaskId = null;
-            pending.Status = PendingStatuses.Pending;
-            pending.UpdatedAtUtc = DateTime.UtcNow;
-            await db.Updateable(pending).ExecuteCommandAsync(cancellationToken);
-            retried++;
-        }
-
-        return new PlaylistRematchResult(playlistId, pendings.Count, promoted, retried, noSource, unchanged);
-    }
-
-    /// <summary>更新 pending 行状态；状态未变化时跳过写库（结算每轮都会跑到，避免无意义 UPDATE）。</summary>
-    private async Task MarkPendingAsync(UserPlaylistPendingTrack pending, string status, CancellationToken cancellationToken)
-    {
-        if (pending.Status == status)
-            return;
-        pending.Status = status;
-        pending.UpdatedAtUtc = DateTime.UtcNow;
-        await db.Updateable(pending).ExecuteCommandAsync(cancellationToken);
     }
 
     /// <summary>归一化：压缩连续空白 + trim + 小写，用于标题/艺人宽松比较。</summary>

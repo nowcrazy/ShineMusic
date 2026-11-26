@@ -160,6 +160,9 @@ public sealed class SourceDownloadAcceptanceTests
         var linked = f.Reload(task.Id);
         Assert.Equal(ExternalDownloadTaskStatuses.ImportQueued, linked.Status);
         var item = f.Db.Queryable<LibraryImportItem>().Single(row => row.Id == linked.ImportItemId);
+        var outbox = f.Db.Queryable<MessageOutboxEntry>().Single(row => row.TaskId == item.Id);
+        Assert.Equal("pending", outbox.Status);
+        Assert.Equal(1, outbox.Attempts);
         Assert.True(File.Exists(Path.Combine(f.Root, item.SourceStorageKey)));
         Assert.Equal(LibraryImportItemStatuses.Uploaded, item.Status);
         f.Bus.FailImports = false;
@@ -177,9 +180,16 @@ public sealed class SourceDownloadAcceptanceTests
                 new ShineMusic.Repository.Data.LibraryStoragePaths(
                     Microsoft.Extensions.Options.Options.Create(new ShineMusic.Model.Options.StorageOptions { LibraryRoot = f.Root }),
                     new TestEnvironment { ContentRootPath = f.Root }),
-                NullLogger<ShineMusic.Service.StorageGovernanceService>.Instance));
+                NullLogger<ShineMusic.Service.StorageGovernanceService>.Instance), f.Lease());
         await sweep.SweepAsync(default);
+        Assert.Empty(f.Bus.Messages);
+        Assert.Single(f.Db.Queryable<MessageOutboxEntry>().ToList());
+        // Compensation must not bypass the durable retry budget/backoff. Make it due, then let the dispatcher retry.
+        await f.Db.Updateable<MessageOutboxEntry>().SetColumns(row => row.AvailableAtUtc == DateTime.UtcNow.AddMinutes(-1))
+            .Where(row => row.Id == outbox.Id).ExecuteCommandAsync();
+        await new MessageOutboxDispatcher(f.Db, f.Bus, NullLogger<MessageOutboxDispatcher>.Instance).DispatchAsync(default);
         Assert.Contains(f.Bus.Messages, message => message.Queue == QueueNames.Imports && message.Id == item.Id);
+        Assert.Equal("sent", f.Db.Queryable<MessageOutboxEntry>().Single(row => row.Id == outbox.Id).Status);
     }
 
     [Theory]
@@ -299,9 +309,68 @@ public sealed class SourceDownloadAcceptanceTests
         var task = f.Seed();
         await f.Job().ProcessAsync(task.Id, default);
         AssertImported(f, task.Id);
-        Assert.Equal(new[] { "/sq.flac", "/hq.mp3" }, f.Http.Requests);
+        // Transient HTTP 503 exhausts two in-attempt recoveries before falling back;
+        // a completed file that fails media validation must fall back immediately.
+        var expectedRequests = networkFailure
+            ? new[] { "/sq.flac", "/sq.flac", "/sq.flac", "/hq.mp3" }
+            : new[] { "/sq.flac", "/hq.mp3" };
+        Assert.Equal(expectedRequests, f.Http.Requests);
         Assert.Equal(SourceQualities.High, f.Reload(task.Id).AudioQualityTier);
-        Assert.False(File.Exists(Path.Combine(f.Root, $"sourcedl/{task.Id:N}.flac")));
+        Assert.Empty(Directory.GetFiles(Path.Combine(f.Root, "sourcedl"), $"{task.Id:N}.*.flac"));
+    }
+
+    [Fact]
+    public async Task Active_download_lease_ignores_duplicate_delivery()
+    {
+        using var f = new SourceDownloadAcceptanceFixture();
+        var task = f.Seed(ExternalDownloadTaskStatuses.Downloading);
+        task.WorkerId = "another-worker";
+        task.AttemptId = Guid.NewGuid();
+        task.LeaseUntilUtc = DateTime.UtcNow.AddMinutes(1);
+        f.Db.Updateable(task).ExecuteCommand();
+
+        await f.Job().ProcessAsync(task.Id, default);
+
+        Assert.Empty(f.Http.Requests);
+        Assert.Empty(f.Bus.Messages);
+        var unchanged = f.Reload(task.Id);
+        Assert.Equal(task.WorkerId, unchanged.WorkerId);
+        Assert.Equal(task.AttemptId, unchanged.AttemptId);
+        Assert.Equal(ExternalDownloadTaskStatuses.Downloading, unchanged.Status);
+    }
+
+    [Fact]
+    public async Task Lost_download_attempt_cannot_commit_or_delete_new_attempt_files()
+    {
+        using var f = new SourceDownloadAcceptanceFixture();
+        var task = f.Seed();
+        var newAttempt = Guid.NewGuid();
+        var retainedPath = Path.Combine(f.Root, "sourcedl", $"{task.Id:N}.{newAttempt:N}.flac");
+        f.Media.Probe = _ =>
+        {
+            // 模拟旧下载校验期间租约被回收并由新 Worker 接管。
+            var current = f.Reload(task.Id);
+            current.WorkerId = "replacement-worker";
+            current.AttemptId = newAttempt;
+            current.LeaseUntilUtc = DateTime.UtcNow.AddMinutes(1);
+            current.ErrorMessage = "new attempt owns this task";
+            f.Db.Updateable(current).ExecuteCommand();
+            File.WriteAllText(retainedPath, "new attempt output");
+            return ScriptedMedia.Flac();
+        };
+
+        await f.Job().ProcessAsync(task.Id, default);
+
+        var ownedByReplacement = f.Reload(task.Id);
+        Assert.Equal(newAttempt, ownedByReplacement.AttemptId);
+        Assert.Equal("replacement-worker", ownedByReplacement.WorkerId);
+        Assert.Equal("new attempt owns this task", ownedByReplacement.ErrorMessage);
+        Assert.Equal(ExternalDownloadTaskStatuses.Downloading, ownedByReplacement.Status);
+        Assert.Empty(f.Db.Queryable<LibraryImportItem>().ToList());
+        Assert.Empty(f.Db.Queryable<LibraryImportBatch>().ToList());
+        Assert.Empty(f.Bus.Messages);
+        Assert.Equal("new attempt output", File.ReadAllText(retainedPath));
+        Assert.Equal(new[] { retainedPath }, Directory.GetFiles(Path.Combine(f.Root, "sourcedl")));
     }
 
     [Theory]

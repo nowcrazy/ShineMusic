@@ -11,7 +11,10 @@
     "gen:contracts": "python ../ShineMusicApi/tools/generate-ts-contracts.py",
     "check:contracts": "python ../ShineMusicApi/tools/generate-ts-contracts.py --check",
     "check:i18n": "node scripts/check-i18n-residual.mjs",
-    "typecheck": "vue-tsc --noEmit"
+    "typecheck": "vue-tsc --noEmit",
+    "test:session": "node scripts/test-session.mjs",
+    "test:original-audio": "node scripts/test-original-audio.mjs",
+    "test:music-notification": "node scripts/test-music-notification.mjs"
   },
   "dependencies": {
     "@dcloudio/uni-app": "3.0.0-5020620260917001",

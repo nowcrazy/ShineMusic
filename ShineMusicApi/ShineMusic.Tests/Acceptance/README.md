@@ -12,6 +12,17 @@ dotnet test ShineMusicApi/ShineMusic.Tests/ShineMusic.Tests.csproj --filter "Cat
 dotnet test ShineMusicApi/ShineMusic.Tests/ShineMusic.Tests.csproj
 ```
 
+全量回归中的 `RealDatabaseStartupTests` 会使用真实 PostgreSQL 和生产启动引导。运行前必须将 `SHINEMUSIC_TEST_POSTGRES_CONNECTION` 指向专用测试库，数据库名必须以 `shinemusic_test` 开头；不会回退到开发库或读取仓库 `.env`。例如在独立测试实例中创建 `shinemusic_test_local`，再在当前 PowerShell 设置该变量后运行。连接串包含测试凭据，应由本地环境或 CI 注入，不提交实际部署凭据。
+
+SQLite 和替身服务的 API 集成测试显式使用 `Testing` 环境，避免加载本地开发基础设施配置。CI 使用独立的 `shinemusic_test_ci` 数据库，并安装 FFmpeg；本地真实媒体测试的工具定位方式见下一节。
+
+真实媒体测试需要同时安装 `ffmpeg` 和 `ffprobe`。测试优先使用 `SHINEMUSIC_TEST_FFMPEG_BIN` 指定目录，其次使用仓库的 `ShineMusicApi/tools/ffmpeg/bin`，最后查找进程 `PATH`；不需要修改系统 `PATH`。Windows 工具来源及本地安装说明见 [tools/ffmpeg/README.md](../../tools/ffmpeg/README.md)。
+
+```powershell
+$env:SHINEMUSIC_TEST_FFMPEG_BIN = 'C:\path\to\ffmpeg\bin'
+dotnet test ShineMusicApi/ShineMusic.Tests/ShineMusic.Tests.csproj --filter 'Category=FfmpegIntegration|FullyQualifiedName~AssetLifecycleTests.Real_audio_upgrade|FullyQualifiedName~UserUploadChainTests'
+```
+
 ## 12 项验收标准与测试映射
 
 1. **无损验证**：`A01_A02_Probed_quality_and_metadata_survive_validation_and_import_handoff(true)` 验证完整 FLAC 通过、探测字段完整、文件与入库消息关联正确。
@@ -35,3 +46,24 @@ dotnet test ShineMusicApi/ShineMusic.Tests/ShineMusic.Tests.csproj
 - SHA-256 证明已下载字节与校验时文件一致；没有来自供应方的可信期望哈希时，不声称证明上游文件真实性。
 - 冷却推进不等待真实分钟；故障隔离测试仍使用短秒级真实预算验证非协作超时。
 - 未标记 `SourceDownloadAcceptance` 的既有测试不属于该筛选集；全量运行可能包含按环境变量启用的外部集成测试，跳过不能视为通过。
+
+## 本地一键全量回归
+
+本机已有 Docker 和 `postgres:16-alpine` 镜像时，可从仓库根目录运行下面的脚本，支持 Windows PowerShell 5.1 和 PowerShell 7。脚本创建独立的临时 PostgreSQL 容器和随机测试库，仅绑定本机地址；测试结束后还原进程环境并清理该容器，不读取 `.env`。镜像未准备时，先显式执行 `docker pull postgres:16-alpine`。
+
+```powershell
+./scripts/Test-Backend.ps1
+# 端口占用或使用其他 FFmpeg 安装时：
+./scripts/Test-Backend.ps1 -PostgresPort 45440 -FfmpegBin 'C:\path\to\ffmpeg\bin'
+# 已完成 Release 构建时：
+./scripts/Test-Backend.ps1 -SkipBuild
+```
+
+Windows 验收流程中，仅当第⑩道已成功构建当前源码时，才用以下命令替换第⑪道裸 `dotnet test` 命令；构建失败时跳过⑪，避免运行旧产物。独立进程的退出码会涵盖准备环境、测试和清理失败；`45440` 必须是空闲端口。
+
+```powershell
+powershell.exe -NoProfile -File .\scripts\Test-Backend.ps1 -SkipBuild -PostgresPort 45440
+if ($LASTEXITCODE -ne 0) { $fail += "闸门⑪失败：后端隔离数据库全量测试未通过" }
+```
+
+该脚本只为本次运行注入测试库连接，不会永久配置父终端；之后单独执行 `dotnet test` 时仍需显式提供 `SHINEMUSIC_TEST_POSTGRES_CONNECTION`。

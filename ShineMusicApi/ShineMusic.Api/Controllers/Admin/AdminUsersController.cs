@@ -130,14 +130,14 @@ public sealed class AdminUsersController : ControllerBase
         if (user is null)
             return ApiResults.NotFound(HttpContext, "User not found.");
 
-        await userService.ResetPasswordAsync(user, request.NewPassword);
-        await userService.ClearLockoutAsync(user);
-        // 重置密码后吊销该用户全部刷新令牌，强制所有端重新登录。
         var now = DateTime.UtcNow;
-        await db.Updateable<RefreshToken>()
-            .SetColumns(t => t.RevokedAtUtc == now)
-            .Where(t => t.UserId == id && t.RevokedAtUtc == null)
-            .ExecuteCommandAsync();
+        await db.Ado.UseTranAsync(async () =>
+        {
+            await userService.ResetPasswordAsync(user, request.NewPassword);
+            await userService.ClearLockoutAsync(user);
+            // 重置密码后吊销该用户全部刷新令牌，相关 access token session 同时失效。
+            await userService.RevokeAllSessionsAsync(id, now);
+        });
 
         AdminAudit.Add(HttpContext, db, "user.reset_password", "user", id);
         return Results.Ok(new { id, reset = true });

@@ -12,7 +12,7 @@
  */
 import { ref } from 'vue'
 import type { ApiPageResult } from '@/types/music'
-import { API_PREFIX, http } from './http'
+import { API_PREFIX, assertSessionRevisionCurrent, captureSessionRevision, http } from './http'
 import { isAuthenticated } from './session'
 
 /** 站内信列表项 */
@@ -54,6 +54,7 @@ export async function getNotifications(
  * 未登录时不发请求，直接把计数归零。
  */
 export async function refreshUnreadCount() {
+  const revision = captureSessionRevision()
   // 未登录不发请求（否则匿名用户每次进首页都吃一个 401），直接把计数归零
   if (!isAuthenticated.value) {
     unreadCount.value = 0
@@ -63,6 +64,7 @@ export async function refreshUnreadCount() {
     const result = await http.get<{ count: number }>(
       `${API_PREFIX}/me/notifications/unread-count`,
     )
+    assertSessionRevisionCurrent(revision)
     unreadCount.value = result.count
   } catch {
     // 网络异常：保持上一次的值，不打扰用户
@@ -71,13 +73,17 @@ export async function refreshUnreadCount() {
 
 /** 标记单条消息为已读，并本地同步未读数 */
 export async function markNotificationRead(notificationId: string) {
+  const revision = captureSessionRevision()
   await http.post(`${API_PREFIX}/me/notifications/${notificationId}/read`)
+  assertSessionRevisionCurrent(revision)
   unreadCount.value = Math.max(0, unreadCount.value - 1)
 }
 
 /** 标记全部已读 */
 export async function markAllNotificationsRead() {
+  const revision = captureSessionRevision()
   await http.post(`${API_PREFIX}/me/notifications/read-all`)
+  assertSessionRevisionCurrent(revision)
   unreadCount.value = 0
 }
 

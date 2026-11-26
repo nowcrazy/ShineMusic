@@ -1,7 +1,7 @@
 // RabbitMQ 消费端：downloads / imports 两个队列的常驻监听。
 // 每个消费端独占一个通道，通道的 ConsumerDispatchConcurrency 与 prefetch 同值，
 // 因此队列内部并行度 = Prefetch（配置 1 即逐条串行，>1 时同一进程内可并行处理）。
-// 异常隔离：单条消息失败只 nack（不重回队列）+ 记日志，不会导致整个消费者崩溃；
+// 异常隔离：单条消息失败先写入数据库死信表，再 ack；数据库不可用时延迟 nack 回队列；
 // 业务失败（SourceDownloadJob / LibraryImportJob）已在内部吞掉并更新状态，消费端几乎不会抛异常。
 // 消费循环自动重连：连接断开后外层循环 5s 重试，RabbitMQ.Client 自身也启用了 AutomaticRecoveryEnabled。
 // 注意：两个消费端必须是不同的具体类型注册（TryAddEnumerable 按具体类型去重），
@@ -47,31 +47,23 @@ public abstract class RabbitQueueConsumerService(
                 var consumer = new AsyncEventingBasicConsumer(channel);
                 consumer.ReceivedAsync += async (_, ea) =>
                 {
-                    var messageId = TryParseGuid(ea.Body.Span);
-                    if (messageId is null)
-                    {
-                        logger.LogWarning("Discarding malformed message on {Queue}.", Queue);
-                        await channel.BasicNackAsync(ea.DeliveryTag, multiple: false, requeue: false, stoppingToken);
-                        return;
-                    }
-                    try
-                    {
-                        using var scope = scopeFactory.CreateScope();
-                        await ProcessAsync(messageId.Value, scope.ServiceProvider, stoppingToken);
-                        await channel.BasicAckAsync(ea.DeliveryTag, multiple: false, stoppingToken);
-                    }
-                    catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-                    {
-                        // 停止信号：nack 但不回队列，交由业务状态恢复或人工重试。
-                        await channel.BasicNackAsync(ea.DeliveryTag, multiple: false, requeue: false, CancellationToken.None);
-                    }
-                    catch (Exception exception)
-                    {
-                        logger.LogError(exception,
-                            "Failed to process message {MessageId} on {Queue}; dead-lettering.",
-                            messageId.Value, Queue);
-                        await channel.BasicNackAsync(ea.DeliveryTag, multiple: false, requeue: false, CancellationToken.None);
-                    }
+                    await HandleDeliveryAsync(ea.Body, ea.DeliveryTag,
+                        async (id, token) =>
+                        {
+                            await using var scope = scopeFactory.CreateAsyncScope();
+                            await ProcessAsync(id, scope.ServiceProvider, token);
+                        },
+                        RetainAsync,
+                        async (tag, token) => await channel.BasicAckAsync(tag, multiple: false, token),
+                        async (tag, token) => await channel.BasicNackAsync(tag, multiple: false, requeue: true, token),
+                        stoppingToken,
+                        async exception =>
+                        {
+                            logger.LogError("Could not retain failed message on {Queue} ({ErrorType}); requeueing delivery.",
+                                Queue, exception.GetType().Name);
+                            // Avoid a tight redelivery loop while the database is unavailable.
+                            await Task.Delay(TimeSpan.FromSeconds(2), CancellationToken.None);
+                        });
                 };
                 await channel.BasicConsumeAsync(Queue, autoAck: false, consumer: consumer, cancellationToken: stoppingToken);
                 logger.LogInformation("RabbitMQ consumer started on {Queue} (prefetch={Prefetch}).", Queue, Prefetch);
@@ -92,6 +84,80 @@ public abstract class RabbitQueueConsumerService(
                 try { await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken); } catch (OperationCanceledException) { break; }
             }
         }
+    }
+
+    /// <summary>Retain a failed delivery before acknowledging it. Isolated consumers may override the store.</summary>
+    protected virtual async Task RetainAsync(ReadOnlyMemory<byte> body, string reason, CancellationToken cancellationToken)
+    {
+        logger.LogWarning("Retaining failed RabbitMQ delivery on {Queue} ({Reason}) in the database dead-letter store.",
+            Queue, reason);
+        await using var scope = scopeFactory.CreateAsyncScope();
+        await scope.ServiceProvider.GetRequiredService<MessageDeadLetterStore>()
+            .RecordAsync(Queue, body, reason, cancellationToken);
+    }
+
+    /// <summary>
+    /// Process or durably retain one delivery before ack. Transport confirmation failures remain unacknowledged;
+    /// they must not be mistaken for processing failures or cause another delivery's tag to be confirmed.
+    /// </summary>
+    protected static async Task HandleDeliveryAsync(ReadOnlyMemory<byte> body, ulong deliveryTag,
+        Func<Guid, CancellationToken, Task> processAsync,
+        Func<ReadOnlyMemory<byte>, string, CancellationToken, Task> retainAsync,
+        Func<ulong, CancellationToken, Task> acknowledgeAsync,
+        Func<ulong, CancellationToken, Task> requeueAsync,
+        CancellationToken stoppingToken,
+        Func<Exception, Task>? beforeRetentionRequeueAsync = null)
+    {
+        if (stoppingToken.IsCancellationRequested)
+        {
+            await requeueAsync(deliveryTag, CancellationToken.None);
+            return;
+        }
+
+        var messageId = TryParseGuid(body.Span);
+        string? failure = messageId is null ? "malformed_message" : null;
+        if (messageId.HasValue)
+        {
+            try
+            {
+                await processAsync(messageId.Value, stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                await requeueAsync(deliveryTag, CancellationToken.None);
+                return;
+            }
+            catch (Exception exception)
+            {
+                // Transport/provider exception messages can contain credentials or payloads.
+                failure = exception.GetType().Name;
+            }
+        }
+
+        if (failure is not null)
+        {
+            try
+            {
+                await retainAsync(body, failure, stoppingToken);
+            }
+            catch (Exception exception)
+            {
+                try
+                {
+                    if (!stoppingToken.IsCancellationRequested && beforeRetentionRequeueAsync is not null)
+                        await beforeRetentionRequeueAsync(exception);
+                }
+                finally
+                {
+                    await requeueAsync(deliveryTag, CancellationToken.None);
+                }
+                return;
+            }
+        }
+
+        // Ack is deliberately outside the processing/retention catches: a failed ack leaves the broker delivery
+        // outstanding and must not create a second dead letter or issue a contradictory nack on a closed channel.
+        await acknowledgeAsync(deliveryTag, CancellationToken.None);
     }
 
     private static Guid? TryParseGuid(ReadOnlySpan<byte> body)

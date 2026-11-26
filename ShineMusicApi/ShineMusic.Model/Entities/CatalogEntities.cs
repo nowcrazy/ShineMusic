@@ -125,6 +125,12 @@ public sealed class Track
     /// 官方/管理员导入的曲目为空。转公开后保留，用于追溯来源。</summary>
     [SugarColumn(IsNullable = true)]
     public Guid? OwnerUserId { get; set; }
+    /// <summary>私人曲目进入回收站后不再提供正常播放。</summary>
+    public bool IsRecycled { get; set; }
+    [SugarColumn(IsNullable = true, ColumnDataType = "timestamptz")]
+    public DateTime? RecycledAtUtc { get; set; }
+    [SugarColumn(IsNullable = true, ColumnDataType = "timestamptz")]
+    public DateTime? RecycleExpiresAtUtc { get; set; }
     /// <summary>“曲目-艺术家”关联行集合。</summary>
     [SugarColumn(IsIgnore = true)]
     public ICollection<TrackArtist> TrackArtists { get; set; } = [];
@@ -275,6 +281,16 @@ public sealed class MediaAsset
     /// <summary>码率（kbps），探测失败时可为空。</summary>
     [SugarColumn(IsNullable = true)]
     public int? BitrateKbps { get; set; }
+    [SugarColumn(IsNullable = true)]
+    public int? SampleRateHz { get; set; }
+    [SugarColumn(IsNullable = true)]
+    public int? BitsPerSample { get; set; }
+    [SugarColumn(IsNullable = true)]
+    public int? Channels { get; set; }
+    [SugarColumn(IsNullable = true)]
+    public string? CodecProfile { get; set; }
+    /// <summary>Whether this asset contains the retained original upload, rather than a derived playback copy.</summary>
+    public bool IsOriginal { get; set; }
     /// <summary>是否已发布（上架）；与 (TrackId, IsPublished) 复合索引共同支撑“取已发布资产”查询。</summary>
     public bool IsPublished { get; set; }
     /// <summary>是否为主资产（同曲目多版本时默认播放的那份）。</summary>

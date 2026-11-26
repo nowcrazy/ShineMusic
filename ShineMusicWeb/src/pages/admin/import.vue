@@ -126,7 +126,7 @@ async function reloadPreview() {
   }
 }
 const canReview = (item: ApiLibraryImportItem) =>
-  ['pending_review', 'ready_to_publish', 'pending_publication'].includes(item.status)
+  ['pending_review', 'ready_to_publish'].includes(item.status)
 const canReject = (item: ApiLibraryImportItem) => !['published', 'rejected', 'identity_rejected'].includes(item.status)
 const canDismiss = (item: ApiLibraryImportItem) =>
   ['published', 'rejected', 'identity_rejected', 'processing_failed'].includes(item.status)
@@ -161,6 +161,22 @@ function scoreSegments(bd: NonNullable<ApiLibraryImportItem['scoreBreakdown']>) 
     { label: '元数据', score: bd.metadata.score, max: bd.metadata.maxScore, pct: (bd.metadata.score / bd.metadata.maxScore) * 100, reason: bd.metadata.reason, color: tone(bd.metadata) },
     { label: '歌词', score: bd.lyrics.score, max: bd.lyrics.maxScore, pct: (bd.lyrics.score / bd.lyrics.maxScore) * 100, reason: bd.lyrics.reason, color: tone(bd.lyrics) },
   ]
+}
+
+function processingFailure(item: ApiLibraryImportItem): string {
+  const messages: Record<string, string> = {
+    media_corrupt: '完整性校验失败：音频数据损坏或不完整，请重新导出音频后上传。',
+    media_parse_failed: '音频解析失败：无法读取有效音轨，请检查文件是否完整并重新导出。',
+    transcode_failed: '音频转码失败，请重新导出为常用音频格式后上传。',
+    unsupported_media_format: '文件格式或实际音频容器不受支持。',
+    resource_not_found: '服务器找不到已上传的暂存文件，请重新上传。',
+    upload_too_large: '文件超过上传大小上限。',
+    duplicate_private_upload: '相同音频已属于其他用户的私有曲库，无法引用。',
+    media_processor_unavailable: '服务器音频处理工具不可用，请联系管理员检查服务配置。',
+    media_processing_timeout: '音频处理超时，请稍后重试；若持续超时，请联系管理员。',
+  }
+  return (item.transcode.errorCode && messages[item.transcode.errorCode])
+    || item.transcode.errorMessage || '处理失败，请稍后重试或重新上传文件。'
 }
 
 async function loadItems() {
@@ -715,6 +731,15 @@ onMounted(() => {
             </div>
           </template>
         </el-table-column>
+        <el-table-column label="失败原因" min-width="300">
+          <template #default="{ row }">
+            <div v-if="row.status === 'processing_failed'" class="processing-failure" role="alert">
+              <span>{{ processingFailure(row) }}</span>
+              <span v-if="row.transcode.errorCode" class="text-faint">{{ row.transcode.errorCode }}</span>
+            </div>
+            <span v-else class="text-faint">—</span>
+          </template>
+        </el-table-column>
         <el-table-column label="关联需求" prop="songRequestId" sortable width="100">
           <template #default="{ row }">
             <el-tag v-if="row.songRequestId" size="small" type="warning">已关联</el-tag>
@@ -763,6 +788,7 @@ onMounted(() => {
         </el-alert>
 
         <div class="source-card">
+          <el-alert v-if="current.status === 'processing_failed'" :title="processingFailure(current)" type="error" :closable="false" show-icon />
           <div class="source-row">
             <span class="text-muted">源文件</span>
             <span>{{ current.sourceFile.displayName }}（{{ current.sourceFile.container || '未知' }} / {{ current.sourceFile.codec || '未知编码' }}）</span>
@@ -955,6 +981,7 @@ onMounted(() => {
   flex-direction: column;
   font-size: 12px;
 }
+.processing-failure { display: flex; flex-direction: column; gap: 5px; color: var(--el-color-danger); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 
 /* === 状态列：自动发布标记 === */
 .status-cell {

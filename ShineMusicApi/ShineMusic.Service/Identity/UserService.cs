@@ -110,15 +110,21 @@ public sealed class UserService(ISqlSugarClient db)
 
         // 已过期：降级为普通用户并持久化
         roles.RemoveAt(tempIndex);
-        await RemoveFromRoleAsync(user.Id, RoleNames.TempAdmin);
-        user.TempAdminUntilUtc = null;
-        // 显式 UpdateColumns 保证 TempAdminUntilUtc 为 null 时也真实写 NULL
-        await db.Updateable(user).UpdateColumns(item => new { item.TempAdminUntilUtc }).ExecuteCommandAsync();
-        if (!roles.Contains(RoleNames.User))
+        var now = DateTime.UtcNow;
+        await db.Ado.UseTranAsync(async () =>
         {
-            var addResult = await AddToRoleAsync(user.Id, RoleNames.User);
-            if (addResult.Succeeded) roles.Add(RoleNames.User);
-        }
+            await RemoveFromRoleAsync(user.Id, RoleNames.TempAdmin);
+            user.TempAdminUntilUtc = null;
+            // 显式 UpdateColumns 保证 TempAdminUntilUtc 为 null 时也真实写 NULL
+            await db.Updateable(user).UpdateColumns(item => new { item.TempAdminUntilUtc }).ExecuteCommandAsync();
+            if (!roles.Contains(RoleNames.User))
+            {
+                var addResult = await AddToRoleAsync(user.Id, RoleNames.User);
+                if (addResult.Succeeded) roles.Add(RoleNames.User);
+            }
+            // Persisting the lazy demotion also closes every old admin access-token session immediately.
+            await RevokeAllSessionsAsync(user.Id, now);
+        });
         return roles;
     }
 
@@ -187,6 +193,7 @@ public sealed class UserService(ISqlSugarClient db)
                     // 触发锁定并清零失败计数（与 UserManager.AccessFailedAsync 一致）。
                     user.LockoutEnd = DateTimeOffset.UtcNow.Add(LockoutDuration);
                     user.AccessFailedCount = 0;
+                    await RevokeAllSessionsAsync(user.Id, DateTime.UtcNow);
                 }
                 await PersistLockoutStateAsync(user);
             }
@@ -213,14 +220,29 @@ public sealed class UserService(ISqlSugarClient db)
     }
 
     /// <summary>修改密码：先验旧密码再写新哈希；成功时轮换安全戳（对齐 UserManager.ChangePasswordAsync）。</summary>
-    public async Task<IdentityResult> ChangePasswordAsync(ApplicationUser user, string currentPassword, string newPassword)
+    public async Task<IdentityResult> ChangePasswordAsync(ApplicationUser user, string currentPassword, string newPassword, Guid currentSessionId)
     {
         if (user.PasswordHash is null ||
             _passwordHasher.VerifyHashedPassword(user, user.PasswordHash, currentPassword) == PasswordVerificationResult.Failed)
             return IdentityResult.Failed(Error("PasswordMismatch", "Incorrect password."));
         if (newPassword.Length < RequiredPasswordLength)
             return IdentityResult.Failed(Error("PasswordTooShort", $"Passwords must be at least {RequiredPasswordLength} characters."));
-        await WritePasswordAsync(user, newPassword);
+        var now = DateTime.UtcNow;
+        var sessionActive = true;
+        await db.Ado.UseTranAsync(async () =>
+        {
+            sessionActive = await IsSessionActiveAsync(user.Id, currentSessionId, now);
+            if (!sessionActive) return;
+            await WritePasswordAsync(user, newPassword);
+            // Keep the session that changed the password; revoke every other device atomically.
+            await db.Updateable<RefreshToken>()
+                .SetColumns(token => token.RevokedAtUtc == now)
+                .Where(token => token.UserId == user.Id &&
+                    (token.SessionId == null || token.SessionId != currentSessionId) && token.RevokedAtUtc == null)
+                .ExecuteCommandAsync();
+        });
+        if (!sessionActive)
+            return IdentityResult.Failed(Error("SessionRevoked", "The current session is no longer active."));
         return IdentityResult.Success;
     }
 
@@ -233,6 +255,22 @@ public sealed class UserService(ISqlSugarClient db)
         user.LockoutEnd = null;
         user.AccessFailedCount = 0;
         await PersistLockoutStateAsync(user);
+    }
+
+    /// <summary>Revoke every live refresh-token session; access tokens bound to those sessions fail bearer validation immediately.</summary>
+    public Task RevokeAllSessionsAsync(Guid userId, DateTime revokedAtUtc) =>
+        db.Updateable<RefreshToken>()
+            .SetColumns(token => token.RevokedAtUtc == revokedAtUtc)
+            .Where(token => token.UserId == userId && token.RevokedAtUtc == null)
+            .ExecuteCommandAsync();
+
+    /// <summary>Check a session and account lock state in one indexed database query for each authenticated request.</summary>
+    public async Task<bool> IsSessionActiveAsync(Guid userId, Guid sessionId, DateTime nowUtc, CancellationToken cancellationToken = default)
+    {
+        return await db.Queryable<RefreshToken>().AnyAsync(token =>
+            token.UserId == userId && token.SessionId == sessionId &&
+            token.RevokedAtUtc == null && token.ExpiresAtUtc > nowUtc,
+            cancellationToken);
     }
 
     private async Task WritePasswordAsync(ApplicationUser user, string newPassword)

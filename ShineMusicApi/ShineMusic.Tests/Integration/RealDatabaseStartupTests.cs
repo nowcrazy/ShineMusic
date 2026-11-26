@@ -5,8 +5,8 @@
 // 本类反过来：**不替换 IStartupBootstrap**，让生产实现真的连 PostgreSQL
 // 跑 CodeFirst / 角色播种 / 队列恢复，再用真实 HTTP 管道打业务端点。
 //
-// 前置：PostgreSQL 可用；支持空数据库，不要求已有业务表或管理员账号。
-// 连接串可通过 Database__ConnectionString 覆盖，未指定时使用 Api 项目配置。
+// 前置：专用 PostgreSQL 测试库可用；支持空数据库，不要求已有业务表或管理员账号。
+// SHINEMUSIC_TEST_POSTGRES_CONNECTION 必须显式指定 shinemusic_test* 测试库，不回退开发库配置。
 // 与 L3a 共用禁并行集合，避免进程级环境变量与工作目录互相污染。
 
 using System.Net;
@@ -22,6 +22,7 @@ using ShineMusic.Repository.Data;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Reflection;
 using SqlSugar;
+using Npgsql;
 using Xunit;
 
 namespace ShineMusic.Tests.Integration;
@@ -142,7 +143,7 @@ public sealed class RealDatabaseStartupTests : IClassFixture<RealApiFactory>
 }
 
 /// <summary>
-/// 真机测试宿主：只覆盖必需的 JWT 签名键与 Worker 模式，
+/// 真机测试宿主：使用专用测试库、测试 JWT 签名键与禁用 Worker 模式，
 /// **不**替换 IStartupBootstrap / ITrackPlaybackStore / IAudioStorage。
 /// </summary>
 public sealed class RealApiFactory : WebApplicationFactory<Program>
@@ -158,7 +159,9 @@ public sealed class RealApiFactory : WebApplicationFactory<Program>
 
     public RealApiFactory()
     {
-        foreach (var (key, value) in EnvironmentOverrides)
+        // Validate before changing process-wide settings so a missing test database leaves no residue.
+        var connectionString = GetTestConnectionString();
+        foreach (var (key, value) in EnvironmentOverrides.Append((Key: "Database__ConnectionString", Value: connectionString)))
         {
             _previousEnvironment[key] = Environment.GetEnvironmentVariable(key);
             Environment.SetEnvironmentVariable(key, value);
@@ -170,6 +173,7 @@ public sealed class RealApiFactory : WebApplicationFactory<Program>
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        builder.UseEnvironment("Testing");
         builder.UseContentRoot(ResolveApiProjectDirectory());
         builder.ConfigureLogging(logging => logging.ClearProviders());
         // 刻意不调用 ConfigureTestServices：生产 StartupBootstrap 会连库并恢复队列。
@@ -197,5 +201,25 @@ public sealed class RealApiFactory : WebApplicationFactory<Program>
         }
         throw new InvalidOperationException(
             "找不到 ShineMusic.Api/appsettings.json：真机测试需要从测试输出目录上溯到 Api 项目。");
+    }
+
+    private static string GetTestConnectionString()
+    {
+        var configured = Environment.GetEnvironmentVariable("SHINEMUSIC_TEST_POSTGRES_CONNECTION");
+        if (string.IsNullOrWhiteSpace(configured))
+            throw new InvalidOperationException("Set SHINEMUSIC_TEST_POSTGRES_CONNECTION to a dedicated PostgreSQL database whose name starts with shinemusic_test before running real database integration tests.");
+        NpgsqlConnectionStringBuilder connection;
+        try
+        {
+            connection = new NpgsqlConnectionStringBuilder(configured);
+        }
+        catch (ArgumentException)
+        {
+            throw new InvalidOperationException("SHINEMUSIC_TEST_POSTGRES_CONNECTION must be a valid PostgreSQL connection string.");
+        }
+        if (string.IsNullOrWhiteSpace(connection.Database)
+            || !connection.Database.StartsWith("shinemusic_test", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Real database integration tests require a dedicated database whose name starts with shinemusic_test; development databases are not accepted.");
+        return connection.ConnectionString;
     }
 }

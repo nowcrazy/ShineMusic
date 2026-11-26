@@ -1,5 +1,5 @@
 // 职责：曲库存储治理服务。
-// 数据库是存储的唯一事实来源：MediaAsset/Artwork 的 StorageKey 指向磁盘文件。
+// 数据库是存储的唯一事实来源：MediaAsset/Artwork 与待处理审核快照指向磁盘文件。
 // 本服务围绕"数据库引用 vs 磁盘实体"的一致性提供三类能力：
 //   1. AuditAsync    —— 对账审计：找出孤儿文件（磁盘有、库无引用，可安全回收）与缺失文件（库有引用、磁盘无，只报告）；
 //   2. CleanupAsync  —— 回收审计发现的孤儿文件，并递归清理因此变空的目录（DismissItem 软删不删文件是孤儿的常见来源）；
@@ -21,6 +21,9 @@ namespace ShineMusic.Service;
 /// </summary>
 public sealed class StorageGovernanceService
 {
+    // Keep in sync with UserLibraryWorkflowService.MutationLockId. Retention
+    // decisions and workflow reference mutations must use the same database lock.
+    private const long WorkflowMutationLockId = 586809626057119800L;
     private readonly LibraryStoragePaths _libraryPaths;
     private readonly ILogger<StorageGovernanceService> _logger;
 
@@ -43,16 +46,16 @@ public sealed class StorageGovernanceService
             if (!_libraryPaths.TryResolve(asset.StorageKey, out var path)) continue;
             try
             {
-                await db.Ado.BeginTranAsync(System.Data.IsolationLevel.Serializable);
+                await db.Ado.BeginTranAsync();
                 try
                 {
+                    await LockWorkflowReferencesAsync(db);
                     // Claim the retired row before touching disk. A concurrent activation must
                     // win this conditional write or wait until this transaction has finished.
                     var claimed = await db.Deleteable<MediaAsset>()
                         .Where(a => a.Id == asset.Id && !a.IsPublished && !a.IsPrimary
                             && a.RetainUntilUtc != null && a.RetainUntilUtc <= now).ExecuteCommandAsync(ct);
-                    var referenced = await db.Queryable<MediaAsset>().AnyAsync(a => a.StorageKey == asset.StorageKey, ct)
-                        || await db.Queryable<Artwork>().AnyAsync(a => a.StorageKey == asset.StorageKey, ct);
+                    var referenced = await IsReferencedAsync(db, asset.StorageKey, ct);
                     if (claimed != 1 || referenced)
                     {
                         await db.Ado.RollbackTranAsync();
@@ -87,10 +90,12 @@ public sealed class StorageGovernanceService
             diskSizeByKey[file.Key] = file.SizeBytes;
 
         // 一次取齐对账与分组所需的全部行（曲库量级小，内存聚合换取清晰的分组结构）。
-        // 数据库引用集：正式曲库（LibraryRoot）下的文件只可能被 MediaAsset 与 Artwork 引用；
-        // LibraryImportItem 的三个存储键都指向隔离区（QuarantineRoot），不参与本审计。
+        // Pending reviews retain immutable original snapshots, including when their
+        // former track was upgraded/deleted or their expiry sweep has not run yet.
         var assets = await db.Queryable<MediaAsset>().ToListAsync(cancellationToken);
         var artworks = await db.Queryable<Artwork>().ToListAsync(cancellationToken);
+        var reviews = await db.Queryable<LibraryWorkflowReview>().Where(review => review.Status == "pending")
+            .ToListAsync(cancellationToken);
         var tracks = await db.Queryable<Track>().ToListAsync(cancellationToken);
         var albums = await db.Queryable<Album>().ToListAsync(cancellationToken);
         var collections = await db.Queryable<EditorialCollection>().ToListAsync(cancellationToken);
@@ -100,9 +105,10 @@ public sealed class StorageGovernanceService
             .Select((link, artist) => new { link.TrackId, ArtistName = artist.Name })
             .ToListAsync(cancellationToken);
 
-        var referencedKeys = new List<string>(assets.Count + artworks.Count);
+        var referencedKeys = new List<string>(assets.Count + artworks.Count + reviews.Count);
         referencedKeys.AddRange(assets.Select(asset => asset.StorageKey));
         referencedKeys.AddRange(artworks.Select(artwork => artwork.StorageKey));
+        referencedKeys.AddRange(reviews.Select(review => review.OriginalStorageKey));
         var referencedSet = new HashSet<string>(referencedKeys, comparer);
 
         // 孤儿：磁盘存在但无任何数据库行引用（如软删曲目留下的残留）。
@@ -120,13 +126,15 @@ public sealed class StorageGovernanceService
         var artworkByKey = artworks
             .GroupBy(artwork => artwork.StorageKey, comparer)
             .ToDictionary(group => group.Key, group => group.First(), comparer);
+        var reviewByKey = reviews.GroupBy(review => review.OriginalStorageKey, comparer)
+            .ToDictionary(group => group.Key, group => group.Count(), comparer);
         var missing = referencedSet
             .Where(key => !diskSet.Contains(key))
             .OrderBy(key => key, StringComparer.Ordinal)
             .Select(key => new StorageMissingFileDto(
                 key,
                 StorageFileKinds.Classify(key),
-                DescribeKeyOwners(key, assetByKey, artworkByKey, trackById, tracks, albums, collections)))
+                DescribeKeyOwners(key, assetByKey, artworkByKey, reviewByKey, trackById, tracks, albums, collections)))
             .ToList();
 
         // 空目录：无文件且无子目录，通常是删除曲目后的残留。
@@ -138,7 +146,7 @@ public sealed class StorageGovernanceService
             .ToDictionary(
                 group => group.Key,
                 group => group.Select(row => row.ArtistName).Where(name => !string.IsNullOrEmpty(name)).Cast<string>().ToList());
-        var groups = BuildTrackGroups(tracks, albums, collections, assets, artworks, artistsByTrack, diskSet, diskSizeByKey);
+        var groups = BuildTrackGroups(tracks, albums, collections, assets, artworks, reviews, artistsByTrack, diskSet, diskSizeByKey);
 
         return new StorageAuditDto(
             referencedKeys.Count,
@@ -175,13 +183,20 @@ public sealed class StorageGovernanceService
             try
             {
                 if (File.Exists(path) && File.GetLastWriteTimeUtc(path) > DateTime.UtcNow.AddHours(-24)) continue;
-                if (await db.Queryable<MediaAsset>().AnyAsync(a => a.StorageKey == orphan.StorageKey, cancellationToken)
-                    || await db.Queryable<Artwork>().AnyAsync(a => a.StorageKey == orphan.StorageKey, cancellationToken)) continue;
-                if (!File.Exists(path))
-                    continue;
-                File.Delete(path);
-                deletedCount++;
-                deletedBytes += orphan.SizeBytes;
+                await db.Ado.BeginTranAsync();
+                try
+                {
+                    await LockWorkflowReferencesAsync(db);
+                    if (!await IsReferencedAsync(db, orphan.StorageKey, cancellationToken) && File.Exists(path)
+                        && File.GetLastWriteTimeUtc(path) <= DateTime.UtcNow.AddHours(-24))
+                    {
+                        File.Delete(path);
+                        deletedCount++;
+                        deletedBytes += orphan.SizeBytes;
+                    }
+                    await db.Ado.CommitTranAsync();
+                }
+                catch { await db.Ado.RollbackTranAsync(); throw; }
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
@@ -213,11 +228,11 @@ public sealed class StorageGovernanceService
             : null;
 
         // 收集待删磁盘文件：曲目下所有媒体资产（原文件与转码产物均记录在 MediaAssets）。
-        var filePaths = new List<string>();
+        var files = new Dictionary<string, string>(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
         foreach (var asset in trackAssets)
         {
             if (_libraryPaths.TryResolve(asset.StorageKey, out var path))
-                filePaths.Add(path);
+                files.TryAdd(path, asset.StorageKey);
         }
 
         // 封面可能被其他曲目、专辑或编辑精选集合共享（引用语义为 SetNull），
@@ -235,7 +250,7 @@ public sealed class StorageGovernanceService
             if (!sharedByOtherTrack && !sharedByAlbum && !sharedByCollection &&
                 _libraryPaths.TryResolve(trackArtwork.StorageKey, out var artworkPath))
             {
-                filePaths.Add(artworkPath);
+                files.TryAdd(artworkPath, trackArtwork.StorageKey);
                 artworkDeleted = true;
             }
         }
@@ -287,16 +302,26 @@ public sealed class StorageGovernanceService
         // 数据库删除成功后清理磁盘文件：先库后盘，库删失败不会误删文件。
         var deletedCount = 0;
         var deletedBytes = 0L;
-        foreach (var path in filePaths)
+        foreach (var (path, key) in files)
         {
             try
             {
-                if (!File.Exists(path))
-                    continue;
-                var size = new FileInfo(path).Length;
-                File.Delete(path);
-                deletedCount++;
-                deletedBytes += size;
+                await db.Ado.BeginTranAsync();
+                try
+                {
+                    await LockWorkflowReferencesAsync(db);
+                    // A review snapshot (or another track's shared original) can
+                    // outlive this track and must survive its physical deletion.
+                    if (!await IsReferencedAsync(db, key, cancellationToken) && File.Exists(path))
+                    {
+                        var size = new FileInfo(path).Length;
+                        File.Delete(path);
+                        deletedCount++;
+                        deletedBytes += size;
+                    }
+                    await db.Ado.CommitTranAsync();
+                }
+                catch { await db.Ado.RollbackTranAsync(); throw; }
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
@@ -316,6 +341,7 @@ public sealed class StorageGovernanceService
         string key,
         IReadOnlyDictionary<string, MediaAsset> assetByKey,
         IReadOnlyDictionary<string, Artwork> artworkByKey,
+        IReadOnlyDictionary<string, int> reviewByKey,
         IReadOnlyDictionary<Guid, Track> trackById,
         List<Track> tracks,
         List<Album> albums,
@@ -326,6 +352,8 @@ public sealed class StorageGovernanceService
             owners.Add(trackById.TryGetValue(asset.TrackId, out var track) ? $"曲目《{track.Title}》音频" : "曲目音频（曲目已删除）");
         if (artworkByKey.TryGetValue(key, out var artwork))
             owners.AddRange(DescribeArtworkOwners(artwork, tracks, albums, collections));
+        if (reviewByKey.TryGetValue(key, out var reviewCount))
+            owners.Add($"待处理审核原件（{reviewCount} 条引用）");
         if (owners.Count == 0)
             owners.Add("未知引用");
         return owners;
@@ -357,6 +385,7 @@ public sealed class StorageGovernanceService
         List<EditorialCollection> collections,
         List<MediaAsset> assets,
         List<Artwork> artworks,
+        List<LibraryWorkflowReview> reviews,
         IReadOnlyDictionary<Guid, List<string>> artistsByTrack,
         HashSet<string> diskSet,
         IReadOnlyDictionary<string, long> diskSizeByKey)
@@ -436,12 +465,21 @@ public sealed class StorageGovernanceService
                     null);
             })
             .ToList();
+        var representedKeys = new HashSet<string>(assets.Select(asset => asset.StorageKey)
+            .Concat(artworks.Select(artwork => artwork.StorageKey)), diskSet.Comparer);
+        foreach (var group in reviews.GroupBy(review => review.OriginalStorageKey, diskSet.Comparer)
+            .Where(group => !representedKeys.Contains(group.Key)).OrderBy(group => group.Key, StringComparer.Ordinal))
+        {
+            var onDisk = diskSet.Contains(group.Key);
+            otherFiles.Add(new StorageGroupFileDto(group.Key, onDisk ? diskSizeByKey.GetValueOrDefault(group.Key) : 0,
+                StorageFileKinds.Classify(group.Key), "review", $"待处理审核原件（{group.Count()} 条引用）", onDisk, null));
+        }
         if (otherFiles.Count > 0)
         {
             groups.Add(new StorageFileGroupDto(
                 null,
                 "其他引用",
-                "专辑/精选集封面等",
+                "专辑/精选集封面及待处理审核原件",
                 null,
                 null,
                 true,
@@ -449,6 +487,19 @@ public sealed class StorageGovernanceService
                 otherFiles));
         }
         return groups;
+    }
+
+    private static async Task<bool> IsReferencedAsync(ISqlSugarClient db, string key, CancellationToken ct) =>
+        await db.Queryable<MediaAsset>().AnyAsync(asset => asset.StorageKey == key, ct)
+        || await db.Queryable<Artwork>().AnyAsync(artwork => artwork.StorageKey == key, ct)
+        || await db.Queryable<LibraryWorkflowReview>().AnyAsync(review => review.Status == "pending" && review.OriginalStorageKey == key, ct);
+
+    private static async Task LockWorkflowReferencesAsync(ISqlSugarClient db)
+    {
+        // Default READ COMMITTED sees references committed while waiting for the
+        // advisory lock. A SERIALIZABLE snapshot created before waiting can be stale.
+        if (db.CurrentConnectionConfig.DbType == DbType.PostgreSQL)
+            await db.Ado.ExecuteCommandAsync($"SELECT pg_advisory_xact_lock({WorkflowMutationLockId})");
     }
 
     /// <summary>枚举曲库根目录下的全部文件，返回（存储键, 字节数）列表；根目录不存在时返回空。</summary>

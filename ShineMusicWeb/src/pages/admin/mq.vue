@@ -4,11 +4,25 @@
  * 数据来自后端转发的 RabbitMQ Management HTTP API；插件不可达时提示 502 原因。
  */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
-import { getMessageQueueTasks, getMessageQueues } from '@/services/admin-mq'
+import {
+  getFailedMessageOutbox,
+  getMessageDeadLetters,
+  getMessageQueueTasks,
+  getMessageQueues,
+  replayMessageDeadLetter,
+  retryFailedMessageOutbox,
+} from '@/services/admin-mq'
 import { describeError } from '@/services/errors'
-import type { ApiMessageQueueStatus, ApiMessageQueueTask, ApiMessageQueueTaskList } from '@/types/api.generated'
+import type {
+  ApiFailedMessageOutboxList,
+  ApiMessageDeadLetter,
+  ApiMessageDeadLetterList,
+  ApiMessageQueueStatus,
+  ApiMessageQueueTask,
+  ApiMessageQueueTaskList,
+} from '@/types/api.generated'
 
 const loading = ref(false)
 const queues = ref<ApiMessageQueueStatus[]>([])
@@ -21,6 +35,17 @@ const taskState = ref<'all' | 'waiting' | 'processing'>('all')
 const taskPage = ref(1)
 const autoRefresh = ref(true)
 const lastUpdated = ref('')
+const reliabilityTab = ref<'dead-letters' | 'outbox'>('dead-letters')
+const reliabilityQueue = ref('')
+const deadLettersLoading = ref(false)
+const deadLettersError = ref('')
+const deadLetters = ref<ApiMessageDeadLetterList | null>(null)
+const deadLettersPage = ref(1)
+const outboxLoading = ref(false)
+const outboxError = ref('')
+const failedOutbox = ref<ApiFailedMessageOutboxList | null>(null)
+const outboxPage = ref(1)
+const actingId = ref('')
 let timer: ReturnType<typeof setInterval> | null = null
 
 const totalReady = computed(() => queues.value.reduce((sum, queue) => sum + queue.messagesReady, 0))
@@ -50,6 +75,7 @@ async function load(showLoading = true) {
     loading.value = false
   }
   await loadTasks()
+  await loadReliability()
 }
 
 async function loadTasks() {
@@ -61,6 +87,111 @@ async function loadTasks() {
     taskError.value = describeError(error, '队列任务明细获取失败')
   } finally {
     tasksLoading.value = false
+  }
+}
+
+async function loadReliability() {
+  if (reliabilityTab.value === 'dead-letters') {
+    deadLettersLoading.value = true
+    try {
+      deadLetters.value = await getMessageDeadLetters(reliabilityQueue.value, deadLettersPage.value)
+      deadLettersError.value = ''
+    } catch (error) {
+      deadLettersError.value = describeError(error, '失败消息加载失败')
+    } finally {
+      deadLettersLoading.value = false
+    }
+    return
+  }
+  outboxLoading.value = true
+  try {
+    failedOutbox.value = await getFailedMessageOutbox(reliabilityQueue.value, outboxPage.value)
+    outboxError.value = ''
+  } catch (error) {
+    outboxError.value = describeError(error, '失败投递记录加载失败')
+  } finally {
+    outboxLoading.value = false
+  }
+}
+
+function changeReliabilityFilter() {
+  deadLettersPage.value = 1
+  outboxPage.value = 1
+  void loadReliability()
+}
+
+function changeReliabilityTab() {
+  void loadReliability()
+}
+
+function changeDeadLettersPage(page: number) {
+  deadLettersPage.value = page
+  void loadReliability()
+}
+
+function changeOutboxPage(page: number) {
+  outboxPage.value = page
+  void loadReliability()
+}
+
+function deadLetterBodyPreview(row: ApiMessageDeadLetter) {
+  try {
+    const binary = atob(row.bodyBase64)
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0))
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+    return text.length > 96 ? `${text.slice(0, 96)}…` : text
+  } catch {
+    return `Base64 ${row.bodyBase64.slice(0, 48)}${row.bodyBase64.length > 48 ? '…' : ''}`
+  }
+}
+
+function formatQueueName(queue: string) {
+  return queue === 'shinemusic.downloads' ? '音源下载' : queue === 'shinemusic.imports' ? '曲库导入' : queue
+}
+
+async function replayDeadLetter(row: ApiMessageDeadLetter) {
+  if (!row.canReplay || actingId.value) return
+  try {
+    await ElMessageBox.confirm(
+      `将任务消息 ${deadLetterBodyPreview(row)} 重新加入待投递队列。任务只会在 Worker 确认后执行。`,
+      '确认重放失败消息',
+      { confirmButtonText: '重放', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  actingId.value = row.id
+  try {
+    await replayMessageDeadLetter(row.id)
+    ElMessage.success('重放已安排')
+    await loadReliability()
+  } catch (error) {
+    ElMessage.error(describeError(error, '重放失败'))
+  } finally {
+    actingId.value = ''
+  }
+}
+
+async function retryOutbox(row: NonNullable<ApiFailedMessageOutboxList['items']>[number]) {
+  if (actingId.value) return
+  try {
+    await ElMessageBox.confirm(
+      `任务 ${row.taskId} 的自动投递次数已用尽。确认重新开放一轮投递？`,
+      '确认重试投递',
+      { confirmButtonText: '重试投递', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  actingId.value = row.id
+  try {
+    await retryFailedMessageOutbox(row.id)
+    ElMessage.success('投递重试已安排')
+    await loadReliability()
+  } catch (error) {
+    ElMessage.error(describeError(error, '投递重试失败'))
+  } finally {
+    actingId.value = ''
   }
 }
 
@@ -341,6 +472,95 @@ onUnmounted(() => applyAutoRefresh(false))
         @current-change="changeTaskPage"
       />
     </div>
+
+    <div class="panel reliability-panel">
+      <div class="panel-title">
+        失败投递
+        <span class="text-faint summary">
+          {{ reliabilityTab === 'dead-letters' ? `死信 ${deadLetters?.total ?? '—'} 条` : `待重试 ${failedOutbox?.total ?? '—'} 条` }}
+        </span>
+        <span class="actions task-filters">
+          <el-select v-model="reliabilityQueue" size="small" style="width: 150px" @change="changeReliabilityFilter">
+            <el-option label="全部队列" value="" />
+            <el-option label="音源下载" value="shinemusic.downloads" />
+            <el-option label="曲库导入" value="shinemusic.imports" />
+          </el-select>
+          <el-button :icon="Refresh" :loading="deadLettersLoading || outboxLoading" size="small" @click="loadReliability()">刷新</el-button>
+        </span>
+      </div>
+
+      <el-tabs v-model="reliabilityTab" @tab-change="changeReliabilityTab">
+        <el-tab-pane label="消费者失败消息" name="dead-letters">
+          <el-alert v-if="deadLettersError" type="error" :closable="false" show-icon :title="deadLettersError" />
+          <el-table v-loading="deadLettersLoading" :data="deadLetters ? [...deadLetters.items] : []" row-key="id" empty-text="没有失败消息">
+            <el-table-column label="时间" prop="failedAtUtc" sortable min-width="165">
+              <template #default="{ row }">{{ formatTaskDate(row.failedAtUtc) }}</template>
+            </el-table-column>
+            <el-table-column label="队列" prop="queueName" width="115">
+              <template #default="{ row }">{{ formatQueueName(row.queueName) }}</template>
+            </el-table-column>
+            <el-table-column label="失败原因" prop="failureReason" min-width="150" show-overflow-tooltip />
+            <el-table-column label="消息体" min-width="220" show-overflow-tooltip>
+              <template #default="{ row }"><span class="message-preview">{{ deadLetterBodyPreview(row) }}</span></template>
+            </el-table-column>
+            <el-table-column label="重放" width="135">
+              <template #default="{ row }">
+                <span v-if="row.replayedAtUtc">已安排 · {{ formatTaskDate(row.replayedAtUtc) }}</span>
+                <span v-else-if="row.canReplay">可重放</span>
+                <el-tooltip v-else content="消息格式无效、任务不在可认领状态或租约仍有效">
+                  <span class="text-faint">暂不可重放</span>
+                </el-tooltip>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="100" fixed="right">
+              <template #default="{ row }">
+                <el-button link type="primary" :icon="Refresh" :disabled="!row.canReplay || Boolean(actingId)" :loading="actingId === row.id" @click="replayDeadLetter(row)">重放</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-pagination
+            v-if="deadLetters && deadLetters.total > deadLetters.pageSize"
+            class="task-pagination"
+            background
+            layout="prev, pager, next, jumper, total"
+            :current-page="deadLettersPage"
+            :page-size="deadLetters.pageSize"
+            :total="deadLetters.total"
+            @current-change="changeDeadLettersPage"
+          />
+        </el-tab-pane>
+
+        <el-tab-pane label="Outbox 投递失败" name="outbox">
+          <el-alert v-if="outboxError" type="error" :closable="false" show-icon :title="outboxError" />
+          <el-table v-loading="outboxLoading" :data="failedOutbox ? [...failedOutbox.items] : []" row-key="id" empty-text="没有达到重试上限的消息">
+            <el-table-column label="创建时间" prop="createdAtUtc" sortable min-width="165">
+              <template #default="{ row }">{{ formatTaskDate(row.createdAtUtc) }}</template>
+            </el-table-column>
+            <el-table-column label="队列" prop="queueName" width="115">
+              <template #default="{ row }">{{ formatQueueName(row.queueName) }}</template>
+            </el-table-column>
+            <el-table-column label="任务 ID" prop="taskId" min-width="280" show-overflow-tooltip />
+            <el-table-column label="自动尝试" prop="attempts" width="100" align="right" />
+            <el-table-column label="最后错误" prop="lastError" min-width="150" show-overflow-tooltip />
+            <el-table-column label="操作" width="120" fixed="right">
+              <template #default="{ row }">
+                <el-button link type="primary" :icon="Refresh" :disabled="Boolean(actingId)" :loading="actingId === row.id" @click="retryOutbox(row)">重试投递</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-pagination
+            v-if="failedOutbox && failedOutbox.total > failedOutbox.pageSize"
+            class="task-pagination"
+            background
+            layout="prev, pager, next, jumper, total"
+            :current-page="outboxPage"
+            :page-size="failedOutbox.pageSize"
+            :total="failedOutbox.total"
+            @current-change="changeOutboxPage"
+          />
+        </el-tab-pane>
+      </el-tabs>
+    </div>
   </div>
 </template>
 
@@ -355,6 +575,10 @@ onUnmounted(() => applyAutoRefresh(false))
 }
 
 .task-panel {
+  margin-top: 16px;
+}
+
+.reliability-panel {
   margin-top: 16px;
 }
 
@@ -406,6 +630,11 @@ onUnmounted(() => applyAutoRefresh(false))
 
 .task-error {
   color: var(--el-color-danger);
+}
+
+.message-preview {
+  font-family: var(--el-font-family-mono, monospace);
+  overflow-wrap: anywhere;
 }
 
 .text-danger {

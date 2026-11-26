@@ -55,6 +55,7 @@ const menuGroups = [
     items: [
       { path: '/catalog', label: '曲库管理', icon: Headset },
       { path: '/import', label: '导入审核', icon: UploadFilled },
+      { path: '/library-candidates', label: '公共曲库待选', icon: Headset },
       { path: '/collections', label: '精选歌单', icon: Collection },
       { path: '/recommendation-settings', label: '推荐策略', icon: Odometer },
     ],

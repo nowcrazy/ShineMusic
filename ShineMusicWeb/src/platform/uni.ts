@@ -22,8 +22,7 @@ import {
   showModal,
   showToast,
 } from './ui'
-import { refreshAccessToken } from '@/services/http'
-import { getAccessToken } from '@/services/tokens'
+import { assertAuthenticatedRequestAllowed, assertSessionRevisionCurrent, captureSessionRevision, fetchWithSession } from '@/services/http'
 
 const FILE_REGISTRY = new Map<string, File>()
 
@@ -94,14 +93,6 @@ async function resolveFile(filePath: string, explicit?: unknown): Promise<File> 
   throw new Error(`无法读取本地文件：${filePath}`)
 }
 
-/** 401 时用 refresh token 续期并重放一次（上传/下载绕过 http 层时同样有效）。 */
-async function withAuthRetry<T>(run: (headers: Record<string, string>) => Promise<T>, headers: Record<string, string>, status: number): Promise<T> {
-  if (status !== 401) throw new Error('no-retry')
-  const refreshed = await refreshAccessToken()
-  if (!refreshed) throw new Error('refresh-failed')
-  return run({ ...headers, Authorization: `Bearer ${getAccessToken()}` })
-}
-
 function request(options: Record<string, any>) {
   const controller = new AbortController()
   const method = String(options.method ?? 'GET').toUpperCase()
@@ -156,31 +147,30 @@ function request(options: Record<string, any>) {
 }
 
 function uploadFile(options: Record<string, any>) {
+  const revision = captureSessionRevision()
   const url = String(options.url ?? '')
   const fieldName = String(options.name ?? 'file')
   const headers: Record<string, string> = { ...(options.header ?? {}) }
 
   const send = async (overrides: Record<string, string>): Promise<{ status: number; text: string }> => {
+    assertSessionRevisionCurrent(revision)
+    assertAuthenticatedRequestAllowed()
     const file = await resolveFile(String(options.filePath ?? ''), options.file)
     const form = new FormData()
     for (const [key, value] of Object.entries(options.formData ?? {})) {
       if (value !== undefined && value !== null) form.append(key, String(value))
     }
     form.append(fieldName, file, file.name)
-    const response = await fetch(url, { method: 'POST', headers: overrides, body: form })
-    return { status: response.status, text: await response.text() }
+    const response = await fetchWithSession(url, { method: 'POST', headers: overrides, body: form }, revision)
+    const body = await response.text()
+    assertSessionRevisionCurrent(revision)
+    return { status: response.status, text: body }
   }
 
   void (async () => {
     try {
-      let result = await send(headers)
-      if (result.status === 401) {
-        try {
-          result = await withAuthRetry((nextHeaders) => send(nextHeaders), headers, 401)
-        } catch {
-          // 刷新失败时按 401 原样返回，由调用方提示
-        }
-      }
+      const result = await send(headers)
+      assertSessionRevisionCurrent(revision)
       invoke(options, 'success', { statusCode: result.status, data: result.text })
     } catch (error: unknown) {
       invoke(options, 'fail', { errMsg: error instanceof Error ? error.message : String(error) })
@@ -193,11 +183,18 @@ function uploadFile(options: Record<string, any>) {
 }
 
 function downloadFile(options: Record<string, any>) {
+  const revision = captureSessionRevision()
   const controller = new AbortController()
   void (async () => {
     try {
-      const response = await fetch(String(options.url ?? ''), { signal: controller.signal })
+      const headers = options.header ?? {}
+      const authenticated = Boolean(headers.Authorization || headers.authorization)
+      const url = String(options.url ?? '')
+      const response = authenticated
+        ? await fetchWithSession(url, { headers, signal: controller.signal }, revision)
+        : await fetch(url, { headers, signal: controller.signal })
       const blob = await response.blob()
+      assertSessionRevisionCurrent(revision)
       const tempFilePath = URL.createObjectURL(blob)
       invoke(options, 'success', { statusCode: response.status, tempFilePath })
     } catch (error: unknown) {

@@ -19,41 +19,7 @@ import {
 } from '@/services/admin-logs'
 import { describeError } from '@/services/errors'
 import { formatDateTime } from '@/utils/format'
-
-/** IP 地址描述：把后端返回的带前缀 IP 字符串解析成结构化显示数据。
- *  后端可能返回：
- *    - "内网 192.168.100.109"   → kind=private
- *    - "VPN 100.110.31.122"     → kind=vpn
- *    - "本机"                    → kind=loopback
- *    - "2408:844f:1516:a41e:..." → kind=public (IPv6)
- *    - "117.128.126.30"          → kind=public (IPv4)
- *  返回对象给模板按 kind 渲染不同视觉层次。 */
-function describeIp(raw: string | null | undefined) {
-  if (!raw) return { kind: 'unknown' as const, label: '—', value: '', display: '—', full: '' }
-
-  // 识别后端前缀
-  let kind: 'public' | 'private' | 'vpn' | 'loopback' = 'public'
-  let value = raw
-  if (raw === '本机') { kind = 'loopback'; value = '' }
-  else if (raw.startsWith('内网 ')) { kind = 'private'; value = raw.slice(3) }
-  else if (raw.startsWith('VPN ')) { kind = 'vpn'; value = raw.slice(4) }
-
-  // IPv6 简化：只显示前 4 段 + …（hover 看完整）
-  let display = value
-  if (kind === 'public' && value.includes(':') && !value.includes('.')) {
-    const segments = value.split(':')
-    if (segments.length > 4) display = segments.slice(0, 4).join(':') + ':…'
-  }
-
-  const labelMap: Record<typeof kind, string> = {
-    public: '公网',
-    private: '内网',
-    vpn: 'VPN',
-    loopback: '本机',
-  }
-
-  return { kind, label: labelMap[kind], value, display: display || '—', full: raw }
-}
+import { describeIp } from '@/utils/ip'
 
 const activeTab = ref<'login' | 'operation'>('login')
 
@@ -250,7 +216,12 @@ onMounted(loadLogin)
             <el-table-column label="设备" prop="deviceInfo" sortable min-width="180" show-overflow-tooltip>
               <template #default="{ row }">{{ row.deviceInfo || '—' }}</template>
             </el-table-column>
-            <el-table-column label="IP" prop="ip" sortable width="170">
+            <el-table-column label="访问 IP" prop="ip" sortable min-width="220">
+              <template #header>
+                <el-tooltip content="本次访问实际出口；经代理访问显示代理出口，分流直连显示直连 IP。" placement="top">
+                  <span class="ip-column-label">访问 IP</span>
+                </el-tooltip>
+              </template>
               <template #default="{ row }">
                 <template v-if="describeIp(row.ip).kind === 'public'">
                   <span class="mono ip-public" :title="describeIp(row.ip).full">{{ describeIp(row.ip).display }}</span>
@@ -360,7 +331,12 @@ onMounted(loadLogin)
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="IP" prop="ip" sortable width="170">
+            <el-table-column label="访问 IP" prop="ip" sortable min-width="240">
+              <template #header>
+                <el-tooltip content="本次访问实际出口；经代理访问显示代理出口，分流直连显示直连 IP。" placement="top">
+                  <span class="ip-column-label">访问 IP</span>
+                </el-tooltip>
+              </template>
               <template #default="{ row }">
                 <template v-if="describeIp(row.ip).kind === 'public'">
                   <span class="mono ip-public" :title="describeIp(row.ip).full">{{ describeIp(row.ip).display }}</span>
@@ -443,6 +419,16 @@ onMounted(loadLogin)
 }
 
 /* === IP 显示分层 === */
+.ip-column-label {
+  cursor: help;
+}
+
+.ip-public,
+.ip-value {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 .ip-public {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-weight: 500;
@@ -454,10 +440,12 @@ onMounted(loadLogin)
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  max-width: 100%;
   color: var(--adm-text-3);
 }
 
 .ip-kind-tag {
+  flex-shrink: 0;
   opacity: 0.7;
   font-size: 11px;
   padding: 0 4px;
@@ -466,6 +454,7 @@ onMounted(loadLogin)
 }
 
 .ip-value {
+  min-width: 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 12px;
   color: var(--adm-text-3);

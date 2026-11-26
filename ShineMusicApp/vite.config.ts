@@ -8,6 +8,7 @@ import { defineConfig, type Plugin } from 'vite'
 // ESM import interop 拿不到函数，必须用 createRequire 取 .default。
 const require = createRequire(import.meta.url)
 const uni = require('@dcloudio/vite-plugin-uni').default
+const { parseManifestJson } = require('@dcloudio/uni-cli-shared')
 
 // 编译器 @dcloudio 全家桶精确锁定 3.0.0-alpha-5020520260821001，
 // 与 HBuilderX 5.26 内置编译器及云打包基座完全同版本（根治白屏错位）。
@@ -89,6 +90,12 @@ export default defineConfig(() => {
   // 注意：云打包时 mode 是 'production' 而非 'app'，必须用 UNI_PLATFORM 判断平台。
   const isAppPlatform = process.env.UNI_PLATFORM === 'app'
   const isH5 = process.env.UNI_PLATFORM === 'h5'
+  // 使用 uni 编译器的解析器，兼容 HBuilderX 写入的 manifest 注释。
+  // 未配置插件时不探测原生桥，避免标准基座打印“基座不包含原生插件”。
+  const manifest = parseManifestJson(path.resolve(CONFIG_DIR, 'src'))
+  const musicNotificationEnabled = isAppPlatform && Object.hasOwn(
+    manifest['app-plus']?.nativePlugins ?? {}, 'XZH-musicNotification',
+  )
 
   // server.origin 是唯一真源：App 的 apiBase 与 H5 devServer 的代理目标都从它派生，
   // 因此换服务器时不需要分别改 APK 内置地址、代理目标、CORS 白名单。
@@ -117,10 +124,12 @@ export default defineConfig(() => {
       ? {
           host: true,
           proxy: {
-            '/api': { target: apiTarget, changeOrigin: true },
+            // 本地 API 信任开发代理的转发头，保留访问设备的地址。
+            // 若目标经过远端 Funnel，它会重设为访问 Funnel 的出口，不能跨公网伪造设备 IP。
+            '/api': { target: apiTarget, changeOrigin: true, xfwd: true },
             // 健康探针同样要代理：否则 H5 的 SPA fallback 会用 index.html 返回 200，
             // 让 App 设置页「测试连通」在后端根本不可达时误报成功。
-            '/health': { target: apiTarget, changeOrigin: true },
+            '/health': { target: apiTarget, changeOrigin: true, xfwd: true },
           },
         }
       : undefined,
@@ -144,8 +153,9 @@ export default defineConfig(() => {
     },
     define: {
       __SM_API_BASE__: JSON.stringify(apiBase),
-      // vue-i18n esm-bundler 特性开关：替换为字面量后不再出现
-      // "You are running the esm-bundler build of vue-i18n" 提示，并启用 tree-shaking。
+      __SM_MUSIC_NOTIFICATION_ENABLED__: musicNotificationEnabled,
+      // vue-i18n esm-bundler 特性开关，用于 tree-shaking。
+      // DCloud 内置的旧版运行时在开发模式下仍会误报特性开关警告。
       // 本项目 i18n 全部为组合式 API（createI18n legacy: false），关闭 LEGACY_API 无功能影响。
       __VUE_I18N_FULL_INSTALL__: true,
       __INTLIFY_PROD_DEVTOOLS__: false,

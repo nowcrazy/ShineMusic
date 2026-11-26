@@ -85,6 +85,7 @@ let _homeFeedInFlight: Promise<HomeFeed> | null = null
 
 let _genresCache: readonly string[] | null = null
 let _genresInFlight: Promise<readonly string[]> | null = null
+let catalogGeneration = 0
 
 async function fetchHomeFeedRaw(): Promise<HomeFeed> {
   const home = await http.get<ApiMusicHomeFeed>(`${API_PREFIX}/music/home`, false)
@@ -120,17 +121,32 @@ export async function getHomeFeed(): Promise<HomeFeed> {
     return _homeFeedCache
   }
   if (!_homeFeedInFlight) {
-    _homeFeedInFlight = fetchHomeFeedRaw().finally(() => {
-      _homeFeedInFlight = null
+    const generation = catalogGeneration
+    const request = fetchHomeFeedRaw().then((home) => {
+      if (generation === catalogGeneration) _homeFeedCache = home
+      return home
+    }).finally(() => {
+      if (_homeFeedInFlight === request) _homeFeedInFlight = null
     })
+    _homeFeedInFlight = request
   }
-  _homeFeedCache = await _homeFeedInFlight
-  return _homeFeedCache
+  return _homeFeedInFlight
 }
 
 /** 清空首页缓存（管理员发布/修改合集后手动触发）。 */
 export function invalidateHomeFeedCache(): void {
   _homeFeedCache = null
+}
+
+/** Drop caches tied to the active server and ignore all responses started before the reset. */
+export function resetCatalogCaches(): void {
+  catalogGeneration++
+  _homeFeedCache = null
+  _homeFeedInFlight = null
+  _genresCache = null
+  _genresInFlight = null
+  _collectionCache.clear()
+  _collectionInFlight.clear()
 }
 
 /**
@@ -231,15 +247,20 @@ export async function checkTrackExists(trackId: string): Promise<boolean> {
 export async function getGenres(): Promise<readonly string[]> {
   if (_genresCache) return _genresCache
   if (!_genresInFlight) {
-    _genresInFlight = http
+    const generation = catalogGeneration
+    const request = http
       .get<ApiPageResult<string>>(`${API_PREFIX}/genres?pageSize=100`, false)
       .then((r) => r.items.filter((genre) => genre.trim().length > 0 && !genre.includes('\uFFFD')))
-      .finally(() => {
-        _genresInFlight = null
+      .then((genres) => {
+        if (generation === catalogGeneration) _genresCache = genres
+        return genres
       })
+      .finally(() => {
+        if (_genresInFlight === request) _genresInFlight = null
+      })
+    _genresInFlight = request
   }
-  _genresCache = await _genresInFlight
-  return _genresCache
+  return _genresInFlight
 }
 
 /**
@@ -267,6 +288,7 @@ const _collectionInFlight = new Map<string, Promise<CollectionDetailResult>>()
  * - 不同 ID 独立缓存互不影响。
  */
 export async function getCollection(collectionId: string): Promise<CollectionDetailResult> {
+  const generation = catalogGeneration
   const cached = _collectionCache.get(collectionId)
   if (cached) {
     void (async () => {
@@ -275,7 +297,7 @@ export async function getCollection(collectionId: string): Promise<CollectionDet
           `${API_PREFIX}/collections/${collectionId}`,
           false,
         )
-        _collectionCache.set(collectionId, { detail, tracks: detail.tracks.map(mapTrack) })
+        if (generation === catalogGeneration) _collectionCache.set(collectionId, { detail, tracks: detail.tracks.map(mapTrack) })
       } catch {
         /* 静默刷新失败 */
       }
@@ -288,11 +310,11 @@ export async function getCollection(collectionId: string): Promise<CollectionDet
       .get<ApiCollectionDetail>(`${API_PREFIX}/collections/${collectionId}`, false)
       .then((detail) => {
         const result = { detail, tracks: detail.tracks.map(mapTrack) }
-        _collectionCache.set(collectionId, result)
+        if (generation === catalogGeneration) _collectionCache.set(collectionId, result)
         return result
       })
       .finally(() => {
-        _collectionInFlight.delete(collectionId)
+        if (_collectionInFlight.get(collectionId) === inflight) _collectionInFlight.delete(collectionId)
       })
     _collectionInFlight.set(collectionId, inflight)
   }

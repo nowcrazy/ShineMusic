@@ -13,7 +13,7 @@
  * 远端停用而本地处于 custom → 回退默认预设主题。
  */
 import { t } from '@/locale'
-import { API_PREFIX, http, refreshAccessToken, resolveUrl } from './http'
+import { API_PREFIX, assertAuthenticatedRequestAllowed, assertSessionRevisionCurrent, captureSessionRevision, fetchWithSession, http, refreshAccessToken, resolveUrl } from './http'
 import { getAccessToken } from './tokens'
 import {
   applyCustomTheme,
@@ -53,6 +53,8 @@ export function fetchMyTheme(): Promise<ApiUserTheme> {
  * - 非 H5 仍走 uni.uploadFile（原生文件路径可用）。
  */
 export async function uploadWallpaper(filePath: string): Promise<ApiUserTheme> {
+  assertAuthenticatedRequestAllowed()
+  const revision = captureSessionRevision()
   // #ifdef H5
   if (typeof fetch === 'undefined') throw new Error(t('services.uploadNotSupported'))
   const blob = await (await fetch(filePath)).blob()
@@ -62,17 +64,18 @@ export async function uploadWallpaper(filePath: string): Promise<ApiUserTheme> {
     const headers: Record<string, string> = {}
     const token = getAccessToken()
     if (token) headers.Authorization = `Bearer ${token}`
-    return fetch(resolveUrl(`${API_PREFIX}/me/theme/wallpaper`), {
+    return fetchWithSession(resolveUrl(`${API_PREFIX}/me/theme/wallpaper`), {
       method: 'POST',
       headers,
       body: form,
-    })
+    }, revision)
   }
   let response = await send()
   if (response.status === 401 && (await refreshAccessToken())) {
     response = await send()
   }
   const body = await response.json().catch(() => null)
+  assertSessionRevisionCurrent(revision)
   if (response.status < 200 || response.status >= 300) {
     const detail = (body as { error?: { message?: string } } | null)?.error
     throw new Error(detail?.message || t('services.uploadFailedWithStatus', { status: response.status }))
@@ -133,7 +136,9 @@ export function updateThemeConfig(config: CustomThemeConfig): Promise<ApiUserThe
 
 /** 删除自定义主题（服务端壁纸 + 配置；本地注入样式与缓存一并清理） */
 export async function deleteMyTheme(): Promise<void> {
+  const revision = captureSessionRevision()
   await http.delete<void>(`${API_PREFIX}/me/theme`)
+  assertSessionRevisionCurrent(revision)
   resetCustomTheme()
 }
 
@@ -158,6 +163,7 @@ function toConfig(remote: ApiUserTheme): CustomThemeConfig {
  * 失败（未登录/无壁纸/网络异常）返回 null，不抛错。
  */
 export async function fetchWallpaperObjectUrl(): Promise<string | null> {
+  const revision = captureSessionRevision()
   // #ifdef H5
   try {
     if (typeof document === 'undefined') return null
@@ -165,7 +171,7 @@ export async function fetchWallpaperObjectUrl(): Promise<string | null> {
       const headers: Record<string, string> = {}
       const token = getAccessToken()
       if (token) headers.Authorization = `Bearer ${token}`
-      return fetch(resolveUrl(`${API_PREFIX}/me/theme/wallpaper`), { headers })
+      return fetchWithSession(resolveUrl(`${API_PREFIX}/me/theme/wallpaper`), { headers }, revision)
     }
     let response = await send()
     if (response.status === 401 && (await refreshAccessToken())) {
@@ -173,6 +179,7 @@ export async function fetchWallpaperObjectUrl(): Promise<string | null> {
     }
     if (!response.ok) return null
     const blob = await response.blob()
+    assertSessionRevisionCurrent(revision)
     return URL.createObjectURL(blob)
   } catch {
     return null
@@ -209,10 +216,16 @@ export async function fetchWallpaperObjectUrl(): Promise<string | null> {
  * - 远端停用且本地非 custom：无动作（本地预设选择优先）。
  */
 export async function syncRemoteTheme(): Promise<void> {
+  const revision = captureSessionRevision()
   try {
     const remote = await fetchMyTheme()
+    assertSessionRevisionCurrent(revision)
     if (remote.enabled) {
       const wallpaperUrl = remote.wallpaperUrl ? await fetchWallpaperObjectUrl() : null
+      if (revision !== captureSessionRevision()) {
+        if (wallpaperUrl?.startsWith('blob:')) URL.revokeObjectURL(wallpaperUrl)
+        return
+      }
       applyCustomTheme(toConfig(remote), wallpaperUrl)
     } else if (currentTheme.value === 'custom') {
       applyTheme(DEFAULT_THEME)

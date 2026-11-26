@@ -1,6 +1,6 @@
 import { computed, ref, watch } from 'vue'
 import { API_PREFIX, http } from './http'
-import { currentUser, isAuthenticated } from './session'
+import { currentUser, isAuthenticated } from './session-state'
 import { useCapabilities } from './capabilities'
 import type { ApiCollectionSummary, ApiPageResult } from '@/types/music'
 
@@ -16,6 +16,11 @@ let generation = 0
 let pending: Promise<void> | null = null
 const capabilities = useCapabilities()
 watch(() => [currentUser.value?.id, isAuthenticated.value, capabilities.capabilities.editorialCollections], () => {
+  resetSavedCollections()
+}, { flush: 'sync' })
+
+/** Clear cached collection data and invalidate any fetch/write started in the old scope. */
+export function resetSavedCollections(): void {
   generation++
   pending = null
   savedCollections.value = []
@@ -24,7 +29,7 @@ watch(() => [currentUser.value?.id, isAuthenticated.value, capabilities.capabili
   savedCollectionsError.value = false
   savedCollectionsLoaded.value = false
   savingCollectionIds.value = new Set()
-}, { flush: 'sync' })
+}
 
 /** Fetch every page so detail membership is correct even beyond the first 100. */
 export function loadSavedCollections(force = false): Promise<void> {

@@ -278,21 +278,39 @@ public sealed class SourceDownloadController : ControllerBase
         if (task.Status != ExternalDownloadTaskStatuses.Failed)
             return ApiResults.Error(HttpContext, StatusCodes.Status409Conflict, ErrorCodes.ResourceConflict, "Only failed tasks can be retried.");
 
+        var snapshotAttempt = task.AttemptId;
+        var snapshotUpdatedAt = task.UpdatedAtUtc;
+        var resetTime = DateTime.UtcNow;
         task.Status = ExternalDownloadTaskStatuses.Queued;
         task.ErrorCode = null;
         task.ErrorMessage = null;
         // 手动重试给新一轮完整自动退避额度。
         task.AutoRetryCount = 0;
         task.NextRetryAtUtc = null;
-        task.UpdatedAtUtc = DateTime.UtcNow;
-        // 状态重置 + 审计同一事务提交。
+        task.UpdatedAtUtc = resetTime;
+        task.WorkerId = null;
+        task.AttemptId = null;
+        task.LeaseUntilUtc = null;
+        task.LastHeartbeatAtUtc = null;
+        // 状态重置、审计与待发消息同一事务提交。
+        Guid outboxId;
         await db.Ado.BeginTranAsync();
         try
         {
-            await db.Updateable(task)
-                .UpdateColumns(item => new { item.Status, item.ErrorCode, item.ErrorMessage, item.AutoRetryCount, item.NextRetryAtUtc, item.UpdatedAtUtc })
+            var changed = await db.Updateable(task)
+                .UpdateColumns(item => new { item.Status, item.ErrorCode, item.ErrorMessage, item.AutoRetryCount,
+                    item.NextRetryAtUtc, item.UpdatedAtUtc, item.WorkerId, item.AttemptId, item.LeaseUntilUtc, item.LastHeartbeatAtUtc })
+                .Where(item => item.Id == taskId && item.Status == ExternalDownloadTaskStatuses.Failed
+                    && item.AttemptId == snapshotAttempt && item.UpdatedAtUtc == snapshotUpdatedAt
+                    && (item.LeaseUntilUtc == null || item.LeaseUntilUtc <= resetTime))
                 .ExecuteCommandAsync(cancellationToken);
+            if (changed != 1)
+            {
+                await db.Ado.RollbackTranAsync();
+                return ApiResults.Conflict(HttpContext, "The task changed or is owned by a media worker; reload before retrying.");
+            }
             AdminAudit.Add(HttpContext, db, "source_download.task_retried", "source_download_task", task.Id);
+            outboxId = await MessageOutbox.EnqueueAsync(db, QueueNames.Downloads, task.Id, cancellationToken);
             await db.Ado.CommitTranAsync();
         }
         catch
@@ -300,7 +318,7 @@ public sealed class SourceDownloadController : ControllerBase
             await db.Ado.RollbackTranAsync();
             throw;
         }
-        await messageBus.PublishAsync(QueueNames.Downloads, task.Id, cancellationToken);
+        await MessageOutboxDispatcher.TryDeliverAsync(db, messageBus, outboxId, cancellationToken);
         var hasLyricsByTask = await ResolveHasLyricsAsync(db, [task], cancellationToken);
         return Results.Ok(ToDto(task, hasLyricsByTask.GetValueOrDefault(task.Id)));
     }

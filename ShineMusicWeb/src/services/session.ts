@@ -13,14 +13,20 @@
  * 模块加载时即向 http 层注册 401 刷新处理器，刷新采用单飞 Promise，
  * 多个并发请求遇到 401 时只触发一次 /auth/refresh。
  */
-import { computed, reactive } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import type { ApiAuthTokens, ApiInvitationValidation, ApiMe } from '@/types/music'
 import { t } from '@/locale'
-import { http, setRefreshHandler } from './http'
+import { ApiError, assertSessionRevisionCurrent, captureSessionRevision, http, invalidateSessionRequests, isSessionRevisionCurrent, setRefreshHandler, setSessionRequestGuard } from './http'
 import { syncRemoteTheme } from './user-theme'
 import { clearTokens, getRefreshToken, hasSession, restoreTokens, saveTokens } from './tokens'
 import { clearActivity, hasIdleExpired, markActivity } from './idle-session'
 import { useAdminStore } from '@/stores/admin'
+import { resetLibrary } from './library'
+import { resetMyLibrary } from './user-library'
+import { resetFeedback } from './feedback'
+import { resetNotifications } from './notifications'
+import { resetDailyRecommendations } from './recommend'
+import { applyTheme, currentTheme, DEFAULT_THEME, resetCustomTheme } from './theme'
 
 /**
  * 清空后台访问标签（面包屑）。标签只存在内存中，不持久化，
@@ -38,7 +44,7 @@ interface SessionState {
   /** 当前用户资料；null 表示未登录或尚未加载 */
   user: ApiMe | null
   /** 会话状态机：unknown=启动未判定 / anonymous=匿名 / authenticated=已登录 */
-  status: 'unknown' | 'anonymous' | 'authenticated'
+  status: 'unknown' | 'anonymous' | 'authenticated' | 'unavailable'
 }
 
 const state = reactive<SessionState>({ user: null, status: 'unknown' })
@@ -48,37 +54,100 @@ export const currentUser = computed(() => state.user)
 /** 是否已登录（响应式），用于路由/操作守卫 */
 export const isAuthenticated = computed(() => state.status === 'authenticated')
 /** 当前用户是否具备 admin 角色（响应式；仅控制管理端入口，服务端独立鉴权） */
-export const isAdmin = computed(() => state.user?.roles.includes('admin') ?? false)
+export const isAdmin = computed(() => isAuthenticated.value && (state.user?.roles.includes('admin') ?? false))
 /** 原始会话状态（响应式）：unknown / anonymous / authenticated */
 export const sessionStatus = computed(() => state.status)
+const generation = ref(captureSessionRevision())
+export const sessionGeneration = computed(() => generation.value)
+let restoredTokens = false
+let restoring: { revision: number; promise: Promise<void> } | null = null
+let retryTimer: ReturnType<typeof setTimeout> | null = null
+let retryDelay = 2000
+
+function cancelRetry() {
+  if (retryTimer !== null) clearTimeout(retryTimer)
+  retryTimer = null
+}
+
+function resetPersonalState() {
+  resetAdminBreadcrumbs()
+  resetLibrary()
+  resetMyLibrary()
+  resetFeedback()
+  resetNotifications()
+  resetDailyRecommendations()
+  resetCustomTheme()
+  if (currentTheme.value === 'custom') applyTheme(DEFAULT_THEME)
+}
+
+/** Every local boundary invalidates even anonymous requests and login attempts. */
+export function endSession(): void {
+  generation.value = invalidateSessionRequests()
+  cancelRetry()
+  retryDelay = 2000
+  refreshing = null
+  restoring = null
+  state.user = null
+  state.status = 'anonymous'
+  try { clearTokens() } finally {
+    try { clearActivity() } finally { resetPersonalState() }
+  }
+}
+
+function scheduleRetry() {
+  if (retryTimer !== null || !hasSession()) return
+  retryTimer = setTimeout(() => {
+    retryTimer = null
+    if (state.status !== 'unavailable') return
+    if ((typeof navigator !== 'undefined' && !navigator.onLine) ||
+        (typeof document !== 'undefined' && document.visibilityState === 'hidden')) {
+      scheduleRetry()
+      return
+    }
+    void restoreSession()
+  }, retryDelay)
+  retryDelay = Math.min(retryDelay * 2, 30000)
+}
+
+function suspendSession() {
+  state.user = null
+  state.status = 'unavailable'
+  scheduleRetry()
+}
+
+setSessionRequestGuard(() => state.status === 'authenticated', endSession, suspendSession)
 
 // 401 时自动用 refresh token 续期，避免并发刷新。
-let refreshing: Promise<boolean> | null = null
+let refreshing: { revision: number; promise: Promise<boolean> } | null = null
 setRefreshHandler(() => {
-  if (!refreshing) {
-    refreshing = (async () => {
+  const revision = captureSessionRevision()
+  if (refreshing?.revision === revision) return refreshing.promise
+  const promise = Promise.resolve().then(async () => {
+    assertSessionRevisionCurrent(revision)
+    try {
       const refreshToken = getRefreshToken()
       if (!refreshToken) return false
-      try {
-        const tokens = await http.post<ApiAuthTokens>(
-          '/api/v1/auth/refresh',
-          { refreshToken },
-          false,
-        )
-        saveTokens(tokens.accessToken, tokens.refreshToken)
-        return true
-      } catch {
-        clearTokens()
-        state.user = null
-        state.status = 'anonymous'
-        resetAdminBreadcrumbs()
-        return false
-      } finally {
-        refreshing = null
-      }
-    })()
-  }
-  return refreshing
+      const tokens = await http.post<ApiAuthTokens>(
+        '/api/v1/auth/refresh',
+        { refreshToken },
+        false,
+      )
+      assertSessionRevisionCurrent(revision)
+      saveTokens(tokens.accessToken, tokens.refreshToken)
+      return true
+    } catch (error) {
+      if (!isSessionRevisionCurrent(revision)) throw error
+      if (error instanceof ApiError && error.status === 401) endSession()
+      else suspendSession()
+      // Preserve the refresh error: a network failure must not look like the
+      // original request's 401 to restoreSession or page-level callers.
+      throw error
+    } finally {
+      if (refreshing?.promise === promise) refreshing = null
+    }
+  })
+  refreshing = { revision, promise }
+  return promise
 })
 
 /**
@@ -130,11 +199,15 @@ export async function registerWithInvitation(input: {
  * @returns 成功后状态切换为 authenticated；失败抛出 ApiError（由页面提示）
  */
 export async function login(email: string, password: string) {
+  endSession()
+  restoredTokens = true
+  const revision = captureSessionRevision()
   const tokens = await http.post<ApiAuthTokens>(
     '/api/v1/auth/login',
     { email: email.trim(), password },
     false,
   )
+  assertSessionRevisionCurrent(revision)
   saveTokens(tokens.accessToken, tokens.refreshToken)
   markActivity()
   resetAdminBreadcrumbs()
@@ -150,10 +223,22 @@ export async function login(email: string, password: string) {
  * @throws {ApiError} 令牌无效时抛出 401（上层恢复流程会先尝试刷新一次）
  */
 export async function loadCurrentUser() {
-  const me = await http.get<ApiMe>('/api/v1/me')
-  state.user = me
-  state.status = 'authenticated'
-  return me
+  const revision = captureSessionRevision()
+  try {
+    const me = await http.get<ApiMe>('/api/v1/me')
+    assertSessionRevisionCurrent(revision)
+    state.user = me
+    state.status = 'authenticated'
+    retryDelay = 2000
+    cancelRetry()
+    return me
+  } catch (error) {
+    if (isSessionRevisionCurrent(revision)) {
+      if (error instanceof ApiError && error.status === 401) endSession()
+      else if (hasSession()) suspendSession()
+    }
+    throw error
+  }
 }
 
 /**
@@ -163,15 +248,10 @@ export async function loadCurrentUser() {
  */
 export async function logout() {
   const refreshToken = getRefreshToken()
-  try {
-    if (refreshToken) await http.post('/api/v1/auth/logout', { refreshToken }, false)
-  } finally {
-    clearTokens()
-    clearActivity()
-    state.user = null
-    state.status = 'anonymous'
-    resetAdminBreadcrumbs()
-  }
+  // Local logout completes before any remote request or offline timeout.
+  endSession()
+  // Completion never waits for the network, and never mutates a later login.
+  if (refreshToken) void http.post('/api/v1/auth/logout', { refreshToken }, false).catch(() => undefined)
 }
 
 /**
@@ -179,11 +259,7 @@ export async function logout() {
  * 供 Web 端空闲检查器与路由守卫调用。
  */
 export function expireInactiveSession() {
-  clearTokens()
-  clearActivity()
-  state.user = null
-  state.status = 'anonymous'
-  resetAdminBreadcrumbs()
+  endSession()
 }
 
 /**
@@ -202,30 +278,53 @@ export function enforceIdleTimeout(): boolean {
  * 刷新也失败（refresh token 过期/被吊销）或无凭证时，安全降级为 anonymous。
  * 无抛错：所有异常在函数内消化，保证应用启动不被阻断。
  */
-export async function restoreSession() {
-  restoreTokens()
+export function restoreSession(): Promise<void> {
+  if (!restoredTokens) {
+    restoreTokens()
+    restoredTokens = true
+  }
   // 上次会话若已空闲超时，直接清理本地令牌，不再尝试刷新（否则等同于永久保持登录）。
   if (hasIdleExpired()) {
-    clearTokens()
-    clearActivity()
-    state.user = null
-    state.status = 'anonymous'
-    resetAdminBreadcrumbs()
-    return
+    endSession()
+    return Promise.resolve()
   }
   if (!hasSession()) {
     state.status = 'anonymous'
-    return
+    return Promise.resolve()
   }
-  try {
-    await loadCurrentUser()
-    // 会话恢复成功后同步自定义图片主题（远端启用则应用；失败静默）。
-    void syncRemoteTheme()
-  } catch {
-    clearTokens()
-    state.user = null
-    state.status = 'anonymous'
-    resetAdminBreadcrumbs()
+  if (state.status === 'authenticated') return Promise.resolve()
+  const revision = captureSessionRevision()
+  if (restoring?.revision === revision) return restoring.promise
+  const promise = Promise.resolve().then(async () => {
+    try {
+      assertSessionRevisionCurrent(revision)
+      await loadCurrentUser()
+      assertSessionRevisionCurrent(revision)
+      void syncRemoteTheme()
+    } catch { /* loadCurrentUser distinguishes invalid credentials from outages. */ }
+    finally { if (restoring?.promise === promise) restoring = null }
+  })
+  restoring = { revision, promise }
+  return promise
+}
+
+/** Retry retained credentials on network recovery or a return to the tab. */
+export function startSessionRecovery(): () => void {
+  if (typeof window === 'undefined') return () => {}
+  const retry = () => {
+    if (state.status !== 'unavailable') return
+    cancelRetry()
+    void restoreSession()
+  }
+  const visible = () => { if (document.visibilityState === 'visible') retry() }
+  window.addEventListener('online', retry)
+  window.addEventListener('focus', retry)
+  document.addEventListener('visibilitychange', visible)
+  return () => {
+    cancelRetry()
+    window.removeEventListener('online', retry)
+    window.removeEventListener('focus', retry)
+    document.removeEventListener('visibilitychange', visible)
   }
 }
 

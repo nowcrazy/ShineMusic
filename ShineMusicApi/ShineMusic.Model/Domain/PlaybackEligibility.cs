@@ -15,7 +15,7 @@ public static class PlaybackEligibility
         !anonymousPlaybackEnabled && !isAuthenticated;
 
     /// <summary>
-    /// 已公开曲目任何人可播；未公开（私有）曲目仅管理员或上传者本人可播，
+    /// 已公开曲目任何人可播；未公开（私有）曲目仅上传者本人可播，
     /// 其他人按 404 处理以不暴露资源存在性。
     /// </summary>
     public static bool CanAccess(
@@ -25,7 +25,6 @@ public static class PlaybackEligibility
         Guid? currentUserId)
     {
         if (publishedAt is not null) return true;
-        if (isAdmin) return true;
         return ownerUserId is not null && currentUserId is not null && ownerUserId.Value == currentUserId.Value;
     }
 }

@@ -22,7 +22,7 @@ public static class ClientInfo
         return (clientType, deviceInfo);
     }
 
-    /// <summary>取客户端真实 IP（优先 IPv4）。委托给 ShineMusic.Common.ClientIp 统一实现。</summary>
+    /// <summary>取本次请求实际使用的源 IP。委托给 ShineMusic.Common.ClientIp 统一实现。</summary>
     public static string ResolveIp(HttpContext context) => ShineMusic.Common.ClientIp.Resolve(context);
 
     private static string InferClientType(string ua)

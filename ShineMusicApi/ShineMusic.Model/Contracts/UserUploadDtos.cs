@@ -61,6 +61,30 @@ public sealed record UserUploadResponseDto(
     IReadOnlyList<QueuedUploadDto> Queued,
     IReadOnlyList<RejectedUploadDto> Rejected);
 
+/// <summary>当前用户上传批次的处理进度；接收文件成功不代表音频已完成入库。</summary>
+/// <param name="Id">上传批次标识。</param>
+/// <param name="Status">批次处理状态。</param>
+/// <param name="Items">本批次用户上传文件的逐项处理结果。</param>
+/// <param name="CreatedAt">上传时间（UTC）。</param>
+public sealed record UserUploadBatchDto(Guid Id, string Status, IReadOnlyList<UserUploadItemDto> Items, DateTime CreatedAt);
+
+/// <summary>上传文件当前阶段、可播放曲目标识与安全的失败原因。</summary>
+/// <param name="ItemId">上传条目标识。</param>
+/// <param name="DisplayName">原始文件展示名。</param>
+/// <param name="Status">排队、校验、解析、转码、已入库或失败状态。</param>
+/// <param name="TrackId">入库后可播放的曲目标识；尚未入库时为 null。</param>
+/// <param name="ErrorCode">失败错误码；正常处理时为 null。</param>
+/// <param name="ErrorMessage">安全的可读失败原因，不含服务器路径或工具输出。</param>
+/// <param name="UpdatedAt">最近处理时间（UTC）。</param>
+public sealed record UserUploadItemDto(
+    Guid ItemId,
+    string DisplayName,
+    string Status,
+    Guid? TrackId,
+    string? ErrorCode,
+    string? ErrorMessage,
+    DateTime UpdatedAt);
+
 /// <summary>批量加入曲库请求：预检命中公共曲库的歌曲可直接引用，无需上传文件。</summary>
 public sealed record AddToLibraryRequestDto(IReadOnlyList<Guid> TrackIds);
 

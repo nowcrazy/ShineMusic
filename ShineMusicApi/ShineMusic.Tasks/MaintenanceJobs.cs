@@ -17,6 +17,7 @@ using Microsoft.Extensions.Options;
 using ShineMusic.Model.Entities;
 using ShineMusic.Model.Options;
 using ShineMusic.Service;
+using ShineMusic.Service.Media;
 using ShineMusic.Service.Messaging;
 using ShineMusic.Service.SourceDownload;
 using SqlSugar;
@@ -229,6 +230,17 @@ public sealed class LibraryImportRetrySweepService(
         => services.GetRequiredService<LibraryImportRetrySweepJob>().SweepAsync(cancellationToken);
 }
 
+/// <summary>Library candidate expiry and reference-safe recycle retention sweep.</summary>
+public sealed class LibraryWorkflowSweepService(
+    IServiceScopeFactory scopeFactory,
+    ILogger<LibraryWorkflowSweepService> logger) : PeriodicJobService(scopeFactory, logger)
+{
+    protected override TimeSpan Interval => TimeSpan.FromHours(1);
+
+    protected override Task RunOnceAsync(IServiceProvider services, CancellationToken cancellationToken)
+        => services.GetRequiredService<UserLibraryWorkflowService>().SweepAsync(cancellationToken);
+}
+
 /// <summary>下载重试重扫定时器：每 15 秒一轮（退避精度要求最高的链路）。</summary>
 public sealed class SourceDownloadRetrySweepService(
     IServiceScopeFactory scopeFactory,
@@ -243,60 +255,16 @@ public sealed class SourceDownloadRetrySweepService(
 }
 
 /// <summary>
-/// 队列引导装配：应用启动、SqlSugar CodeFirst 建表完成后调用。
-/// 恢复中断任务：导入流水线中间态重置重新投递；下载任务 downloading→queued 重置，
-/// 到期任务立即投递，带未来重试点的任务交给 15s 重扫定时器到点投递。
+/// 旧队列引导入口的兼容装配。仅回收过期租约，禁止无条件重置处理中任务。
+/// 新宿主由媒体组 MediaQueueRecoveryService 在启动和运行期间恢复任务。
 /// </summary>
 public static class QueueBootstrap
 {
-    /// <summary>恢复中断任务并投递到 RabbitMQ。需在建表完成后调用（队列与业务表共用同一库）。</summary>
+    /// <summary>Compatibility entry point; media startup and periodic scans use the same lease-aware recovery.</summary>
     public static async Task InitializeAsync(IServiceProvider services, CancellationToken cancellationToken = default)
     {
-        using var scope = services.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<ISqlSugarClient>();
-        var messageBus = scope.ServiceProvider.GetRequiredService<IRabbitMessageBus>();
-        var logger = scope.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("Queue.Bootstrap");
-
-        // ===== 1) 曲库导入流水线恢复 =====
-        // 中间状态（进程重启时可能卡在处理中）重置为 Uploaded（待重新处理），并重置转码子状态为 queued。
-        var retryableStatuses = new[]
-        {
-            LibraryImportItemStatuses.Validating,
-            LibraryImportItemStatuses.ParsingMetadata,
-            LibraryImportItemStatuses.Transcoding
-        };
-        await db.Updateable<LibraryImportItem>()
-            .SetColumns(item => item.Status == LibraryImportItemStatuses.Uploaded)
-            .SetColumns(item => item.TranscodeStatus == "queued")
-            .Where(item => retryableStatuses.Contains(item.Status))
-            .ExecuteCommandAsync(cancellationToken);
-        var queuedItemIds = await db.Queryable<LibraryImportItem>()
-            .Where(item => item.Status == LibraryImportItemStatuses.Uploaded)
-            .Select(item => item.Id)
-            .ToListAsync(cancellationToken);
-        foreach (var itemId in queuedItemIds)
-            await messageBus.PublishAsync(QueueNames.Imports, itemId, cancellationToken);
-        if (queuedItemIds.Count > 0)
-            logger.LogInformation("Recovered {Count} queued library import item(s).", queuedItemIds.Count);
-
-        // ===== 2) 外部音源下载任务恢复 =====
-        // downloading 重置为 queued（下载文件不可续传，整体重来）。
-        await db.Updateable<ExternalDownloadTask>()
-            .SetColumns(task => task.Status == ExternalDownloadTaskStatuses.Queued)
-            .SetColumns(task => task.NextRetryAtUtc == (DateTime?)null)
-            .SetColumns(task => task.UpdatedAtUtc == DateTime.UtcNow)
-            .Where(task => task.Status == ExternalDownloadTaskStatuses.Downloading)
-            .ExecuteCommandAsync(cancellationToken);
-        // 已到期的排队任务立即投递；带未来重试点的任务由 15s 重扫定时器到点投递。
-        var now = DateTime.UtcNow;
-        var dueTaskIds = await db.Queryable<ExternalDownloadTask>()
-            .Where(task => task.Status == ExternalDownloadTaskStatuses.Queued
-                && (task.NextRetryAtUtc == null || task.NextRetryAtUtc <= now))
-            .Select(task => task.Id)
-            .ToListAsync(cancellationToken);
-        foreach (var taskId in dueTaskIds)
-            await messageBus.PublishAsync(QueueNames.Downloads, taskId, cancellationToken);
-        if (dueTaskIds.Count > 0)
-            logger.LogInformation("Recovered {Count} queued source download task(s).", dueTaskIds.Count);
+        await using var scope = services.CreateAsyncScope();
+        await scope.ServiceProvider.GetRequiredService<ShineMusic.Service.Media.MediaQueueRecoveryJob>()
+            .RecoverAsync(includeQueued: true, cancellationToken);
     }
 }

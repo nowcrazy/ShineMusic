@@ -22,7 +22,7 @@ import type {
   ApiUserLibraryItem,
   ApiUserUploadResponse,
 } from '@/types/music'
-import { API_PREFIX, http, resolveUrl } from './http'
+import { API_PREFIX, assertAuthenticatedRequestAllowed, assertSessionRevisionCurrent, captureSessionRevision, http, isSessionRevisionCurrent, resolveUrl } from './http'
 import { getAccessToken } from './tokens'
 import { t } from '@/locale'
 
@@ -59,7 +59,9 @@ export async function precheckUploads(files: ApiPrecheckRequest['files']): Promi
 export function uploadFiles(
   files: Array<{ path: string; name: string }>,
 ): Promise<ApiUserUploadResponse> {
+  const revision = captureSessionRevision()
   return new Promise((resolve, reject) => {
+    assertAuthenticatedRequestAllowed()
     const token = getAccessToken()
     const header: Record<string, string> = {}
     if (token) header.Authorization = `Bearer ${token}`
@@ -70,6 +72,7 @@ export function uploadFiles(
       header,
       success: (res) => {
         try {
+          assertSessionRevisionCurrent(revision)
           const body = typeof res.data === 'string' ? JSON.parse(res.data) : res.data
           if (res.statusCode < 200 || res.statusCode >= 300) {
             const detail = (body as { error?: { message?: string } })?.error
@@ -81,7 +84,10 @@ export function uploadFiles(
           reject(new Error(error instanceof Error ? error.message : t('catalogErrors.uploadResponseParseFailed')))
         }
       },
-      fail: (err) => reject(new Error(err.errMsg || t('catalogErrors.uploadFailed'))),
+      fail: (err) => {
+        try { assertSessionRevisionCurrent(revision) } catch (error) { reject(error); return }
+        reject(new Error(err.errMsg || t('catalogErrors.uploadFailed')))
+      },
     })
   })
 }
@@ -107,7 +113,9 @@ export async function addToLibrary(trackIds: string[]) {
  * @throws 网络或后端错误
  */
 export async function loadMyLibrary(force = false) {
+  assertAuthenticatedRequestAllowed()
   if ((myLibraryLoaded.value || myLibraryLoading.value) && !force) return
+  const revision = captureSessionRevision()
   myLibraryLoading.value = true
   try {
     const result = await http.get<{
@@ -116,10 +124,11 @@ export async function loadMyLibrary(force = false) {
       pageSize: number
       total: number
     }>(`${API_PREFIX}/me/library?pageSize=200`)
+    assertSessionRevisionCurrent(revision)
     myLibraryItems.value = result.items
     myLibraryLoaded.value = true
   } finally {
-    myLibraryLoading.value = false
+    if (isSessionRevisionCurrent(revision)) myLibraryLoading.value = false
   }
 }
 
@@ -131,7 +140,9 @@ export async function loadMyLibrary(force = false) {
  * @throws 网络或后端错误
  */
 export async function removeFromLibrary(trackId: string) {
+  const revision = captureSessionRevision()
   await http.delete(`${API_PREFIX}/me/library/${trackId}`)
+  assertSessionRevisionCurrent(revision)
   myLibraryItems.value = myLibraryItems.value.filter((item) => item.trackId !== trackId)
 }
 
@@ -143,6 +154,7 @@ export async function removeFromLibrary(trackId: string) {
 export function resetMyLibrary() {
   myLibraryItems.value = []
   myLibraryLoaded.value = false
+  myLibraryLoading.value = false
 }
 
 /**

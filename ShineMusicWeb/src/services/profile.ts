@@ -13,7 +13,7 @@
  * 用户资料（loadCurrentUser）以刷新全局状态（抽屉头像、资料页头像同步更新）。
  */
 import { getAccessToken } from './tokens'
-import { API_PREFIX, http, refreshAccessToken, resolveUrl } from './http'
+import { API_PREFIX, assertAuthenticatedRequestAllowed, assertSessionRevisionCurrent, captureSessionRevision, fetchWithSession, http, refreshAccessToken, resolveUrl } from './http'
 import { t } from '@/locale'
 import type { ApiMe } from '@/types/music'
 
@@ -31,6 +31,8 @@ export function updateDisplayName(displayName: string): Promise<ApiMe> {
  * 否则访问令牌过期时上传会静默失败。
  */
 export async function uploadAvatar(filePath: string): Promise<{ avatarUrl: string }> {
+  assertAuthenticatedRequestAllowed()
+  const revision = captureSessionRevision()
   // #ifdef H5
   // H5 端走 fetch + FormData：压缩产物是 blob URL，uni.uploadFile 对 blob 路径兼容性不稳
   const blob = await (await fetch(filePath)).blob()
@@ -40,11 +42,12 @@ export async function uploadAvatar(filePath: string): Promise<{ avatarUrl: strin
     const headers: Record<string, string> = {}
     const token = getAccessToken()
     if (token) headers.Authorization = `Bearer ${token}`
-    return fetch(resolveUrl(`${API_PREFIX}/me/avatar`), { method: 'POST', headers, body: form })
+    return fetchWithSession(resolveUrl(`${API_PREFIX}/me/avatar`), { method: 'POST', headers, body: form }, revision)
   }
   let response = await send()
   if (response.status === 401 && (await refreshAccessToken())) response = await send()
   const body = await response.json().catch(() => null)
+  assertSessionRevisionCurrent(revision)
   if (response.status < 200 || response.status >= 300) {
     const detail = (body as { error?: { message?: string } } | null)?.error
     throw new Error(detail?.message || t('services.uploadFailedWithStatus', { status: response.status }))

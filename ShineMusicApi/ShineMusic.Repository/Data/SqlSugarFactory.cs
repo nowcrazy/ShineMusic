@@ -9,7 +9,8 @@
 // - IsNoReadXmlDescription=true：禁止 CodeFirst 读取程序集 XML 注释生成列备注——
 //   该特性的 PG 备注 SQL 会把列名转小写（"Id"→"id"），与 snake_case 列名冲突直接崩溃；
 // - PostgreSQL 下 Guid→uuid、DateTimeOffset→timestamptz 均为驱动原生映射；
-// - Aop.OnLogExecuting 把每条实际执行的 SQL 写入 "DataExecution" category（logs/data），日志失败绝不影响数据库操作。
+// - Aop.OnLogExecuting 把参数化 SQL 与参数名写入 "DataExecution" category（logs/data），不读取参数值。
+//   原始 SQL 内联字面量不在此处解析；调用方仍应使用参数化 SQL。日志失败绝不影响数据库操作。
 
 using System.Text;
 using Microsoft.Extensions.Logging;
@@ -54,7 +55,8 @@ public static class SqlSugarFactory
                     // DTO 再贴 UTC 标签就整体偏移 8 小时。每次执行前关闭该开关，读取即返回 Kind=Utc。
                     // 写入侧则要求 DateTime 必须为 Utc（Npgsql 6+ 规范），全项目时间统一用 UtcNow。
                     AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", false);
-                    logger.LogInformation("SQL | {CommandText} | Params: {Params}", sql, SummarizeParameters(parameters));
+                    if (logger.IsEnabled(LogLevel.Information))
+                        logger.LogInformation("SQL | {CommandText} | ParameterNames: {ParameterNames}", sql, SummarizeParameterNames(parameters));
                 }
                 catch
                 {
@@ -64,7 +66,7 @@ public static class SqlSugarFactory
         });
     }
 
-    private static string SummarizeParameters(SugarParameter[]? parameters)
+    private static string SummarizeParameterNames(SugarParameter[]? parameters)
     {
         if (parameters is null || parameters.Length == 0)
             return "(none)";
@@ -73,10 +75,7 @@ public static class SqlSugarFactory
         {
             if (builder.Length > 0)
                 builder.Append("; ");
-            var value = parameter.Value?.ToString() ?? "NULL";
-            if (value.Length > 64)
-                value = string.Concat(value.AsSpan(0, 64), "...");
-            builder.Append(parameter.ParameterName).Append('=').Append(value);
+            builder.Append(parameter.ParameterName);
         }
         return builder.ToString();
     }

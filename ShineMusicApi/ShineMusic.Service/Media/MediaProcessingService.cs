@@ -11,6 +11,7 @@
 
 using System.Diagnostics;
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -41,6 +42,7 @@ public sealed class MediaProcessingException(string code, string message) : Exce
 /// <param name="SampleRateHz">采样率（Hz）；Phase 3 新增，探测失败时为 null。</param>
 /// <param name="BitsPerSample">无损位深；Phase 3 新增，优先取 bits_per_raw_sample，回退 bits_per_sample。</param>
 /// <param name="Channels">声道数；Phase 3 新增，探测失败时为 null。</param>
+/// <param name="CodecProfile">编码配置，例如 AAC LC；探测失败时为 null。</param>
 /// <remarks>
 /// 后三个参数是 V2 Phase 3 为 AudioValidator 追加的，带默认值以保全既有 5 参数构造
 /// （MediaTranscoderAdapter / LibraryImportJob / SourceDownloadJob 无需改动）。
@@ -53,7 +55,8 @@ public sealed record ProbedMedia(
     string FormatNames,
     int? SampleRateHz = null,
     int? BitsPerSample = null,
-    int? Channels = null);
+    int? Channels = null,
+    string? CodecProfile = null);
 
 /// <summary>
 /// TagLib# 解析得到的音频元数据。
@@ -97,10 +100,85 @@ public sealed class FfmpegMediaService(IOptions<FfmpegOptions> options, ILogger<
     private readonly ILogger<FfmpegMediaService> _logger = logger;
 
     /// <summary>Decode every audio frame without creating a second lossy file.</summary>
-    public Task ValidateCompleteAsync(string path, CancellationToken cancellationToken) =>
-        RunForExitAsync(_options.ExecutablePath,
-            ["-nostdin", "-hide_banner", "-v", "error", "-xerror", "-i", path,
-             "-map", "0:a:0", "-f", "null", "-"], cancellationToken, $"validate {path}");
+    public async Task ValidateCompleteAsync(string path, CancellationToken cancellationToken)
+    {
+        var integrity = await ReadFlacIntegrityAsync(path, cancellationToken);
+        if (integrity is null)
+        {
+            await RunForExitAsync(_options.ExecutablePath,
+                ["-nostdin", "-hide_banner", "-v", "error", "-xerror", "-i", path,
+                 "-map", "0:a:0", "-f", "null", "-"], cancellationToken, $"validate {path}", classifyCorruptInput: true);
+            return;
+        }
+
+        DecodedIntegrity decoded;
+        try
+        {
+            // Verify the count even when ffmpeg exits successfully: a FLAC truncated exactly
+            // between frames may produce no decoder error while still missing promised samples.
+            decoded = await DecodeFlacIntegrityAsync(path, integrity, strict: true, cancellationToken);
+        }
+        catch (MediaProcessingException exception) when (exception.Code == ErrorCodes.MediaCorrupt)
+        {
+            // Some FLAC producers append non-audio bytes after the last frame. ffmpeg reports
+            // them as broken frames even when every original PCM sample is intact. Only an
+            // exact STREAMINFO sample count AND PCM MD5 can safely distinguish this case.
+            decoded = await DecodeFlacIntegrityAsync(path, integrity, strict: false, cancellationToken);
+        }
+        if (decoded.SampleBytes != integrity.SampleBytes ||
+            !CryptographicOperations.FixedTimeEquals(decoded.Md5, integrity.Md5))
+            throw new MediaProcessingException(ErrorCodes.MediaCorrupt, ImportFormatting.SafeErrorMessage(ErrorCodes.MediaCorrupt));
+    }
+
+    private sealed record FlacIntegrity(int BitsPerSample, int Channels, long SampleBytes, byte[] Md5);
+    private sealed record DecodedIntegrity(long SampleBytes, byte[] Md5);
+
+    private static async Task<FlacIntegrity?> ReadFlacIntegrityAsync(string path, CancellationToken cancellationToken)
+    {
+        // Native FLAC starts with fLaC and a mandatory 34-byte STREAMINFO metadata block.
+        // Unusual headers, unsupported bit depths and unspecified checksums retain strict validation.
+        await using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        var header = new byte[42];
+        if (await input.ReadAtLeastAsync(header, header.Length, throwOnEndOfStream: false, cancellationToken) != header.Length ||
+            !header.AsSpan(0, 4).SequenceEqual("fLaC"u8) || (header[4] & 0x7f) != 0 ||
+            header[5] != 0 || header[6] != 0 || header[7] != 34)
+            return null;
+        var channels = ((header[20] >> 1) & 7) + 1;
+        var bits = (((header[20] & 1) << 4) | (header[21] >> 4)) + 1;
+        var samples = ((long)(header[21] & 15) << 32) | ((long)header[22] << 24) |
+            ((long)header[23] << 16) | ((long)header[24] << 8) | header[25];
+        var md5 = header.AsSpan(26, 16).ToArray();
+        if (bits is not (16 or 24 or 32) || samples <= 0 || md5.All(value => value == 0))
+            return null;
+        return new FlacIntegrity(bits, channels, checked(samples * channels * (bits / 8)), md5);
+    }
+
+    private async Task<DecodedIntegrity> DecodeFlacIntegrityAsync(string path, FlacIntegrity integrity, bool strict, CancellationToken cancellationToken)
+    {
+        var pcmFormat = $"s{integrity.BitsPerSample}le";
+        List<string> arguments = ["-nostdin", "-hide_banner", "-v", "error"];
+        if (strict) arguments.Add("-xerror");
+        arguments.AddRange(["-i", path, "-map", "0:a:0", "-vn", "-c:a", "pcm_" + pcmFormat, "-f", pcmFormat, "-"]);
+        var result = await RunProcessAsync(_options.ExecutablePath,
+            arguments,
+            captureOutput: false, cancellationToken, $"verify FLAC PCM {path}", ErrorCodes.MediaParseFailed,
+            classifyCorruptInput: true,
+            consumeOutput: async (stream, token) =>
+            {
+                using var hash = IncrementalHash.CreateHash(HashAlgorithmName.MD5);
+                var buffer = new byte[81920];
+                long bytes = 0;
+                int read;
+                while ((read = await stream.ReadAsync(buffer, token)) > 0)
+                {
+                    hash.AppendData(buffer, 0, read);
+                    bytes += read;
+                }
+                return new DecodedIntegrity(bytes, hash.GetHashAndReset());
+            }, allowDecodeFailureWithOutput: !strict);
+        return result.Decoded!;
+    }
 
     /// <summary>
     /// 使用 ffprobe 探测指定音频文件的容器、编码器、比特率与时长。
@@ -115,7 +193,7 @@ public sealed class FfmpegMediaService(IOptions<FfmpegOptions> options, ILogger<
         var json = await RunAsync(
             _options.ProbeExecutablePath,
             ["-v", "error", "-show_entries", "format=format_name,duration,bit_rate,size",
-             "-show_entries", "stream=codec_type,codec_name,bit_rate,sample_rate,bits_per_raw_sample,bits_per_sample,channels",
+             "-show_entries", "stream=index,codec_type,codec_name,profile,bit_rate,sample_rate,bits_per_raw_sample,bits_per_sample,channels",
              "-of", "json", sourcePath],
             cancellationToken,
             $"probe {sourcePath}");
@@ -135,6 +213,7 @@ public sealed class FfmpegMediaService(IOptions<FfmpegOptions> options, ILogger<
             var audioStream = streams.EnumerateArray().First(stream =>
                 stream.TryGetProperty("codec_type", out var type) && type.GetString() == "audio");
             var codec = ReadString(audioStream, "codec_name") ?? "unknown";
+            var codecProfile = ReadString(audioStream, "profile");
             var format = root.TryGetProperty("format", out var formatElement) ? formatElement : default;
             var formatNames = ReadString(format, "format_name") ?? "unknown";
             // 将 ffprobe 的原始容器名归一化为系统内部使用的统一标识。
@@ -145,6 +224,14 @@ public sealed class FfmpegMediaService(IOptions<FfmpegOptions> options, ILogger<
             if (ShineMusic.Model.Domain.AudioAdmissionPolicy.IsLosslessCodec(codec))
                 bitrate ??= ParseLong(ReadString(format, "bit_rate"));
             var duration = ParseDouble(ReadString(format, "duration"));
+            // Opus and Vorbis frequently omit stream.bit_rate. Sum only compressed audio packets;
+            // container bytes may include artwork, tags, other streams and cannot establish quality.
+            if ((bitrate is null or <= 0) && codec.ToLowerInvariant() is ("opus" or "vorbis"))
+            {
+                var packetStats = await ReadAudioPacketStatisticsAsync(sourcePath, cancellationToken);
+                if (packetStats.Bytes > 0 && packetStats.DurationSeconds > 0)
+                    bitrate = checked((long)Math.Round(packetStats.Bytes * 8.0 / packetStats.DurationSeconds, MidpointRounding.AwayFromZero));
+            }
             // Phase 3：ffprobe 对 FLAC 通常给 bits_per_raw_sample（16/24），部分版本给 bits_per_sample。
             // 两者都取，优先 raw；非正数（部分容器回填 0）视为缺失，避免把「未知」误判成不达标。
             var bitsPerSample = PositiveOrNull(ParseLong(ReadString(audioStream, "bits_per_raw_sample")))
@@ -161,13 +248,47 @@ public sealed class FfmpegMediaService(IOptions<FfmpegOptions> options, ILogger<
                 formatNames,
                 sampleRate.HasValue ? (int)Math.Clamp(sampleRate.Value, 1, int.MaxValue) : null,
                 bitsPerSample.HasValue ? (int)Math.Clamp(bitsPerSample.Value, 1, int.MaxValue) : null,
-                channels.HasValue ? (int)Math.Clamp(channels.Value, 1, int.MaxValue) : null);
+                channels.HasValue ? (int)Math.Clamp(channels.Value, 1, int.MaxValue) : null,
+                codecProfile);
         }
         catch (JsonException exception)
         {
             _logger.LogError(exception, "ffprobe returned unparseable metadata for {Source}.", sourcePath);
             throw new MediaProcessingException(ErrorCodes.MediaParseFailed, $"ffprobe returned invalid metadata: {exception.Message}");
         }
+    }
+
+    private async Task<AudioPacketStatistics> ReadAudioPacketStatisticsAsync(string sourcePath, CancellationToken cancellationToken)
+    {
+        AudioPacketStatistics? statistics = null;
+        await RunProcessAsync(_options.ProbeExecutablePath,
+            ["-v", "error", "-select_streams", "a:0", "-show_packets", "-show_entries", "packet=size,duration_time",
+             "-of", "compact=p=0:nk=0", sourcePath],
+            captureOutput: false, cancellationToken, $"measure audio packets {sourcePath}",
+            consumeTextOutput: async (reader, token) =>
+            {
+                long bytes = 0;
+                double seconds = 0;
+                string? line;
+                while ((line = await reader.ReadLineAsync(token)) is not null)
+                {
+                    token.ThrowIfCancellationRequested();
+                    long? size = null;
+                    double? duration = null;
+                    foreach (var field in line.Split('|'))
+                    {
+                        if (field.StartsWith("size=", StringComparison.Ordinal)) size = ParseLong(field[5..]);
+                        else if (field.StartsWith("duration_time=", StringComparison.Ordinal)) duration = ParseDouble(field[14..]);
+                    }
+                    if (size is > 0 && duration is > 0 && double.IsFinite(duration.Value))
+                    {
+                        bytes = checked(bytes + size.Value);
+                        seconds += duration.Value;
+                    }
+                }
+                statistics = new AudioPacketStatistics(bytes, seconds);
+            });
+        return statistics ?? new AudioPacketStatistics(0, 0);
     }
 
     /// <summary>
@@ -187,7 +308,7 @@ public sealed class FfmpegMediaService(IOptions<FfmpegOptions> options, ILogger<
             _options.ExecutablePath,
             ["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", sourcePath, "-map", "0:a:0", "-vn", "-c:a", "aac", "-b:a", $"{bitrateKbps}k", "-movflags", "+faststart", destinationPath],
             cancellationToken,
-            $"transcode {sourcePath} -> {destinationPath}");
+            $"transcode {sourcePath} -> {destinationPath}", ErrorCodes.TranscodeFailed);
     }
 
     /// <summary>
@@ -202,9 +323,10 @@ public sealed class FfmpegMediaService(IOptions<FfmpegOptions> options, ILogger<
     /// <summary>
     /// 运行外部进程，仅等待其退出，不捕获标准输出（用于转码等不需要输出的场景）。
     /// </summary>
-    private async Task RunForExitAsync(string executable, IReadOnlyList<string> arguments, CancellationToken cancellationToken, string? operationLabel = null)
+    private async Task RunForExitAsync(string executable, IReadOnlyList<string> arguments, CancellationToken cancellationToken,
+        string? operationLabel = null, string failureCode = ErrorCodes.MediaParseFailed, bool classifyCorruptInput = false)
     {
-        await RunProcessAsync(executable, arguments, captureOutput: false, cancellationToken, operationLabel);
+        await RunProcessAsync(executable, arguments, captureOutput: false, cancellationToken, operationLabel, failureCode, classifyCorruptInput);
     }
 
     /// <summary>
@@ -215,7 +337,12 @@ public sealed class FfmpegMediaService(IOptions<FfmpegOptions> options, ILogger<
         IReadOnlyList<string> arguments,
         bool captureOutput,
         CancellationToken cancellationToken,
-        string? operationLabel = null)
+        string? operationLabel = null,
+        string failureCode = ErrorCodes.MediaParseFailed,
+        bool classifyCorruptInput = false,
+        Func<Stream, CancellationToken, Task<DecodedIntegrity>>? consumeOutput = null,
+        bool allowDecodeFailureWithOutput = false,
+        Func<StreamReader, CancellationToken, Task>? consumeTextOutput = null)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -245,20 +372,30 @@ public sealed class FfmpegMediaService(IOptions<FfmpegOptions> options, ILogger<
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromMinutes(Math.Clamp(_options.TimeoutMinutes, 1, 120)));
         var outputTask = captureOutput ? process.StandardOutput.ReadToEndAsync(timeout.Token) : Task.FromResult(string.Empty);
+        var decodedTask = consumeOutput?.Invoke(process.StandardOutput.BaseStream, timeout.Token);
+        var textOutputTask = consumeTextOutput?.Invoke(process.StandardOutput, timeout.Token);
         var errorTask = process.StandardError.ReadToEndAsync(timeout.Token);
         try
         {
             await process.WaitForExitAsync(timeout.Token);
             var standardOutput = await outputTask;
             var standardError = await errorTask;
+            var decoded = decodedTask is null ? null : await decodedTask;
+            if (textOutputTask is not null) await textOutputTask;
             // 非零退出码视为处理失败，使用 stderr 内容作为错误信息。
             if (process.ExitCode != 0)
             {
                 var detail = string.IsNullOrWhiteSpace(standardError) ? "The media processor rejected the file." : standardError.Trim();
+                if (allowDecodeFailureWithOutput && IsCorruptAudioDiagnostic(standardError))
+                    return new ProcessResult(standardOutput, standardError, decoded);
                 _logger.LogError("Media processing failed ({Operation}): {Detail}", operationLabel ?? executable, detail);
-                throw new MediaProcessingException(ErrorCodes.MediaParseFailed, detail);
+                // Only decoder diagnostics prove a permanent input failure. Storage, permissions,
+                // unavailable codecs and process configuration errors remain eligible for retry.
+                var code = classifyCorruptInput && IsCorruptAudioDiagnostic(standardError)
+                    ? ErrorCodes.MediaCorrupt : failureCode;
+                throw new MediaProcessingException(code, detail);
             }
-            return new ProcessResult(standardOutput, standardError);
+            return new ProcessResult(standardOutput, standardError, decoded);
         }
         catch (OperationCanceledException)
         {
@@ -277,6 +414,11 @@ public sealed class FfmpegMediaService(IOptions<FfmpegOptions> options, ILogger<
             throw new MediaProcessingException("media_processing_timeout", "Media processing exceeded the configured timeout.");
         }
     }
+
+    internal static bool IsCorruptAudioDiagnostic(string diagnostic) =>
+        new[] { "invalid sync code", "invalid frame header", "decode_frame() failed",
+            "error while decoding", "corrupt decoded frame", "packet corrupt", "crc mismatch" }
+            .Any(marker => diagnostic.Contains(marker, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// 从 JSON 元素中安全读取字符串属性。
@@ -324,7 +466,8 @@ public sealed class FfmpegMediaService(IOptions<FfmpegOptions> options, ILogger<
     /// <summary>
     /// 外部进程执行结果，包含标准输出与标准错误。
     /// </summary>
-    private sealed record ProcessResult(string StandardOutput, string StandardError);
+    private sealed record ProcessResult(string StandardOutput, string StandardError, DecodedIntegrity? Decoded = null);
+    private sealed record AudioPacketStatistics(long Bytes, double DurationSeconds);
 }
 
 /// <summary>
@@ -339,8 +482,9 @@ public sealed class AudioMetadataParser(QuarantineStoragePaths storagePaths)
     /// </summary>
     /// <param name="sourcePath">源文件绝对路径（位于隔离存储区）。</param>
     /// <param name="itemId">导入项 ID，用于生成封面存储键。</param>
+    /// <param name="attemptId">后台执行代次，避免恢复任务的封面路径互相覆盖。</param>
     /// <returns>解析后的元数据；解析失败时返回带 metadata_parse_failed 告警的空对象。</returns>
-    public ParsedAudioMetadata Parse(string sourcePath, Guid itemId)
+    public ParsedAudioMetadata Parse(string sourcePath, Guid itemId, Guid? attemptId = null)
     {
         try
         {
@@ -351,7 +495,7 @@ public sealed class AudioMetadataParser(QuarantineStoragePaths storagePaths)
             var artists = (tag.Performers ?? []).Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             var genres = (tag.Genres ?? []).Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             // 提取并保存封面到隔离存储区。
-            var artworkStorageKey = SaveArtwork(tag.Pictures, itemId);
+            var artworkStorageKey = SaveArtwork(tag.Pictures, itemId, attemptId);
             var warnings = new List<string>();
             // 收集非致命告警：缺少标题或艺术家。
             if (string.IsNullOrWhiteSpace(tag.Title)) warnings.Add("missing_title");
@@ -391,8 +535,9 @@ public sealed class AudioMetadataParser(QuarantineStoragePaths storagePaths)
     /// </summary>
     /// <param name="pictures">TagLib# 解析出的内嵌图片数组。</param>
     /// <param name="itemId">导入项 ID，用于生成唯一存储键。</param>
+    /// <param name="attemptId">后台执行代次；未提供时兼容旧调用的存储键。</param>
     /// <returns>封面存储键；无合法封面时返回 null。</returns>
-    private string? SaveArtwork(TagLib.IPicture[] pictures, Guid itemId)
+    private string? SaveArtwork(TagLib.IPicture[] pictures, Guid itemId, Guid? attemptId)
     {
         // 选取第一张大小在 (0, 10MB] 区间的图片作为封面。
         var picture = pictures.FirstOrDefault(item => item.Data.Count is > 0 and <= 10485760);
@@ -409,8 +554,11 @@ public sealed class AudioMetadataParser(QuarantineStoragePaths storagePaths)
         if (extension is null)
             return null;
 
-        // 存储键格式：artwork/{itemId}.{extension}
-        var storageKey = $"artwork/{itemId:N}.{extension}";
+        // A recovered task uses a new namespace, so late writes cannot replace the
+        // artwork produced by the current attempt.
+        var storageKey = attemptId is { } attempt
+            ? $"artwork/{itemId:N}/{attempt:N}.{extension}"
+            : $"artwork/{itemId:N}.{extension}";
         // 通过隔离存储路径解析器定位物理路径。
         if (!storagePaths.TryResolve(storageKey, out var path))
             return null;

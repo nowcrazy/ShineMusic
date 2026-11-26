@@ -13,7 +13,7 @@
  * - feedbackMap 为 module 级单例，供 UI 快速读取（如列表标记“不感兴趣”）。
  */
 import { ref } from 'vue'
-import { API_PREFIX, http } from './http'
+import { API_PREFIX, assertAuthenticatedRequestAllowed, assertSessionRevisionCurrent, captureSessionRevision, http, isSessionRevisionCurrent } from './http'
 import { isAuthenticated } from './session'
 
 /** 收听事件类型。 */
@@ -58,13 +58,17 @@ export function reportPlayEvent(trackId: string, eventType: PlayEventType, posit
  * @param kind 反馈类型
  */
 export async function setFeedback(trackId: string, kind: FeedbackKind): Promise<void> {
+  assertAuthenticatedRequestAllowed()
+  const revision = captureSessionRevision()
   const prev = feedbackMap.value.get(trackId)
   const next = new Map(feedbackMap.value)
   next.set(trackId, kind)
   feedbackMap.value = next
   try {
     await http.put(`${API_PREFIX}/me/feedback/${trackId}`, { kind })
+    assertSessionRevisionCurrent(revision)
   } catch (error) {
+    if (!isSessionRevisionCurrent(revision)) throw error
     const rollback = new Map(feedbackMap.value)
     if (prev) rollback.set(trackId, prev)
     else rollback.delete(trackId)
@@ -78,6 +82,8 @@ export async function setFeedback(trackId: string, kind: FeedbackKind): Promise<
  * @param trackId 曲目 ID
  */
 export async function clearFeedback(trackId: string): Promise<void> {
+  assertAuthenticatedRequestAllowed()
+  const revision = captureSessionRevision()
   const prev = feedbackMap.value.get(trackId)
   if (!prev) return
   const next = new Map(feedbackMap.value)
@@ -85,7 +91,9 @@ export async function clearFeedback(trackId: string): Promise<void> {
   feedbackMap.value = next
   try {
     await http.delete(`${API_PREFIX}/me/feedback/${trackId}`)
+    assertSessionRevisionCurrent(revision)
   } catch (error) {
+    if (!isSessionRevisionCurrent(revision)) throw error
     const rollback = new Map(feedbackMap.value)
     rollback.set(trackId, prev)
     feedbackMap.value = rollback
@@ -112,8 +120,10 @@ export async function toggleNotInterested(trackId: string): Promise<boolean> {
  */
 export async function loadFeedback(): Promise<void> {
   if (!isAuthenticated.value) return
+  const revision = captureSessionRevision()
   try {
     const items = await http.get<ApiUserFeedback[]>(`${API_PREFIX}/me/feedback`)
+    assertSessionRevisionCurrent(revision)
     const map = new Map<string, FeedbackKind>()
     for (const item of items) map.set(item.trackId, item.kind)
     feedbackMap.value = map

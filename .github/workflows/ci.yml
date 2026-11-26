@@ -25,7 +25,7 @@ jobs:
         env:
           POSTGRES_USER: shinemusic
           POSTGRES_PASSWORD: shinemusic-dev
-          POSTGRES_DB: shinemusic
+          POSTGRES_DB: shinemusic_test_ci
         ports:
           - 5432:5432
         options: >-
@@ -53,10 +53,15 @@ jobs:
       - name: 构建（警告即错误）
         run: dotnet build ShineMusic.slnx --configuration Release --no-restore
 
+      - name: 安装真实媒体测试工具
+        run: sudo apt-get update && sudo apt-get install --yes ffmpeg
+
       # 架构改造安全网：领域规则 / 状态机 / 路径穿越 / 契约分层约束的自动化回归。
       # 改了纯规则却没同步测试时，这一步直接失败。
       - name: 运行后端单元与架构测试
-        run: dotnet test ShineMusic.slnx --configuration Release --no-build --nologo
+        env:
+          SHINEMUSIC_TEST_POSTGRES_CONNECTION: Host=127.0.0.1;Port=5432;Database=shinemusic_test_ci;Username=shinemusic;Password=shinemusic-dev;Pooling=false
+        run: dotnet test ShineMusic.slnx --configuration Release --no-build --nologo --blame-hang-timeout 120s --blame-hang-dump-type none
 
   app:
     name: App 前端（契约漂移 + i18n 残留 + 类型检查 + App 构建）
@@ -94,6 +99,15 @@ jobs:
 
       - name: 类型检查（vue-tsc --noEmit）
         run: yarn typecheck
+
+      - name: 会话离线与并发回归
+        run: yarn test:session
+
+      - name: 通知栏插件降级与回归
+        run: yarn test:music-notification
+
+      - name: 原件导出与 Android 保存回归
+        run: yarn test:original-audio
 
       # i18n 防回退闸门：新增 UI 中文串必须进语言包并接线，
       # 基线 = 有意保留的逻辑匹配值白名单（见 scripts/i18n-residual-baseline.json）。
@@ -144,6 +158,12 @@ jobs:
 
       - name: 类型检查（vue-tsc --noEmit）
         run: yarn typecheck
+
+      - name: 会话离线与并发回归
+        run: yarn test:session
+
+      - name: 原件导出回归
+        run: yarn test:original-audio
 
       - name: 构建（独立站点产物）
         run: yarn build:only

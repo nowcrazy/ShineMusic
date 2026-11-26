@@ -15,6 +15,7 @@ using ShineMusic.Repository.Storage;
 using ShineMusic.Service;
 using ShineMusic.Service.Application;
 using ShineMusic.Service.Lyrics;
+using ShineMusic.Service.Media;
 using ShineMusic.Service.PlaylistImport;
 using ShineMusic.Service.SourceDownload;
 using ShineMusic.Service.SourceProviders.Adapters;
@@ -46,6 +47,8 @@ public static class ModuleRegistrations
         services.AddScoped<RecommendationStrategyUseCase>();
         services.AddScoped<ImportStagingService>();
         services.AddScoped<ImportPublishService>();
+        services.AddSingleton<TemporaryPlaybackService>();
+        services.AddSingleton<ITemporaryPlaybackService>(provider => provider.GetRequiredService<TemporaryPlaybackService>());
         return services;
     }
 
@@ -159,7 +162,25 @@ public static class ModuleRegistrations
         services.AddSingleton<IMusicSourceProvider, KuwoSourceProvider>();
         services.AddSingleton<IMusicSourceProvider, KugouSourceProvider>();
         services.AddSingleton<IMusicSourceProvider, MiguSourceProvider>();
+        // 解析端点与音频 CDN 不继承平台命名客户端的 Cookie；解析 API 不跟随重定向转发显式凭据。
+        services.AddHttpClient(HttpAudioUrlResolver.HttpClientName, client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(60);
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("ShineMusic/1.0");
+        }).ConfigurePrimaryHttpMessageHandler(() => PublicAudioHttpTransport.CreateHandler());
+        services.AddHttpClient(HttpAudioUrlResolver.DownloadHttpClientName, client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(120);
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("ShineMusic/1.0");
+        }).ConfigurePrimaryHttpMessageHandler(() => PublicAudioHttpTransport.CreateHandler(allowAutoRedirect: true));
+        services.AddSingleton<IAudioUrlResolver, HttpAudioUrlResolver>();
         services.AddSingleton<IMusicSourceProvider, NeteaseSourceProvider>();
+        services.AddSingleton<IQualityLadderProvider>(serviceProvider =>
+            (IQualityLadderProvider)serviceProvider.GetServices<IMusicSourceProvider>()
+                .Single(provider => string.Equals(provider.Provider, "netease", StringComparison.OrdinalIgnoreCase)));
+        services.AddSingleton<ILazySourceDownloadProvider>(serviceProvider =>
+            (ILazySourceDownloadProvider)serviceProvider.GetServices<IMusicSourceProvider>()
+                .Single(provider => string.Equals(provider.Provider, "netease", StringComparison.OrdinalIgnoreCase)));
         // 汽水音乐：搜索需 Android 客户端 UA、详情需浏览器 UA，因此不设默认 UA，由 provider 逐请求指定；
         // 可选登录 Cookie 供后续解锁完整授权信息。下载直链走 task.SourceProvider="qishui"（与歌单解析器同名客户端）。
         services.AddHttpClient(QishuiSourceProvider.HttpClientName, (serviceProvider, client) =>
@@ -272,6 +293,7 @@ public static class ModuleRegistrations
     /// <summary>Library 模块：曲库查询编排、推荐策略与推荐服务。</summary>
     public static IServiceCollection AddShineMusicLibraryModule(this IServiceCollection services)
     {
+        services.AddScoped<UserLibraryWorkflowService>();
         services.AddScoped<RecommendationStrategyService>();
         services.AddScoped<RecommendationService>();
         return services;

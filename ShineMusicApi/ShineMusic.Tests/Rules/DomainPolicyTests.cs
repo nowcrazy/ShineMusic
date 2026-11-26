@@ -110,7 +110,8 @@ public sealed class DomainPolicyTests
 
         var owner = Guid.NewGuid();
         Assert.True(PlaybackEligibility.CanAccess(DateTimeOffset.UtcNow, null, false, null));
-        Assert.True(PlaybackEligibility.CanAccess(null, owner, true, null));
+        Assert.False(PlaybackEligibility.CanAccess(null, owner, true, null));
+        Assert.True(PlaybackEligibility.CanAccess(null, owner, true, owner));
         Assert.True(PlaybackEligibility.CanAccess(null, owner, false, owner));
         Assert.False(PlaybackEligibility.CanAccess(null, owner, false, Guid.NewGuid()));
         Assert.False(PlaybackEligibility.CanAccess(null, owner, false, null));

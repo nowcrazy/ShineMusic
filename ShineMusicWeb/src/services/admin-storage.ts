@@ -7,8 +7,7 @@
  * - POST /admin/storage/cleanup  删除孤儿文件与空目录
  */
 import type { ApiStorageAudit, ApiStorageCleanup } from '@/types/api.generated'
-import { API_PREFIX, http, refreshAccessToken, resolveUrl } from './http'
-import { getAccessToken } from './tokens'
+import { API_PREFIX, assertSessionRevisionCurrent, captureSessionRevision, fetchWithSession, http, resolveUrl } from './http'
 
 /** 执行存储审计（只读）。 */
 export function getStorageAudit(): Promise<ApiStorageAudit> {
@@ -26,24 +25,14 @@ export function cleanupStorage(): Promise<ApiStorageCleanup> {
  * 401 时复用统一单飞刷新重试一次。
  */
 export async function fetchStorageFileBlob(storageKey: string): Promise<Blob> {
+  const revision = captureSessionRevision()
   const params = new URLSearchParams({ key: storageKey })
-  const send = () =>
-    fetch(resolveUrl(`${API_PREFIX}/admin/storage/file?${params.toString()}`), {
-      headers: buildAuthHeader(),
-    })
-  let response = await send()
-  if (response.status === 401 && (await refreshAccessToken())) {
-    response = await send()
-  }
+  const response = await fetchWithSession(resolveUrl(`${API_PREFIX}/admin/storage/file?${params.toString()}`), {}, revision)
   if (!response.ok) {
     const body = await response.json().catch(() => null)
     throw new Error(body?.error?.message ?? `文件读取失败（HTTP ${response.status}）`)
   }
-  return response.blob()
-}
-
-/** 构造鉴权头 */
-function buildAuthHeader(): Record<string, string> {
-  const token = getAccessToken()
-  return token ? { Authorization: `Bearer ${token}` } : {}
+  const blob = await response.blob()
+  assertSessionRevisionCurrent(revision)
+  return blob
 }

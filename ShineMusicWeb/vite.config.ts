@@ -139,7 +139,8 @@ export default defineConfig(({ command, mode }) => {
       port: local.webPort ?? 5174,
       proxy: {
         // xfwd: true 让 http-proxy 自动注入 X-Forwarded-For / X-Forwarded-Proto / X-Forwarded-Host，
-        // 后端经 ForwardedHeaders 中间件即可拿到真实客户端 IP（而非 Vite 的 127.0.0.1）。
+        // 本地后端经可信 ForwardedHeaders 中间件取得访问设备的地址。
+        // 若转发到远端 Funnel，入口会重设 XFF，此时记录的是开发代理访问 Funnel 的出口。
         '/api': { target: apiTarget, changeOrigin: true, xfwd: true },
         '/health': { target: apiTarget, changeOrigin: true, xfwd: true },
       },

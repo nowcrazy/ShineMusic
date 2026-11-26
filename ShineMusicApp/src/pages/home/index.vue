@@ -37,6 +37,7 @@ import ChartBrowser from '@/components/ChartBrowser.vue'
 import ProfileDrawer from '@/components/ProfileDrawer.vue'
 import { getGenres, getHomeFeed, getTracks, peekGenresCache, peekHomeFeedCache, searchTracks } from '@/services/catalog'
 import { resolveUrl } from '@/services/http'
+import { downloadMyOriginalAudio } from '@/services/original-audio'
 import { getDailyRecommendations, peekDailyCache } from '@/services/recommend'
 import { playTrack, playQueue, usePlayer } from '@/services/player'
 import { favoriteTracks, favoritesTotal } from '@/services/library'
@@ -113,6 +114,7 @@ const libraryLoading = ref(false)
 const favoritesLoading = ref(false)
 const favoritesError = ref(false)
 const personalError = ref(false)
+const downloadingOriginalId = ref<string | null>(null)
 const onlyFavorites = ref(false)
 const visibleFavorites = computed(() => {
   const items = favoriteTracks.value.filter(track => (publicLibraryGenre.value === '全部' || track.genres.includes(publicLibraryGenre.value)) && `${track.title} ${track.artist} ${track.album}`.toLowerCase().includes(query.value.trim().toLowerCase()))
@@ -272,16 +274,33 @@ function handlePlayLibrary(index: number) {
   playTrack(libraryQueue.value[index], libraryQueue.value)
 }
 
+async function handleDownloadOriginal(item: ApiUserLibraryItem) {
+  if (item.isPublic || downloadingOriginalId.value) return
+  downloadingOriginalId.value = item.trackId
+  try {
+    await downloadMyOriginalAudio(item.trackId, item.title)
+    let message = 'homePage.originalDownloadStarted'
+    // #ifdef APP-PLUS
+    message = 'homePage.originalDownloadSaved'
+    // #endif
+    uni.showToast({ title: t(message), icon: 'none' })
+  } catch (error) {
+    if ((error as { code?: string })?.code === 'original_download_cancelled') return
+    uni.showToast({ title: error instanceof Error ? error.message : t('homePage.originalDownloadFailed'), icon: 'none' })
+  } finally {
+    downloadingOriginalId.value = null
+  }
+}
+
 /**
- * 点击移除：二次确认后调用移除引用，服务层会即时从本地列表剔除。
- * 曲目本体保留（全局唯一），仅移除本人的引用。
+ * 删除私人曲目进入回收站；公开曲目只移除个人引用。
  * @param item 目标曲库条目
  */
 async function handleRemoveFromLibrary(item: ApiUserLibraryItem) {
   if (removingId.value) return
   uni.showModal({
     title: t('homePage.removeFromLibrary'),
-    content: t('homePage.removeFromLibraryConfirm', { title: item.title }),
+    content: t(item.isPublic ? 'homePage.removeFromLibraryConfirm' : 'libraryPage.recycleConfirm', { title: item.title }),
     confirmText: t('homePage.remove'),
     success: async ({ confirm }) => {
       if (!confirm) return
@@ -301,6 +320,10 @@ async function handleRemoveFromLibrary(item: ApiUserLibraryItem) {
 /** 跳转上传本地音频页（受 userUploads 能力开关控制） */
 function goUpload() {
   uni.navigateTo({ url: '/pages/library/upload' })
+}
+
+function goLibraryManagement() {
+  uni.navigateTo({ url: '/pages/library/upload?section=reviews' })
 }
 
 // 头像抽屉显隐（QQ 式左侧滑出个人菜单）
@@ -791,6 +814,8 @@ function coverOf(collection: ApiCollectionSummary) {
               <text v-else class="library-count">{{ $t('homePage.trackCount', { count: myLibraryItems.length }) }}</text>
             </view>
 
+            <button class="state-retry" @tap="goLibraryManagement">{{ $t('libraryPage.reviewTab') }} · {{ $t('libraryPage.recycleTab') }}</button>
+
             <view v-if="myLibraryLoading && !myLibraryItems.length" class="inline-error">{{ $t('homePage.loading') }}</view>
             <button v-else-if="personalError" class="state-retry" @tap="refreshPersonal">{{ $t('app.error') }} · {{ $t('app.retry') }}</button>
             <view v-else-if="!myLibraryItems.length" class="empty-state">
@@ -824,6 +849,9 @@ function coverOf(collection: ApiCollectionSummary) {
                 </view>
                 <view class="lib-meta">
                   <text class="lib-duration">{{ formatTime(Math.round((item.durationMs ?? 0) / 1000)) }}</text>
+                  <button v-if="!item.isPublic" class="lib-download" :disabled="!!downloadingOriginalId" :aria-label="$t('homePage.downloadOriginal') + ' ' + item.title" :title="$t('homePage.downloadOriginal')" @tap.stop="handleDownloadOriginal(item)">
+                    <Download :size="17" />
+                  </button>
                   <view class="lib-remove" @tap.stop="handleRemoveFromLibrary(item)">
                     <Trash2 :size="17" />
                   </view>
@@ -1042,6 +1070,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--sm-accent);
 .lib-badge { flex: none; padding: 2px 4px; background: var(--sm-surface); border-radius: 4px; }
 .lib-meta { display: flex; align-items: center; gap: 8px; }
 .lib-remove { padding: 8px; color: var(--sm-text-2); }
+.lib-download { display: grid; place-items: center; margin: 0; padding: 8px; line-height: 1; color: var(--sm-text-2); background: transparent; }
+.lib-download::after { border: 0; }
+.lib-download[disabled] { opacity: .45; }
 .is-removing { opacity: .5; pointer-events: none; }
 .tabbar { position: fixed; z-index: 3; bottom: 0; left: 0; right: 0; display: flex; align-items: center; height: 56px; padding: 0 16px env(safe-area-inset-bottom); background: var(--sm-tabbar-bg); backdrop-filter: blur(16px); }
 .tab-item { position: relative; display: flex; align-items: center; flex-direction: column; gap: 4px; flex: 1; min-width: 0; font-size: 10px; color: var(--sm-text-3); padding: 8px; }

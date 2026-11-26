@@ -1,0 +1,4 @@
+# Netscape HTTP Cookie File
+# Empty template: no cookie records or credentials are included.
+# Copy to youtube-cookies.txt only when that local file does not exist.
+# Provide your own cookies locally when needed; never commit them here.

@@ -16,9 +16,9 @@ public sealed class SqlSugarTrackPlaybackStore(ISqlSugarClient db) : ITrackPlayb
     {
         var row = await db.Queryable<Track>()
             .Where(track => track.Id == trackId)
-            .Select(track => new { track.PublishedAt, track.OwnerUserId })
+            .Select(track => new { track.PublishedAt, track.OwnerUserId, track.IsRecycled })
             .FirstAsync(cancellationToken);
-        return row is null ? null : new TrackPlaybackVisibility(row.PublishedAt, row.OwnerUserId);
+        return row is null ? null : new TrackPlaybackVisibility(row.PublishedAt, row.OwnerUserId, row.IsRecycled);
     }
 
     /// <inheritdoc />
@@ -27,8 +27,18 @@ public sealed class SqlSugarTrackPlaybackStore(ISqlSugarClient db) : ITrackPlayb
         var row = await db.Queryable<MediaAsset>()
             .Where(asset => asset.TrackId == trackId && asset.IsPublished)
             .OrderByDescending(asset => asset.IsPrimary)
-            .Select(asset => new { asset.StorageKey, asset.Container })
+            .Select(asset => new { asset.Id, asset.StorageKey, asset.Container, asset.ContentHash, asset.IsOriginal })
             .FirstAsync(cancellationToken);
-        return row is null ? null : new PublishedAudioAsset(row.StorageKey, row.Container);
+        return row is null ? null : new PublishedAudioAsset(row.StorageKey, row.Container, row.Id, row.ContentHash, row.IsOriginal);
+    }
+
+    public async Task<PublishedAudioAsset?> GetCandidateOriginalAsync(Guid trackId, CancellationToken cancellationToken)
+    {
+        var row = await db.Queryable<MediaAsset>()
+            .Where(asset => asset.TrackId == trackId && asset.IsPublished && asset.IsOriginal)
+            .OrderByDescending(asset => asset.IsPrimary)
+            .Select(asset => new { asset.Id, asset.StorageKey, asset.Container, asset.ContentHash, asset.IsOriginal })
+            .FirstAsync(cancellationToken);
+        return row is null ? null : new PublishedAudioAsset(row.StorageKey, row.Container, row.Id, row.ContentHash, row.IsOriginal);
     }
 }

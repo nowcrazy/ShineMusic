@@ -62,7 +62,8 @@ public sealed record ImportMetadataDto(
 /// <param name="OutputFormat">实际产出的目标格式标识；未产出时为 null。</param>
 /// <param name="BitrateKbps">产出音频码率，单位 kbps；未产出时为 null。</param>
 /// <param name="ErrorCode">转码失败时的机器可读错误码；成功或未执行时为 null。</param>
-public sealed record ImportTranscodeDto(string? Status, string? OutputFormat, int? BitrateKbps, string? ErrorCode);
+/// <param name="ErrorMessage">安全的可读处理失败原因；不包含原始进程输出和服务器路径。</param>
+public sealed record ImportTranscodeDto(string? Status, string? OutputFormat, int? BitrateKbps, string? ErrorCode, string? ErrorMessage = null);
 
 /// <summary>
 /// 导入项元数据与目标点歌需求的匹配结果（读取时实时计算，元数据被修正后立即刷新）。

@@ -10,10 +10,8 @@
  *
  * 与 services/library.ts（收藏 /me/favorites、歌单 /me/playlists）相互独立：
  * 本模块对应“引用曲目”（UserLibraryItem），曲目本体全局唯一、不重复存储。
- * 上传响应用 Referenced / Queued / Rejected 三分桶：
- * - Referenced：内容哈希命中已有曲库音频，秒级建引用（不重复存储、不入队）；
- * - Queued：新歌进入处理队列，转码 + 歌词自动匹配完成后私有入库（仅上传者可听）；
- * - Rejected：他人私有曲目等无法引用的文件。
+ * 上传前预检只提供可能的匹配线索，是否为重复由服务器在处理实际文件后决定；
+ * 命中公共曲库不会阻止用户保存自己的原件。主动申请公开与私人曲库更新由独立审核流程处理。
  */
 import { ref } from 'vue'
 import type {
@@ -22,7 +20,8 @@ import type {
   ApiUserLibraryItem,
   ApiUserUploadResponse,
 } from '@/types/music'
-import { API_PREFIX, http, resolveUrl } from './http'
+import type { ApiUserUploadBatch } from '@/types/api.generated'
+import { API_PREFIX, ApiContextChangedError, ApiError, assertApiContextCurrent, assertApiRequestOrigin, captureApiContext, http, refreshAccessToken, resolveUrl, trackApiRequest } from './http'
 import { getAccessToken } from './tokens'
 import { t } from '@/locale'
 
@@ -33,16 +32,20 @@ export const myLibraryItems = ref<ApiUserLibraryItem[]>([])
 const myLibraryLoaded = ref(false)
 // 是否正在加载中（防重入）
 export const myLibraryLoading = ref(false)
+let myLibraryGeneration = 0
 
 /**
- * 上传前预检：把本地文件指纹批量发给服务端，返回每个文件命中的已有曲目。
+ * 上传前预检：把本地文件名和可用元信息发给服务端，仅返回可能匹配的曲目供展示。
  *
  * @param files 本地文件指纹数组
- * @returns 每个文件的预检结果（match 为命中曲目，未命中为 null）
+ * @returns 每个文件的参考匹配结果；不能据此自动跳过原件上传或建曲库引用
  * @throws 网络或后端错误
  */
 export async function precheckUploads(files: ApiPrecheckRequest['files']): Promise<ApiPrecheckResponse> {
-  return http.post<ApiPrecheckResponse>(`${API_PREFIX}/me/uploads/precheck`, { files })
+  const context = captureApiContext()
+  const result = await http.post<ApiPrecheckResponse>(`${API_PREFIX}/me/uploads/precheck`, { files })
+  assertApiContextCurrent(context)
+  return result
 }
 
 /**
@@ -58,43 +61,99 @@ export async function precheckUploads(files: ApiPrecheckRequest['files']): Promi
  */
 export function uploadFiles(
   files: Array<{ path: string; name: string }>,
+  retry = false,
+  participatesInPublicReview = false,
 ): Promise<ApiUserUploadResponse> {
+  const context = captureApiContext()
   return new Promise((resolve, reject) => {
+    let settled = false
+    let unregister: () => void = () => {}
+    let task: ReturnType<typeof uni.uploadFile> | undefined
+    const finish = (handler: (value: any) => void, value: any) => {
+      if (settled) return
+      settled = true
+      unregister()
+      try { assertApiContextCurrent(context) } catch { reject(new ApiContextChangedError()); return }
+      handler(value)
+    }
     const token = getAccessToken()
     const header: Record<string, string> = {}
     if (token) header.Authorization = `Bearer ${token}`
-    uni.uploadFile({
-      url: resolveUrl(`${API_PREFIX}/me/uploads`),
+    const target = resolveUrl(`${API_PREFIX}/me/uploads`)
+    assertApiRequestOrigin(context, target)
+    task = uni.uploadFile({
+      url: target,
       name: 'files',
       files: files.map((file) => ({ name: file.name, uri: file.path })),
       header,
-      success: (res) => {
+      formData: { participatesInPublicReview: String(participatesInPublicReview) },
+      timeout: 120000,
+      success: async (res) => {
         try {
-          const body = typeof res.data === 'string' ? JSON.parse(res.data) : res.data
-          if (res.statusCode < 200 || res.statusCode >= 300) {
-            const detail = (body as { error?: { message?: string } })?.error
-            reject(new Error(detail?.message || t('catalogErrors.uploadFailedWithStatus', { status: res.statusCode })))
+          assertApiContextCurrent(context)
+          if (res.statusCode === 401 && !retry && await refreshAccessToken()) {
+            assertApiContextCurrent(context)
+            finish(resolve, await uploadFiles(files, true, participatesInPublicReview))
             return
           }
-          resolve(body as ApiUserUploadResponse)
+          let body: unknown
+          try {
+            body = typeof res.data === 'string' ? JSON.parse(res.data) : res.data
+          } catch {
+            if (res.statusCode >= 200 && res.statusCode < 300) {
+              throw new Error(t('services.uploadSuccessButParseFailed'))
+            }
+          }
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            const detail = (body as { error?: { code?: string; message?: string; traceId?: string } })?.error
+            finish(reject, new ApiError(res.statusCode, detail?.code || (res.statusCode === 413 ? 'upload_too_large' : 'internal_error'),
+              detail?.message || t('services.uploadFailedWithStatus', { status: res.statusCode }), detail?.traceId))
+            return
+          }
+          const response = body as Partial<ApiUserUploadResponse> | null
+          if (!response || !Array.isArray(response.referenced) || !Array.isArray(response.queued) || !Array.isArray(response.rejected)) {
+            throw new Error(t('services.uploadSuccessButParseFailed'))
+          }
+          finish(resolve, body as ApiUserUploadResponse)
         } catch (error) {
-          reject(new Error(error instanceof Error ? error.message : t('catalogErrors.uploadResponseParseFailed')))
+          finish(reject, error instanceof Error ? error : new Error(t('services.uploadResponseParseFailed')))
         }
       },
-      fail: (err) => reject(new Error(err.errMsg || t('catalogErrors.uploadFailed'))),
+      fail: (err) => {
+        finish(reject, /timeout|timed out/i.test(err.errMsg || '')
+          ? new Error(t('libraryPage.uploadTimeout'))
+          : new ApiError(0, 'network_error', err.errMsg || t('services.networkError')))
+      },
     })
+    unregister = trackApiRequest(context, () => {
+      task?.abort?.()
+      finish(reject, new ApiContextChangedError())
+    })
+    if (settled) unregister()
+  })
+}
+
+/** 查询本人的上传批次，区分文件已接收与后台处理完成。 */
+export function getUploadBatch(batchId: string): Promise<ApiUserUploadBatch> {
+  const context = captureApiContext()
+  return http.get<ApiUserUploadBatch>(`${API_PREFIX}/me/uploads/${encodeURIComponent(batchId)}`).then((result) => {
+    assertApiContextCurrent(context)
+    return result
   })
 }
 
 /**
- * 批量加入曲库：预检命中公共曲库（或本人私有曲目）的歌曲可直接引用，无需上传文件。
+ * 批量引用曲库中的曲目。该显式操作不会因上传预检而自动触发。
  *
  * @param trackIds 目标曲目 ID 数组
  * @returns 成功时无返回值（后端 204 NoContent）
  * @throws 网络或后端错误
  */
 export async function addToLibrary(trackIds: string[]) {
-  return http.post<void>(`${API_PREFIX}/me/library`, { trackIds })
+  const context = captureApiContext()
+  const result = await http.post<void>(`${API_PREFIX}/me/library`, { trackIds })
+  assertApiContextCurrent(context)
+  return result
 }
 
 /**
@@ -108,6 +167,8 @@ export async function addToLibrary(trackIds: string[]) {
  */
 export async function loadMyLibrary(force = false) {
   if ((myLibraryLoaded.value || myLibraryLoading.value) && !force) return
+  const generation = myLibraryGeneration
+  const context = captureApiContext()
   myLibraryLoading.value = true
   try {
     const result = await http.get<{
@@ -116,10 +177,13 @@ export async function loadMyLibrary(force = false) {
       pageSize: number
       total: number
     }>(`${API_PREFIX}/me/library?pageSize=200`)
-    myLibraryItems.value = result.items
-    myLibraryLoaded.value = true
+    assertApiContextCurrent(context)
+    if (generation === myLibraryGeneration) {
+      myLibraryItems.value = result.items
+      myLibraryLoaded.value = true
+    }
   } finally {
-    myLibraryLoading.value = false
+    if (generation === myLibraryGeneration) myLibraryLoading.value = false
   }
 }
 
@@ -131,8 +195,13 @@ export async function loadMyLibrary(force = false) {
  * @throws 网络或后端错误
  */
 export async function removeFromLibrary(trackId: string) {
+  const context = captureApiContext()
+  const generation = myLibraryGeneration
   await http.delete(`${API_PREFIX}/me/library/${trackId}`)
-  myLibraryItems.value = myLibraryItems.value.filter((item) => item.trackId !== trackId)
+  assertApiContextCurrent(context)
+  if (generation === myLibraryGeneration) {
+    myLibraryItems.value = myLibraryItems.value.filter((item) => item.trackId !== trackId)
+  }
 }
 
 /**
@@ -141,8 +210,10 @@ export async function removeFromLibrary(trackId: string) {
  * @returns 无返回值，仅重置本地 ref
  */
 export function resetMyLibrary() {
+  myLibraryGeneration++
   myLibraryItems.value = []
   myLibraryLoaded.value = false
+  myLibraryLoading.value = false
 }
 
 /**

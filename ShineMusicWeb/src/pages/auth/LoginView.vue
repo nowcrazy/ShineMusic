@@ -7,7 +7,7 @@ import { reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { Lock, User } from '@element-plus/icons-vue'
-import { isAdmin, login, logout } from '@/services/session'
+import { isAdmin, login, logout, restoreSession, sessionStatus } from '@/services/session'
 import { describeError } from '@/services/errors'
 
 const route = useRoute()
@@ -74,6 +74,10 @@ async function handleSubmit() {
           <h2>管理员登录</h2>
           <p>请使用管理员账号登录后台</p>
         </header>
+
+        <el-alert v-if="sessionStatus === 'unavailable'" type="warning" :closable="false" title="暂时无法验证登录状态，登录凭据已保留。联网后会自动重试。">
+          <el-button link type="primary" @click="restoreSession()">重新验证</el-button>
+        </el-alert>
 
         <el-form
           ref="formRef"

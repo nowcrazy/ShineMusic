@@ -4,7 +4,7 @@
  */
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type UploadRequestOptions } from 'element-plus'
-import { Delete, Edit, Headset, Plus, Refresh, Search, Upload } from '@element-plus/icons-vue'
+import { Delete, Download, Edit, Headset, Plus, Refresh, Search, Upload } from '@element-plus/icons-vue'
 import {
   createTrackLyric,
   deleteAdminTrack,
@@ -17,6 +17,7 @@ import {
 import { uploadArtwork } from '@/services/admin-artwork'
 import { resolveUrl } from '@/services/http'
 import { describeError } from '@/services/errors'
+import { downloadAdminOriginalAudio } from '@/services/original-audio'
 import { formatTime } from '@/utils/format'
 import type { ApiLyric, ApiTrack } from '@/types/music'
 
@@ -28,6 +29,20 @@ const pageSize = ref(100)
 const query = ref('')
 const missingMetadata = ref(false)
 const duplicates = ref(false)
+const downloadingId = ref<string | null>(null)
+
+async function downloadOriginal(track: ApiTrack) {
+  if (downloadingId.value) return
+  downloadingId.value = track.id
+  try {
+    await downloadAdminOriginalAudio(track.id, track.title)
+    ElMessage.success('原件已交给浏览器保存')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '原件下载失败')
+  } finally {
+    downloadingId.value = null
+  }
+}
 
 const drawerOpen = ref(false)
 const editing = ref<ApiTrack | null>(null)
@@ -348,9 +363,10 @@ onMounted(loadTracks)
         <el-table-column label="年份" prop="releaseYear" sortable width="80">
           <template #default="{ row }">{{ row.releaseYear ?? '—' }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="150" fixed="right">
+        <el-table-column label="操作" width="260" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" :icon="Edit" @click="openEditor(row)">编辑</el-button>
+            <el-button link type="primary" :icon="Download" :loading="downloadingId === row.id" :disabled="!!downloadingId && downloadingId !== row.id" @click="downloadOriginal(row)">下载原件</el-button>
             <el-button link type="danger" :icon="Delete" @click="removeTrack(row)">删除</el-button>
           </template>
         </el-table-column>

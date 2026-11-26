@@ -8,6 +8,8 @@
     "build": "vue-tsc --noEmit && vite build",
     "build:only": "vite build",
     "typecheck": "vue-tsc --noEmit",
+    "test:session": "node scripts/test-session.mjs",
+    "test:original-audio": "node scripts/test-original-audio.mjs",
     "preview": "vite preview",
     "import:from-app": "node scripts/import-from-app.mjs",
     "gen:contracts": "python ../ShineMusicApi/tools/generate-ts-contracts.py",

@@ -36,7 +36,7 @@ uni 同名 API 在两端是两套独立实现（uni-app-plus vs uni-h5），再�
 |---|---|---|---|
 | 前台播放 | BackgroundAudio / InnerAudioContext | WebAudio（支持 EQ） | `player.ts` 的 `createWebAudioEngine` |
 | 后台 / 锁屏播放 | ✅ 系统级保活 | ❌ 切后台/锁屏即暂停 | 浏览器限制，无法绕过 |
-| 通知栏 / 锁屏控制 | ✅ `XZH-musicNotification` 原生插件 | ❌ 未实现 | H5 可后续用 MediaSession API 补 |
+| 通知栏 / 锁屏控制 | 需集成 `XZH-musicNotification` 原生插件 | ❌ 未实现 | Android 需含插件的自定义基座 / APK |
 | 物理返回键 | ✅ `plus.key backbutton` | ❌ 浏览器历史栈 | `App.vue` 已条件编译 |
 | 文件选择 | `plus.android` 原生选择器 | `<input type="file">` | `app-file-picker.ts` |
 | 本地文件 / 壁纸存储 | `plus.io` | ❌ 降级 | `theme.ts` |
@@ -51,6 +51,27 @@ uni 同名 API 在两端是两套独立实现（uni-app-plus vs uni-h5），再�
 3. **图标差异**：H5 用真实 `lucide-vue-next`（svg 渲染）；App 端因渲染桥不支持 svg，走生成的 shim——两端图标可能有细微观感差异。
 4. **服务器地址覆盖**：设置页自定义过地址（`sm-server-base`）会绕过代理直连后端，浏览器会因 CORS 失败；调试期建议清除该存储键，走代理。
 5. **封面 / 音频 404 不等于代理故障**：本地 `data/library` 为空（数据库里只有元数据、没有媒体文件）时，`/api/v1/artwork/{id}`、`/api/v1/tracks/{id}/stream`、`/api/v1/tracks/{id}/lyrics/default` 都会返回 404，但首页、目录、登录仍可正常渲染。判断代理是否通，看 `/api/v1/music/home`、`/api/v1/tracks`、`/api/v1/system/capabilities` 是否 200；要完整验证播放与封面，需先导入音频文件或把 `origin` 指向有媒体文件的服务器。
+
+## Android 音乐通知插件与调试基座
+
+`XZH-musicNotification` 是原生插件，标准 HBuilder 调试基座不包含它。未配置该插件时，适配层跳过原生调用；基础播放继续可用，插件提供的通知栏 / 锁屏歌曲信息与控制不会启用。
+
+启用步骤：
+
+1. 在 HBuilderX 打开 `src/manifest.json` 的可视化界面，在「App 原生插件配置」中选择并添加 `XZH-musicNotification`，按插件说明完成授权 / 参数配置；确认源码视图出现 `app-plus.nativePlugins.XZH-musicNotification`。由 HBuilderX 写入插件元数据。
+2. 使用「运行 → 运行到手机或模拟器 → 制作自定义调试基座」，重新制作包含该插件的 Android 基座并安装到设备。
+3. 将运行基座选择为「自定义基座」，停止并重新运行项目，使 manifest 对应的构建开关生效。仅热更新 JS 或继续使用标准基座，无法把原生插件装进设备。
+4. 发布时也需重新云打包包含该插件的 APK；调试基座用于开发调试。
+
+如果 manifest 已配置插件、设备却仍运行旧基座，框架可能在首次加载时提示一次缺失；适配层会缓存失败结果，后续播放 / 暂停 / 进度同步不再重试。更新基座后重新启动应用。
+
+`vue-i18n` 的 esm-bundler 特性开关已在 `vite.config.ts` 配置。当前 DCloud 自带的旧版 i18n 运行时包含开发模式下恒真的告警判断，仍可能打印该提示；它不影响翻译或播放，生产构建会移除这段开发告警。
+
+## 原件导出
+
+“我的曲库”中的私有曲目提供原件下载入口。H5 通过带鉴权的请求获取完整文件，再交给浏览器保存；Android 通过原生下载器将文件暂存到应用私有目录，校验响应状态、音频类型和文件大小后，打开系统 `ACTION_CREATE_DOCUMENT` 选择保存位置，再以流复制原始字节。使用系统文档选择器无需申请共享存储访问权限。iOS 原生保存尚未实现。
+
+Android 取消保存、下载失败或账号/服务器变更时，不显示成功提示，并清理下载临时文件；复制失败时会尝试删除不完整的目标文档，部分文档提供器可能不支持删除。原件导出不改写标签或歌词。合成桥回归使用 `node scripts/test-original-audio.mjs`，实际系统选择器、设备下载器及文档提供器仍须在 HBuilderX Android 真机验证。
 
 ## 已知边界
 

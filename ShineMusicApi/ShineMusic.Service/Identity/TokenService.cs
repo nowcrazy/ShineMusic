@@ -28,8 +28,9 @@ public sealed class TokenService(IOptions<AuthOptions> authOptions)
     /// </summary>
     /// <param name="user">登录用户实体。</param>
     /// <param name="roles">该用户拥有的角色名集合，逐个写入角色声明。</param>
+    /// <param name="sessionId">本次登录会话 Id，与其 refresh-token 轮换链绑定。</param>
     /// <returns>已签名的 JWT 字符串及其 UTC 过期时间。</returns>
-    public (string Token, DateTime ExpiresAtUtc) CreateAccessToken(ApplicationUser user, IEnumerable<string> roles)
+    public (string Token, DateTime ExpiresAtUtc) CreateAccessToken(ApplicationUser user, IEnumerable<string> roles, Guid sessionId)
     {
         // 短期令牌：过期时间 = 当前 UTC + 配置的 AccessTokenMinutes。
         var expiresAt = DateTime.UtcNow.AddMinutes(_options.AccessTokenMinutes);
@@ -41,9 +42,13 @@ public sealed class TokenService(IOptions<AuthOptions> authOptions)
             new(JwtRegisteredClaimNames.Email, user.Email ?? string.Empty),
             // jti：每枚令牌唯一 Id，支持单点吊销/追踪。
             new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
+            // Bind access tokens to the refresh-token session so revocation is immediate.
+            new(JwtRegisteredClaimNames.Sid, sessionId.ToString()),
             // 自定义声明：前端展示用昵称。
             new("display_name", user.DisplayName)
         };
+        if (roles.Contains(RoleNames.Admin, StringComparer.OrdinalIgnoreCase) && user.TempAdminUntilUtc is not null)
+            claims.Add(new Claim("admin_until_utc", user.TempAdminUntilUtc.Value.ToUniversalTime().ToString("O")));
         // 角色逐个映射为标准角色声明，供 [Authorize(Roles=...)] 判定。
         claims.AddRange(roles.Select(role => new Claim(ClaimTypes.Role, role)));
 

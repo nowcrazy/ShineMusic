@@ -16,6 +16,67 @@
 import { t } from '@/locale'
 import { getAccessToken, getRefreshToken } from './tokens'
 
+// A revision identifies one local authentication attempt, including anonymous
+// attempts. Token rotation intentionally keeps the same revision.
+let sessionRevision = 0
+let requestGuard: (() => boolean) | null = null
+let unauthorizedHandler: (() => void) | null = null
+let unavailableHandler: (() => void) | null = null
+export function captureSessionRevision(): number { return sessionRevision }
+export function isSessionRevisionCurrent(revision: number): boolean { return revision === sessionRevision }
+export function invalidateSessionRequests(): number { return ++sessionRevision }
+export function assertSessionRevisionCurrent(revision: number): void {
+  if (!isSessionRevisionCurrent(revision)) {
+    throw new ApiError(0, 'session_changed', '登录状态已变化，请重试')
+  }
+}
+export function setSessionRequestGuard(guard: () => boolean, onUnauthorized: () => void, onUnavailable: () => void): void {
+  requestGuard = guard
+  unauthorizedHandler = onUnauthorized
+  unavailableHandler = onUnavailable
+}
+export function assertAuthenticatedRequestAllowed(): void {
+  if (requestGuard && !requestGuard()) throw new ApiError(0, 'session_unavailable', '暂时无法验证登录状态，请联网后重试')
+}
+
+/** Fetch paths (files, artwork and previews) share the JSON session boundary. */
+export async function fetchWithSession(url: string, options: RequestInit = {}, revision = captureSessionRevision()): Promise<Response> {
+  assertSessionRevisionCurrent(revision)
+  assertAuthenticatedRequestAllowed()
+  const send = async () => {
+    assertSessionRevisionCurrent(revision)
+    assertAuthenticatedRequestAllowed()
+    const headers = new Headers(options.headers)
+    const token = getAccessToken()
+    if (token) headers.set('Authorization', `Bearer ${token}`)
+    try { return await fetch(url, { ...options, headers }) } catch (error) {
+      if (isSessionRevisionCurrent(revision)) unavailableHandler?.()
+      throw error
+    }
+  }
+  let response = await send()
+  assertSessionRevisionCurrent(revision)
+  if (response.status === 401 && await refreshAccessToken()) {
+    assertSessionRevisionCurrent(revision)
+    response = await send()
+    assertSessionRevisionCurrent(revision)
+  }
+  if (response.status === 401) {
+    unauthorizedHandler?.()
+    throw new ApiError(401, 'unauthorized', '登录凭据已失效，请重新登录')
+  } else if (response.status >= 500) unavailableHandler?.()
+  for (const method of ['arrayBuffer', 'blob', 'formData', 'json', 'text'] as const) {
+    const read = response[method].bind(response)
+    Object.defineProperty(response, method, { value: async () => {
+      assertSessionRevisionCurrent(revision)
+      const value = await read()
+      assertSessionRevisionCurrent(revision)
+      return value
+    } })
+  }
+  return response
+}
+
 /** 后端 API 统一版本前缀，所有业务路径均以此开头，与后端路由 /api/v1 对齐 */
 export const API_PREFIX = '/api/v1'
 /**
@@ -38,20 +99,28 @@ function normalizeServerBase(raw: string): string {
 
 /** 运行时覆盖地址：设置页保存后立即生效，无需重启 App */
 let overrideBase = ''
-try {
-  const saved = uni.getStorageSync(SERVER_BASE_STORAGE_KEY)
-  if (typeof saved === 'string' && saved.trim()) overrideBase = normalizeServerBase(saved)
-} catch {
-  // 本地存储不可用时静默降级，走构建期内置地址
+let overrideLoaded = false
+function loadServerOverride() {
+  // platform/uni imports the request helpers before installing its global shim.
+  if (overrideLoaded || typeof uni === 'undefined') return
+  overrideLoaded = true
+  try {
+    const saved = uni.getStorageSync(SERVER_BASE_STORAGE_KEY)
+    if (typeof saved === 'string' && saved.trim()) overrideBase = normalizeServerBase(saved)
+  } catch {
+    // 本地存储不可用时静默降级，走构建期内置地址
+  }
 }
 
 /** 当前生效的服务器地址：用户自定义 > 构建期内置 */
 export function currentApiBase(): string {
+  loadServerOverride()
   return overrideBase || API_BASE_URL
 }
 
 /** 读取用户自定义地址（设置页回显用），未自定义时为空串 */
 export function getApiBaseOverride(): string {
+  loadServerOverride()
   return overrideBase
 }
 
@@ -60,7 +129,9 @@ export function getApiBaseOverride(): string {
  * @param url 形如 http://域名或IP:端口；传空串清除自定义、恢复内置地址
  */
 export function setApiBaseOverride(url: string) {
+  loadServerOverride()
   overrideBase = normalizeServerBase(url)
+  overrideLoaded = true
   try {
     if (overrideBase) uni.setStorageSync(SERVER_BASE_STORAGE_KEY, overrideBase)
     else uni.removeStorageSync(SERVER_BASE_STORAGE_KEY)
@@ -199,17 +270,31 @@ export async function request<T>(
   data?: unknown,
   options: RequestOptions = {},
 ): Promise<T> {
+  const revision = captureSessionRevision()
   const { withAuth = true, timeoutMs, _retry = false } = options
-  const { status, data: body } = await sendRequest(method, resolveUrl(path), data, withAuth, timeoutMs)
+  // /me is the verification request used to leave the unavailable state.
+  if (withAuth && path !== `${API_PREFIX}/me`) assertAuthenticatedRequestAllowed()
+  let result: { status: number; data: unknown }
+  try {
+    result = await sendRequest(method, resolveUrl(path), data, withAuth, timeoutMs)
+  } catch (error) {
+    if (withAuth && isSessionRevisionCurrent(revision)) unavailableHandler?.()
+    throw error
+  }
+  const { status, data: body } = result
+  assertSessionRevisionCurrent(revision)
 
   if (status === 401 && !_retry && withAuth && getRefreshToken() && refreshHandler) {
     const refreshed = await refreshHandler()
+    assertSessionRevisionCurrent(revision)
     if (refreshed) {
       return request<T>(method, path, data, { withAuth, timeoutMs, _retry: true })
     }
   }
 
   if (status < 200 || status >= 300) {
+    if (status === 401 && withAuth) unauthorizedHandler?.()
+    else if (status >= 500 && withAuth) unavailableHandler?.()
     const errorBody = (body ?? {}) as ErrorBody
     const detail = errorBody.error ?? {}
     throw new ApiError(

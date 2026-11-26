@@ -28,7 +28,7 @@ public static class QueueNames
 /// <summary>任务消息发布入口（控制器/编排层/恢复与重试扫描共用）。</summary>
 public interface IRabbitMessageBus
 {
-    /// <summary>把任务 Id 投递到指定队列（持久化消息；连接未就绪时先尝试重连）。</summary>
+    /// <summary>把任务 Id 投递到指定队列并等待确认；不可路由、否认或超时均抛错，调用方负责重试。</summary>
     Task PublishAsync(string queue, Guid id, CancellationToken cancellationToken = default);
 }
 
@@ -40,6 +40,7 @@ public sealed class RabbitMessageBus(
     IOptions<RabbitOptions> options,
     ILogger<RabbitMessageBus> logger) : IRabbitMessageBus, IAsyncDisposable
 {
+    private static readonly TimeSpan PublishConfirmationTimeout = TimeSpan.FromSeconds(30);
     private readonly SemaphoreSlim _connectionLock = new(1, 1);
     private readonly SemaphoreSlim _publishLock = new(1, 1);
     private IConnection? _connection;
@@ -54,7 +55,27 @@ public sealed class RabbitMessageBus(
         {
             var channel = await GetPublishChannelAsync(cancellationToken);
             var properties = new BasicProperties { Persistent = true };
-            await channel.BasicPublishAsync(string.Empty, queue, mandatory: false, basicProperties: properties, body: body, cancellationToken);
+            using var publishTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            publishTimeout.CancelAfter(PublishConfirmationTimeout);
+            try
+            {
+                await channel.BasicPublishAsync(
+                    string.Empty,
+                    queue,
+                    mandatory: true,
+                    basicProperties: properties,
+                    body: body,
+                    publishTimeout.Token);
+            }
+            catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                logger.LogWarning(exception,
+                    "Timed out waiting for RabbitMQ to confirm message {MessageId} on {Queue} after {Timeout}.",
+                    id, queue, PublishConfirmationTimeout);
+                throw new TimeoutException(
+                    $"RabbitMQ did not confirm message {id} on queue {queue} within {PublishConfirmationTimeout}.",
+                    exception);
+            }
         }
         finally
         {
@@ -91,7 +112,12 @@ public sealed class RabbitMessageBus(
         if (_publishChannel is not null)
             await _publishChannel.DisposeAsync();
         var current = await GetConnectionAsync(cancellationToken);
-        _publishChannel = await current.CreateChannelAsync(cancellationToken: cancellationToken);
+        // Tracking correlates mandatory basic.return responses with the awaiting publish;
+        // BasicPublishAsync throws PublishException for broker nack or unroutable messages.
+        var publisherOptions = new CreateChannelOptions(
+            publisherConfirmationsEnabled: true,
+            publisherConfirmationTrackingEnabled: true);
+        _publishChannel = await current.CreateChannelAsync(publisherOptions, cancellationToken);
         await DeclareQueueAsync(_publishChannel, QueueNames.Downloads, cancellationToken);
         await DeclareQueueAsync(_publishChannel, QueueNames.Imports, cancellationToken);
         return _publishChannel;

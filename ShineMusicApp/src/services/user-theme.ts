@@ -13,7 +13,7 @@
  * 远端停用而本地处于 custom → 回退默认预设主题。
  */
 import { t } from '@/locale'
-import { API_PREFIX, http, refreshAccessToken, resolveUrl } from './http'
+import { API_PREFIX, assertApiContextCurrent, assertApiRequestOrigin, captureApiContext, http, refreshAccessToken, resolveUrl, trackApiRequest } from './http'
 import { getAccessToken } from './tokens'
 import {
   applyCustomTheme,
@@ -53,26 +53,37 @@ export function fetchMyTheme(): Promise<ApiUserTheme> {
  * - 非 H5 仍走 uni.uploadFile（原生文件路径可用）。
  */
 export async function uploadWallpaper(filePath: string): Promise<ApiUserTheme> {
+  const context = captureApiContext()
   // #ifdef H5
   if (typeof fetch === 'undefined') throw new Error(t('services.uploadNotSupported'))
-  const blob = await (await fetch(filePath)).blob()
-  const send = () => {
-    const form = new FormData()
-    form.append('wallpaper', blob, 'wallpaper')
-    const headers: Record<string, string> = {}
-    const token = getAccessToken()
-    if (token) headers.Authorization = `Bearer ${token}`
-    return fetch(resolveUrl(`${API_PREFIX}/me/theme/wallpaper`), {
-      method: 'POST',
-      headers,
-      body: form,
-    })
-  }
-  let response = await send()
-  if (response.status === 401 && (await refreshAccessToken())) {
+  const controller = new AbortController()
+  const unregister = trackApiRequest(context, () => controller.abort())
+  let response: Response
+  try {
+    const blob = await (await fetch(filePath, { signal: controller.signal })).blob()
+    assertApiContextCurrent(context)
+    const send = () => {
+      const target = resolveUrl(`${API_PREFIX}/me/theme/wallpaper`)
+      assertApiRequestOrigin(context, target)
+      const form = new FormData()
+      form.append('wallpaper', blob, 'wallpaper')
+      const headers: Record<string, string> = {}
+      const token = getAccessToken()
+      if (token) headers.Authorization = `Bearer ${token}`
+      return fetch(target, { method: 'POST', headers, body: form, signal: controller.signal })
+    }
     response = await send()
+    assertApiContextCurrent(context)
+    if (response.status === 401 && (await refreshAccessToken())) {
+      assertApiContextCurrent(context)
+      response = await send()
+      assertApiContextCurrent(context)
+    }
+  } finally {
+    unregister()
   }
   const body = await response.json().catch(() => null)
+  assertApiContextCurrent(context)
   if (response.status < 200 || response.status >= 300) {
     const detail = (body as { error?: { message?: string } } | null)?.error
     throw new Error(detail?.message || t('services.uploadFailedWithStatus', { status: response.status }))
@@ -83,11 +94,24 @@ export async function uploadWallpaper(filePath: string): Promise<ApiUserTheme> {
   // 401 时走单飞刷新后重试一次（与 http 层一致）：访问令牌过期时 uni.uploadFile 会静默失败
   const sendOnce = () =>
     new Promise<ApiUserTheme>((resolve, reject) => {
+      assertApiContextCurrent(context)
+      let settled = false
+      let task: ReturnType<typeof uni.uploadFile> | undefined
+      let unregister: () => void = () => undefined
+      const finish = (fn: (value: any) => void, value: any) => {
+        if (settled) return
+        settled = true
+        unregister()
+        if (!isCurrent(context)) return reject(new Error(t('services.apiContextChanged')))
+        fn(value)
+      }
       const token = getAccessToken()
       const header: Record<string, string> = {}
       if (token) header.Authorization = `Bearer ${token}`
-      uni.uploadFile({
-        url: resolveUrl(`${API_PREFIX}/me/theme/wallpaper`),
+      const target = resolveUrl(`${API_PREFIX}/me/theme/wallpaper`)
+      assertApiRequestOrigin(context, target)
+      task = uni.uploadFile({
+        url: target,
         name: 'wallpaper',
         filePath,
         header,
@@ -101,19 +125,27 @@ export async function uploadWallpaper(filePath: string): Promise<ApiUserTheme> {
               reject(error)
               return
             }
-            resolve(body as ApiUserTheme)
+            finish(resolve, body as ApiUserTheme)
           } catch (error) {
-            reject(new Error(error instanceof Error ? error.message : t('services.uploadResponseParseFailed')))
+            finish(reject, new Error(error instanceof Error ? error.message : t('services.uploadResponseParseFailed')))
           }
         },
-        fail: (err) => reject(new Error(err.errMsg || t('services.uploadFailed'))),
+        fail: (err) => finish(reject, new Error(err.errMsg || t('services.uploadFailed'))),
       })
+      unregister = trackApiRequest(context, () => {
+        task?.abort?.()
+        finish(reject, new Error(t('services.apiContextChanged')))
+      })
+      if (settled) unregister()
     })
   try {
     return await sendOnce()
   } catch (error) {
     const status = (error as { status?: number }).status
-    if (status === 401 && (await refreshAccessToken())) return sendOnce()
+    if (status === 401 && (await refreshAccessToken())) {
+      assertApiContextCurrent(context)
+      return sendOnce()
+    }
     throw error
   }
   // #endif
@@ -158,22 +190,34 @@ function toConfig(remote: ApiUserTheme): CustomThemeConfig {
  * 失败（未登录/无壁纸/网络异常）返回 null，不抛错。
  */
 export async function fetchWallpaperObjectUrl(): Promise<string | null> {
+  const context = captureApiContext()
   // #ifdef H5
   try {
     if (typeof document === 'undefined') return null
+    const controller = new AbortController()
+    const unregister = trackApiRequest(context, () => controller.abort())
     const send = async () => {
+      const target = resolveUrl(`${API_PREFIX}/me/theme/wallpaper`)
+      assertApiRequestOrigin(context, target)
       const headers: Record<string, string> = {}
       const token = getAccessToken()
       if (token) headers.Authorization = `Bearer ${token}`
-      return fetch(resolveUrl(`${API_PREFIX}/me/theme/wallpaper`), { headers })
+      return fetch(target, { headers, signal: controller.signal })
     }
-    let response = await send()
-    if (response.status === 401 && (await refreshAccessToken())) {
-      response = await send()
+    try {
+      let response = await send()
+      assertApiContextCurrent(context)
+      if (response.status === 401 && (await refreshAccessToken())) {
+        assertApiContextCurrent(context)
+        response = await send()
+      }
+      if (!response.ok) return null
+      const blob = await response.blob()
+      assertApiContextCurrent(context)
+      return URL.createObjectURL(blob)
+    } finally {
+      unregister()
     }
-    if (!response.ok) return null
-    const blob = await response.blob()
-    return URL.createObjectURL(blob)
   } catch {
     return null
   }
@@ -181,20 +225,39 @@ export async function fetchWallpaperObjectUrl(): Promise<string | null> {
   // #ifndef H5
   // App 端无 blob/objectURL：带鉴权下载到本地临时文件，返回本地路径供 CSS/缩略图直接引用
   try {
+    let task: ReturnType<typeof uni.downloadFile> | undefined
+    let unregister: () => void = () => undefined
     const downloadOnce = () =>
       new Promise<{ statusCode: number; tempFilePath: string }>((resolve, reject) => {
+        assertApiContextCurrent(context)
+        let settled = false
+        const finish = (fn: (value: any) => void, value: any) => {
+          if (settled) return
+          settled = true
+          unregister()
+          if (!isCurrent(context)) return reject(new Error(t('services.apiContextChanged')))
+          fn(value)
+        }
         const headers: Record<string, string> = {}
         const token = getAccessToken()
         if (token) headers.Authorization = `Bearer ${token}`
-        uni.downloadFile({
-          url: resolveUrl(`${API_PREFIX}/me/theme/wallpaper`),
+        const target = resolveUrl(`${API_PREFIX}/me/theme/wallpaper`)
+        assertApiRequestOrigin(context, target)
+        task = uni.downloadFile({
+          url: target,
           header: headers,
-          success: (res) => resolve({ statusCode: res.statusCode, tempFilePath: res.tempFilePath }),
-          fail: reject,
+          success: (res) => finish(resolve, { statusCode: res.statusCode, tempFilePath: res.tempFilePath }),
+          fail: (error) => finish(reject, error),
         })
+        unregister = trackApiRequest(context, () => {
+          task?.abort?.()
+          finish(reject, new Error(t('services.apiContextChanged')))
+        })
+        if (settled) unregister()
       })
     let res = await downloadOnce()
     if (res.statusCode === 401 && (await refreshAccessToken())) res = await downloadOnce()
+    assertApiContextCurrent(context)
     return res.statusCode === 200 && res.tempFilePath ? res.tempFilePath : null
   } catch {
     return null
@@ -209,10 +272,13 @@ export async function fetchWallpaperObjectUrl(): Promise<string | null> {
  * - 远端停用且本地非 custom：无动作（本地预设选择优先）。
  */
 export async function syncRemoteTheme(): Promise<void> {
+  const context = captureApiContext()
   try {
     const remote = await fetchMyTheme()
+    assertApiContextCurrent(context)
     if (remote.enabled) {
       const wallpaperUrl = remote.wallpaperUrl ? await fetchWallpaperObjectUrl() : null
+      assertApiContextCurrent(context)
       applyCustomTheme(toConfig(remote), wallpaperUrl)
     } else if (currentTheme.value === 'custom') {
       applyTheme(DEFAULT_THEME)
@@ -220,4 +286,8 @@ export async function syncRemoteTheme(): Promise<void> {
   } catch {
     // 未登录/网络失败：保持本地状态不变
   }
+}
+
+function isCurrent(context: ReturnType<typeof captureApiContext>): boolean {
+  try { assertApiContextCurrent(context); return true } catch { return false }
 }

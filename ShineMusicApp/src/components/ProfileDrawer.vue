@@ -13,10 +13,6 @@ import { computed, ref } from 'vue'
 import { AudioLines, Check, ChevronRight, DownloadCloud, Inbox, Languages, LogOut, Mail, Palette, Server, ShieldCheck, Upload, UserCog, X } from 'lucide-vue-next'
 import LanguageSwitcher from './LanguageSwitcher.vue'
 import { currentUser, isAdmin, logout } from '@/services/session'
-import { resetLibrary } from '@/services/library'
-import { resetFeedback } from '@/services/feedback'
-import { resetNotifications } from '@/services/notifications'
-import { resetMyLibrary } from '@/services/user-library'
 import { applyTheme, currentTheme, THEMES, type ThemeId } from '@/services/theme'
 import { currentApiBase, resolveUrl } from '@/services/http'
 import { promptServerBase } from '@/utils/server-base-dialog'
@@ -135,12 +131,8 @@ function handleLogout() {
       loggingOut.value = true
       try {
         await logout()
-        resetLibrary()
-        resetMyLibrary()
-        resetFeedback()
-        resetNotifications()
+        close()
         uni.showToast({ title: t('drawer.loggedOut'), icon: 'none' })
-        setTimeout(() => uni.reLaunch({ url: '/pages/home/index' }), 300)
       } finally {
         loggingOut.value = false
       }

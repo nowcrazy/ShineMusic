@@ -12,8 +12,8 @@
  */
 import { ref } from 'vue'
 import type { ApiPageResult } from '@/types/music'
-import { API_PREFIX, http } from './http'
-import { isAuthenticated } from './session'
+import { API_PREFIX, assertApiContextCurrent, captureApiContext, http } from './http'
+import { isAuthenticated } from './session-state'
 
 /** 站内信列表项 */
 export interface ApiNotification {
@@ -32,6 +32,7 @@ export interface ApiNotification {
 
 /** 全局未读消息数（0 表示无未读，角标隐藏） */
 export const unreadCount = ref(0)
+let unreadCountGeneration = 0
 
 /**
  * 拉取消息列表。
@@ -40,13 +41,16 @@ export const unreadCount = ref(0)
 export async function getNotifications(
   query: { unreadOnly?: boolean; page?: number; pageSize?: number } = {},
 ) {
+  const context = captureApiContext()
   const params = new URLSearchParams()
   if (query.unreadOnly) params.set('unreadOnly', 'true')
   params.set('page', String(query.page ?? 1))
   params.set('pageSize', String(query.pageSize ?? 20))
-  return http.get<ApiPageResult<ApiNotification>>(
+  const result = await http.get<ApiPageResult<ApiNotification>>(
     `${API_PREFIX}/me/notifications?${params.toString()}`,
   )
+  assertApiContextCurrent(context)
+  return result
 }
 
 /**
@@ -59,11 +63,12 @@ export async function refreshUnreadCount() {
     unreadCount.value = 0
     return
   }
+  const generation = unreadCountGeneration
   try {
     const result = await http.get<{ count: number }>(
       `${API_PREFIX}/me/notifications/unread-count`,
     )
-    unreadCount.value = result.count
+    if (generation === unreadCountGeneration) unreadCount.value = result.count
   } catch {
     // 网络异常：保持上一次的值，不打扰用户
   }
@@ -71,14 +76,16 @@ export async function refreshUnreadCount() {
 
 /** 标记单条消息为已读，并本地同步未读数 */
 export async function markNotificationRead(notificationId: string) {
+  const generation = unreadCountGeneration
   await http.post(`${API_PREFIX}/me/notifications/${notificationId}/read`)
-  unreadCount.value = Math.max(0, unreadCount.value - 1)
+  if (generation === unreadCountGeneration) unreadCount.value = Math.max(0, unreadCount.value - 1)
 }
 
 /** 标记全部已读 */
 export async function markAllNotificationsRead() {
+  const generation = unreadCountGeneration
   await http.post(`${API_PREFIX}/me/notifications/read-all`)
-  unreadCount.value = 0
+  if (generation === unreadCountGeneration) unreadCount.value = 0
 }
 
 /** 删除单条消息 */
@@ -88,5 +95,6 @@ export async function deleteNotification(notificationId: string) {
 
 /** 退出登录时清空本地未读状态 */
 export function resetNotifications() {
+  unreadCountGeneration++
   unreadCount.value = 0
 }

@@ -23,7 +23,8 @@ namespace ShineMusic.Service;
 /// <param name="ActorUserId">操作人用户 Id；系统自动发布时为 <see cref="Guid.Empty"/>。</param>
 /// <param name="TraceId">链路追踪 Id（人工发布取 HttpContext.TraceIdentifier，自动发布取合成标识）。</param>
 /// <param name="IsAutomatic">是否评分直通自动发布（决定审计动作名 track.published / track.auto_published）。</param>
-public sealed record ImportPublishContext(Guid ActorUserId, string TraceId, bool IsAutomatic);
+/// <param name="AttemptId">后台执行租约的代次标识；人工发布为空。</param>
+public sealed record ImportPublishContext(Guid ActorUserId, string TraceId, bool IsAutomatic, Guid? AttemptId = null);
 
 /// <summary>发布失败类别，供调用方映射为 HTTP 响应。</summary>
 public enum ImportPublishErrorKind
@@ -87,7 +88,7 @@ public sealed class ImportPublishService(
             {
                 item.WarningsJson = AppendWarning(item.WarningsJson, reason);
                 item.ErrorMessage = reason;
-                await db.Updateable(item).ExecuteCommandAsync(cancellationToken);
+                await ImportExecutionGuard.SaveAsync(db, item, context.AttemptId, cancellationToken);
                 return ImportPublishResult.Failure(ImportPublishErrorKind.Conflict, reason);
             }
         }
@@ -128,7 +129,7 @@ public sealed class ImportPublishService(
             {
                 item.ErrorMessage = "audio_validation_failed";
                 item.WarningsJson = AppendWarning(item.WarningsJson, item.ErrorMessage);
-                await db.Updateable(item).ExecuteCommandAsync(cancellationToken);
+                await ImportExecutionGuard.SaveAsync(db, item, context.AttemptId, cancellationToken);
                 return ImportPublishResult.Failure(ImportPublishErrorKind.Conflict, item.ErrorMessage);
             }
             var qualityReason = AutoPublishPolicy.SourceRejectionReason(true, true, measured.DurationMs is > 0,
@@ -139,7 +140,7 @@ public sealed class ImportPublishService(
             {
                 item.ErrorMessage = qualityReason ?? "original_unavailable";
                 item.WarningsJson = AppendWarning(item.WarningsJson, item.ErrorMessage);
-                await db.Updateable(item).ExecuteCommandAsync(cancellationToken);
+                await ImportExecutionGuard.SaveAsync(db, item, context.AttemptId, cancellationToken);
                 return ImportPublishResult.Failure(ImportPublishErrorKind.Conflict, item.ErrorMessage);
             }
             item.Codec = measured.Codec;
@@ -274,7 +275,9 @@ public sealed class ImportPublishService(
                 && double.IsFinite(configured) ? Math.Clamp(configured, 0, 8760) : 24;
             var result = await new AssetReplacementService(db, libraryPaths, mediaService, TimeSpan.FromHours(hours))
                 .ReplaceAsync(reuseTrack, item, sourcePath, cancellationToken,
-                    token => CompletePublicationAsync(item, reuseTrack, context, pendingAudits, token));
+                    token => CompletePublicationAsync(item, reuseTrack, context, pendingAudits, token),
+                    token => ImportExecutionGuard.LockAsync(db, item, context.AttemptId, token),
+                    token => ImportExecutionGuard.SaveAsync(db, item, context.AttemptId, token));
             if (result.Succeeded) await FinishPublicationAsync(item);
             return result;
         }
@@ -420,6 +423,7 @@ public sealed class ImportPublishService(
                 Codec = originalFileAvailable ? item.Codec ?? "unknown" : "aac",
                 ContentHash = item.ContentHash,
                 BitrateKbps = item.BitrateKbps,
+                IsOriginal = originalFileAvailable,
                 IsPublished = true,
                 IsPrimary = preferOriginal || !keepCompatibility
             };
@@ -508,6 +512,7 @@ public sealed class ImportPublishService(
             await db.Ado.BeginTranAsync();
             try
             {
+                await ImportExecutionGuard.LockAsync(db, item, context.AttemptId, cancellationToken);
                 if (track.Artwork is not null)
                     await db.Insertable(track.Artwork).ExecuteCommandAsync(cancellationToken);
                 if (albumIsNew)
@@ -569,7 +574,7 @@ public sealed class ImportPublishService(
                     await db.Insertable(playbackAsset).ExecuteCommandAsync(cancellationToken);
                 if (lyric is not null)
                     await db.Insertable(lyric).ExecuteCommandAsync(cancellationToken);
-                await db.Updateable(item).ExecuteCommandAsync(cancellationToken);
+                await ImportExecutionGuard.SaveAsync(db, item, context.AttemptId, cancellationToken);
 
                 await CompletePublicationAsync(item, track, context, pendingAudits, cancellationToken);
                 await db.Ado.CommitTranAsync();
@@ -585,10 +590,12 @@ public sealed class ImportPublishService(
             return ImportPublishResult.Success(track.Id, item.Status);
         }
         // DbException 覆盖 Npgsql 的数据层异常（如内容哈希唯一冲突），与原先 DbUpdateException 的处理范围一致。
-        catch (Exception exception) when (exception is IOException or SqlSugarException or System.Data.Common.DbException)
+        catch (Exception exception) when (exception is IOException or SqlSugarException or System.Data.Common.DbException
+            or Media.MediaLeaseLostException or OperationCanceledException)
         {
             logger.LogError(exception, "Failed to publish import item {ItemId}.", item.Id);
             foreach (var path in copiedPaths) TryDelete(path);
+            if (exception is Media.MediaLeaseLostException or OperationCanceledException) throw;
             return ImportPublishResult.Failure(ImportPublishErrorKind.Internal, "The item could not be published.", ErrorCodes.InternalError);
         }
     }
@@ -618,6 +625,19 @@ public sealed class ImportPublishService(
         AddAudit(audits, context, context.IsAutomatic ? "track.auto_published" : "track.published", "track", track.Id,
             new { importItemId = item.Id });
         foreach (var audit in audits) await db.Insertable(audit).ExecuteCommandAsync(ct);
+        if (item.SourceProvider is not null)
+        {
+            var score = item.AutoScore;
+            var automatic = context.IsAutomatic;
+            await db.Updateable<ExternalDownloadTask>()
+                .SetColumns(task => task.Status == ExternalDownloadTaskStatuses.Completed)
+                .SetColumns(task => task.AutoScore == score)
+                .SetColumns(task => task.IsAutoPublished == automatic)
+                .SetColumns(task => task.ErrorCode == (string?)null)
+                .SetColumns(task => task.ErrorMessage == (string?)null)
+                .SetColumns(task => task.UpdatedAtUtc == DateTime.UtcNow)
+                .Where(task => task.ImportItemId == item.Id).ExecuteCommandAsync(ct);
+        }
         await db.Updateable<LibraryImportItem>().SetColumns(i => i.ErrorCode == "publication_housekeeping_pending")
             .Where(i => i.Id == item.Id).ExecuteCommandAsync(ct);
     }
@@ -627,11 +647,16 @@ public sealed class ImportPublishService(
     {
         try
         {
+            var committed = await db.Queryable<LibraryImportItem>().FirstAsync(i => i.Id == item.Id
+                && !i.IsDeleted && i.Status == LibraryImportItemStatuses.Published && i.PublishedTrackId == item.PublishedTrackId
+                && i.AttemptId == item.AttemptId);
+            if (committed is null) return;
             await UpdateBatchStatusAsync(db, item.BatchId, CancellationToken.None);
-            foreach (var key in new[] { item.SourceStorageKey, item.TranscodedStorageKey, item.ArtworkStorageKey }.Distinct())
+            foreach (var key in new[] { committed.SourceStorageKey, committed.TranscodedStorageKey, committed.ArtworkStorageKey }.Distinct())
                 if (key is not null && quarantinePaths.TryResolve(key, out var path)) File.Delete(path);
             await db.Updateable<LibraryImportItem>().SetColumns(i => i.ErrorCode == (string?)null)
-                .Where(i => i.Id == item.Id && i.Status == LibraryImportItemStatuses.Published).ExecuteCommandAsync();
+                .Where(i => i.Id == item.Id && !i.IsDeleted && i.Status == LibraryImportItemStatuses.Published
+                    && i.AttemptId == item.AttemptId && i.PublishedTrackId == item.PublishedTrackId).ExecuteCommandAsync();
         }
         catch (Exception ex)
         {
@@ -642,7 +667,7 @@ public sealed class ImportPublishService(
     public async Task RepairPublicationHousekeepingAsync(CancellationToken ct)
     {
         var items = await db.Queryable<LibraryImportItem>()
-            .Where(i => i.Status == LibraryImportItemStatuses.Published && i.ErrorCode == "publication_housekeeping_pending")
+            .Where(i => !i.IsDeleted && i.Status == LibraryImportItemStatuses.Published && i.ErrorCode == "publication_housekeeping_pending")
             .OrderBy(i => i.UpdatedAtUtc).Take(100).ToListAsync(ct);
         foreach (var item in items) await FinishPublicationAsync(item);
     }

@@ -47,7 +47,23 @@ public class ImportFormattingTests
     {
         Assert.Equal("The media file could not be parsed.",
             ImportFormatting.SafeErrorMessage(ErrorCodes.MediaParseFailed));
+        Assert.Equal("The audio file is damaged or incomplete. Please export it again and upload the complete file.",
+            ImportFormatting.SafeErrorMessage(ErrorCodes.MediaCorrupt));
         Assert.Equal("The import item could not be processed.",
             ImportFormatting.SafeErrorMessage("secret_internal_exception_type"));
+    }
+
+    [Theory]
+    [InlineData("[flac @ 123] invalid sync code", true)]
+    [InlineData("[flac @ 123] invalid frame header", true)]
+    [InlineData("[flac @ 123] decode_frame() failed", true)]
+    [InlineData("Error while decoding stream #0:0: Invalid data found when processing input", true)]
+    [InlineData("C:\\uploads\\song.flac: Permission denied", false)]
+    [InlineData("Error writing trailer: No space left on device", false)]
+    [InlineData("Unknown decoder 'flac'", false)]
+    [InlineData("Unrecognized option 'xerror'. Error splitting the argument list: Option not found", false)]
+    public void Only_input_decode_errors_are_classified_as_permanent_corruption(string diagnostic, bool expected)
+    {
+        Assert.Equal(expected, FfmpegMediaService.IsCorruptAudioDiagnostic(diagnostic));
     }
 }

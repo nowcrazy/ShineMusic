@@ -6,6 +6,7 @@
 // 即便下游抛异常（被异常处理中间件兜底），这里的 finally 仍会记录一次操作结果。
 
 using System.Diagnostics;
+using System.Globalization;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using Microsoft.Extensions.Logging;
@@ -33,7 +34,7 @@ public sealed class OperationLoggingMiddleware
     {
         var stopwatch = Stopwatch.StartNew();
         var method = context.Request.Method;
-        var path = context.Request.Path + context.Request.QueryString;
+        var path = BuildLogPath(context.Request);
         var clientIp = ShineMusic.Common.ClientIp.Resolve(context);
         var userAgent = context.Request.Headers.UserAgent.ToString();
 
@@ -79,6 +80,24 @@ public sealed class OperationLoggingMiddleware
                 method, path, userId, clientIp, status, stopwatch.ElapsedMilliseconds);
             CorrelationContext.CurrentTraceId = previousTraceId;
         }
+    }
+
+    /// <summary>只记录路径和有效的数字分页值，其余查询参数不进入操作或调试日志。</summary>
+    private static string BuildLogPath(HttpRequest request)
+    {
+        var safeQuery = new List<KeyValuePair<string, string?>>();
+        foreach (var name in new[] { "page", "pageSize" })
+        {
+            var values = request.Query[name];
+            // 白名单参数也不直接信任：重复、非数字或越界值可能携带凭据/个人信息。
+            if (values.Count == 1 &&
+                int.TryParse(values[0], NumberStyles.None, CultureInfo.InvariantCulture, out var value) &&
+                value > 0)
+            {
+                safeQuery.Add(new(name, value.ToString(CultureInfo.InvariantCulture)));
+            }
+        }
+        return request.Path + QueryString.Create(safeQuery);
     }
 
     /// <summary>取 JWT 用户 Id：兼容未映射的 sub 与映射后的 NameIdentifier，均缺失时记为 anonymous。</summary>

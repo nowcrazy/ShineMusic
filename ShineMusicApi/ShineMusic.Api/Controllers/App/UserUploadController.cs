@@ -1,8 +1,7 @@
 // 职责：用户上传本地音频（扫码导入）与“我的曲库”管理。
 // 上传与管理员导入共用隔离暂存（ImportStagingService）与后台处理队列；
-// 内容哈希命中已有曲库的音频直接建曲库引用（秒级、不入队、不重复存储），
-// 未命中的新歌进入处理队列，完成后自动私有入库（仅上传者可听），
-// 是否转公开进入公共曲库由管理员在审核队列决定。
+// 仅本人已验证私人原件可按哈希复用；公开或其他用户的曲目不阻止本人的私人上传。
+// 新文件进入处理队列，完成校验后保留原件私有入库；参与待选并达标的音频另行审核。
 
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -38,8 +37,7 @@ public sealed class UserUploadController : ControllerBase
 
     /// <summary>
     /// 上传本地音频（可同时携带同名 .lrc 旁挂歌词）。
-    /// 内容哈希命中已有曲库的音频直接建曲库引用（秒级加入曲库、不重复存储），
-    /// 未命中的新歌进入处理队列（转码 + 歌词自动匹配），完成后自动私有入库。
+    /// 本人相同私人原件可直接复用，其他文件经后台校验后分别入本人私人库。
     /// </summary>
     [HttpPost("uploads", Name = "UploadUserTracks")]
     public async Task<IResult> Upload(
@@ -48,7 +46,8 @@ public sealed class UserUploadController : ControllerBase
         IRabbitMessageBus messageBus,
         IOptions<UploadOptions> uploadOptions,
         ILogger<UserUploadController> logger,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        [FromServices] UserLibraryWorkflowService? workflow = null)
     {
         if (!HttpContext.User.TryGetUserId(out var userId))
             return Results.Unauthorized();
@@ -88,6 +87,20 @@ public sealed class UserUploadController : ControllerBase
             logger.LogWarning("Ignored {Count} lyrics file(s) without a matching audio track: {Orphans} (user {UserId}).",
                 staged.OrphanLyrics.Count, string.Join(", ", staged.OrphanLyrics), userId);
 
+        var participatesValues = staged.Form["participatesInPublicReview"];
+        var participates = false;
+        if (participatesValues.Count > 1 || (participatesValues.Count == 1
+                && !bool.TryParse(participatesValues[0], out participates)))
+        {
+            staging.DeleteBatchDirectory(staged.BatchDirectory);
+            return ApiResults.ValidationError(HttpContext, "participatesInPublicReview", "Use true or false for public review participation.");
+        }
+        if (staged.Audio.Count == 0)
+        {
+            staging.DeleteBatchDirectory(staged.BatchDirectory);
+            return ApiResults.ValidationError(HttpContext, "files", "At least one audio file is required.");
+        }
+
         var referencedTrackIds = new List<Guid>();
         var referencedTitles = new List<ReferencedTrackDto>();
         var queued = new List<QueuedUploadDto>();
@@ -97,27 +110,24 @@ public sealed class UserUploadController : ControllerBase
 
         foreach (var file in staged.Audio)
         {
-            // 强去重：内容哈希命中已有媒体资产 → 直接建曲库引用（不重复存储、不入处理队列）。
+            // Match only this user's active validated private original; global hash equality is not an ownership check.
             var existing = await db.Queryable<MediaAsset>()
                 .LeftJoin<Track>((asset, track) => asset.TrackId == track.Id)
-                .Where((asset, track) => asset.ContentHash == file.ContentHash)
+                .Where((asset, track) => asset.ContentHash == file.ContentHash && asset.IsOriginal && asset.IsPublished
+                    && track.PublishedAt == null && track.OwnerUserId == userId && !track.IsRecycled)
                 .Select((asset, track) => new { asset.TrackId, track.PublishedAt, track.OwnerUserId })
                 .FirstAsync(cancellationToken);
 
             if (existing is not null)
             {
-                // 他人私有曲目不可引用（避免私有内容泄露）。
-                if (existing.PublishedAt is null && existing.OwnerUserId != userId)
-                {
-                    rejected.Add(new RejectedUploadDto(file.DisplayName, "private_track_of_another_user"));
-                    staging.DeleteStagedFile(file.StorageKey);
-                    continue;
-                }
                 if (!await db.Queryable<UserLibraryItem>().AnyAsync(item => item.UserId == userId && item.TrackId == existing.TrackId, cancellationToken))
                 {
                     referenceInserts.Add(new UserLibraryItem { UserId = userId, TrackId = existing.TrackId });
-                    referencedTrackIds.Add(existing.TrackId);
                 }
+                // 即使本人已经收藏该曲目，也要返回可见的成功结果，避免重复上传后所有结果桶为空。
+                referencedTrackIds.Add(existing.TrackId);
+                if (participates && workflow is not null)
+                    await workflow.EnqueuePublicReviewAsync(userId, existing.TrackId, cancellationToken);
                 staging.DeleteStagedFile(file.StorageKey);
                 continue;
             }
@@ -131,7 +141,8 @@ public sealed class UserUploadController : ControllerBase
                 ContentHash = file.ContentHash,
                 SizeBytes = file.SizeBytes,
                 Status = LibraryImportItemStatuses.Uploaded,
-                IsUserUpload = true
+                IsUserUpload = true,
+                ParticipatesInPublicReview = participates
             });
             queued.Add(new QueuedUploadDto(file.ItemId, file.DisplayName));
         }
@@ -155,6 +166,7 @@ public sealed class UserUploadController : ControllerBase
         }
 
         // 曲库引用与批次/条目同事务提交（等价原先单次 SaveChanges）。
+        var outboxIds = new List<Guid>();
         await db.Ado.BeginTranAsync();
         try
         {
@@ -164,6 +176,8 @@ public sealed class UserUploadController : ControllerBase
             {
                 await db.Insertable(batch).ExecuteCommandAsync(cancellationToken);
                 await db.Insertable(pendingItems).ExecuteCommandAsync(cancellationToken);
+                foreach (var item in pendingItems)
+                    outboxIds.Add(await MessageOutbox.EnqueueAsync(db, QueueNames.Imports, item.Id, cancellationToken));
             }
             await db.Ado.CommitTranAsync();
         }
@@ -172,8 +186,8 @@ public sealed class UserUploadController : ControllerBase
             await db.Ado.RollbackTranAsync();
             throw;
         }
-        foreach (var item in pendingItems)
-            await messageBus.PublishAsync(QueueNames.Imports, item.Id, cancellationToken);
+        foreach (var outboxId in outboxIds)
+            await MessageOutboxDispatcher.TryDeliverAsync(db, messageBus, outboxId, cancellationToken);
 
         // 为引用结果补齐曲目摘要（数量少，直接查库；艺人关联批量取回后内存水合）。
         if (referencedTrackIds.Count > 0)
@@ -200,6 +214,34 @@ public sealed class UserUploadController : ControllerBase
             referencedTitles,
             queued,
             rejected));
+    }
+
+    /// <summary>查看本人上传批次的处理阶段和逐文件失败原因；他人的批次统一返回不存在。</summary>
+    [HttpGet("uploads/{batchId:guid}", Name = "GetUserUploadBatch")]
+    [ProducesResponseType(typeof(UserUploadBatchDto), StatusCodes.Status200OK)]
+    public async Task<IResult> GetUploadBatch(Guid batchId, ISqlSugarClient db, CancellationToken cancellationToken)
+    {
+        if (!HttpContext.User.TryGetUserId(out var userId))
+            return Results.Unauthorized();
+
+        var batch = await db.Queryable<LibraryImportBatch>()
+            .FirstAsync(candidate => candidate.Id == batchId && candidate.CreatedByUserId == userId, cancellationToken);
+        if (batch is null)
+            return ApiResults.NotFound(HttpContext);
+
+        var items = await db.Queryable<LibraryImportItem>()
+            .Where(item => item.BatchId == batchId && item.IsUserUpload)
+            .OrderBy(item => item.CreatedAtUtc)
+            .ToListAsync(cancellationToken);
+        if (items.Count == 0)
+            return ApiResults.NotFound(HttpContext);
+
+        return Results.Ok(new UserUploadBatchDto(batch.Id, batch.Status,
+            items.Select(item => new UserUploadItemDto(item.Id, item.DisplayName, item.Status,
+                item.PublishedTrackId, item.ErrorCode,
+                item.ErrorCode is null ? null : ImportFormatting.SafeErrorMessage(item.ErrorCode),
+                DateTime.SpecifyKind(item.UpdatedAtUtc, DateTimeKind.Utc))).ToArray(),
+            DateTime.SpecifyKind(batch.CreatedAtUtc, DateTimeKind.Utc)));
     }
 
     /// <summary>
@@ -269,7 +311,8 @@ public sealed class UserUploadController : ControllerBase
             {
                 var candidate = candidates
                     .Where(track => string.Equals(NormalizeTitle(track.Title), normalized, StringComparison.OrdinalIgnoreCase))
-                    .Where(track => file.DurationMs is null || track.DurationMs is null ||
+                .Where(track => !track.IsRecycled)
+                .Where(track => file.DurationMs is null || track.DurationMs is null ||
                         Math.Abs(track.DurationMs.Value - file.DurationMs.Value) <= DurationToleranceMs)
                     .Where(track => string.IsNullOrWhiteSpace(file.Artist) ||
                         track.TrackArtists.Any(link => link.Artist.Name.Contains(file.Artist!, StringComparison.OrdinalIgnoreCase)))
@@ -306,6 +349,7 @@ public sealed class UserUploadController : ControllerBase
         // 先把当前用户的引用记录整体取出，在内存按 AddedAtUtc 倒序分页（“最近添加优先”语义不变）。
         var allRows = await db.Queryable<UserLibraryItem>()
             .Where(item => item.UserId == userId)
+            .Where(item => SqlFunc.Subqueryable<Track>().Where(track => track.Id == item.TrackId && !track.IsRecycled).Any())
             .ToListAsync(cancellationToken);
         var ordered = allRows.OrderByDescending(item => item.AddedAtUtc).ToList();
         var total = ordered.Count;
@@ -352,7 +396,7 @@ public sealed class UserUploadController : ControllerBase
 
         // 仅允许引用公开曲目与本人私有曲目。
         var referenceable = await db.Queryable<Track>()
-            .Where(track => trackIds.Contains(track.Id) && (track.PublishedAt != null || track.OwnerUserId == userId))
+            .Where(track => trackIds.Contains(track.Id) && !track.IsRecycled && (track.PublishedAt != null || track.OwnerUserId == userId))
             .Select(track => track.Id)
             .ToListAsync(cancellationToken);
 
@@ -382,16 +426,13 @@ public sealed class UserUploadController : ControllerBase
     [HttpDelete("library/{trackId:guid}", Name = "RemoveTrackFromMyLibrary")]
     public async Task<IResult> RemoveFromLibrary(
         Guid trackId,
-        ISqlSugarClient db,
+        UserLibraryWorkflowService workflow,
         CancellationToken cancellationToken)
     {
         if (!HttpContext.User.TryGetUserId(out var userId))
             return Results.Unauthorized();
-        var deleted = await db.Deleteable<UserLibraryItem>()
-            .Where(candidate => candidate.UserId == userId && candidate.TrackId == trackId)
-            .ExecuteCommandAsync(cancellationToken);
-        if (deleted == 0)
-            return ApiResults.NotFound(HttpContext);
+        var removed = await workflow.MoveToRecycleAsync(trackId, userId, cancellationToken);
+        if (removed is null) return ApiResults.NotFound(HttpContext);
         return Results.NoContent();
     }
 

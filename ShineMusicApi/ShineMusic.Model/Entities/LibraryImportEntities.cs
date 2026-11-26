@@ -93,6 +93,22 @@ public sealed class LibraryImportItem
     public LibraryImportBatch Batch { get; set; } = null!;
     /// <summary>流水线状态，取值见 <see cref="LibraryImportItemStatuses"/>，默认 uploaded；(Status, CreatedAtUtc) 建有复合索引。</summary>
     public string Status { get; set; } = LibraryImportItemStatuses.Uploaded;
+
+    /// <summary>当前持有条目租约的媒体 Worker 标识；旧记录为空表示尚未按租约模型认领。</summary>
+    [SugarColumn(IsNullable = true)]
+    public string? WorkerId { get; set; }
+
+    /// <summary>当前租约失效时间（UTC）；只有超过该时间的处理中条目才允许被恢复。</summary>
+    [SugarColumn(IsNullable = true, ColumnDataType = "timestamptz")]
+    public DateTime? LeaseUntilUtc { get; set; }
+
+    /// <summary>本次执行实例的 fencing 标识；状态/结果写入必须带此值，避免迟到实例覆盖新执行。</summary>
+    [SugarColumn(IsNullable = true)]
+    public Guid? AttemptId { get; set; }
+
+    /// <summary>最近一次租约心跳时间（UTC），用于观测长任务是否仍在运行。</summary>
+    [SugarColumn(IsNullable = true, ColumnDataType = "timestamptz")]
+    public DateTime? LastHeartbeatAtUtc { get; set; }
     /// <summary>上传时的原始文件名（用于展示与取扩展名白名单校验），最长 255 字符。</summary>
     public required string DisplayName { get; set; }
     /// <summary>原始上传文件在隔离存储中的存储键（未经信任的文件先隔离，审核通过后才进入正式曲库）。</summary>
@@ -103,6 +119,9 @@ public sealed class LibraryImportItem
     /// <summary>从标签中抽取并保存到隔离存储的封面图片存储键。</summary>
     [SugarColumn(IsNullable = true)]
     public string? ArtworkStorageKey { get; set; }
+    /// <summary>质量准入后保留的原始音频在正式媒体库中的存储键；兼容播放副本不得替代它。</summary>
+    [SugarColumn(IsNullable = true)]
+    public string? OriginalStorageKey { get; set; }
     /// <summary>上传文件内容哈希（SHA256 等），用于去重与完整性校验；该列建有非唯一索引。</summary>
     public required string ContentHash { get; set; }
     /// <summary>文件大小（字节），用于上传上限校验与展示。</summary>
@@ -116,6 +135,18 @@ public sealed class LibraryImportItem
     /// <summary>探测出的码率（kbps）。</summary>
     [SugarColumn(IsNullable = true)]
     public int? BitrateKbps { get; set; }
+    /// <summary>原音频采样率；无法探测时为空。</summary>
+    [SugarColumn(IsNullable = true)]
+    public int? SampleRateHz { get; set; }
+    /// <summary>无损音频位深；无法探测时为空。</summary>
+    [SugarColumn(IsNullable = true)]
+    public int? BitsPerSample { get; set; }
+    /// <summary>原音频声道数；无法探测时为空。</summary>
+    [SugarColumn(IsNullable = true)]
+    public int? Channels { get; set; }
+    /// <summary>编码器配置文件（如 AAC-LC）；无法探测时为空。</summary>
+    [SugarColumn(IsNullable = true)]
+    public string? CodecProfile { get; set; }
     /// <summary>从音频标签解析出的标题（待人工审核确认）。</summary>
     [SugarColumn(IsNullable = true)]
     public string? Title { get; set; }
@@ -210,6 +241,8 @@ public sealed class LibraryImportItem
     public bool IsMetadataReviewed { get; set; }
     /// <summary>是否为用户上传（区别于管理员导入）：用户上传的条目处理完成后自动私有入库（立即可听），而非进入人工审核发布队列。</summary>
     public bool IsUserUpload { get; set; }
+    /// <summary>上传者是否明确选择将此曲目送入高质量公共曲库候选审核。</summary>
+    public bool ParticipatesInPublicReview { get; set; }
     /// <summary>外部音源标识（audius/jamendo）：仅音源抓歌条目有值，null 表示手动上传/用户上传；
     /// 导入流水线据此对音源条目启用「评分直通入库」闸门。</summary>
     [SugarColumn(IsNullable = true)]

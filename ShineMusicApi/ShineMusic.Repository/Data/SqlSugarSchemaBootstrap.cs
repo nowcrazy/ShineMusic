@@ -70,6 +70,9 @@ public static class SqlSugarSchemaBootstrap
         {
             logger.LogInformation("SqlSugar CodeFirst initializing {Count} entity tables (fresh database).", entityTypes.Length);
             db.CodeFirst.InitTables(entityTypes);
+            EnsureActiveRefreshSessionIndex(db);
+            EnsureMediaLeaseIndexes(db);
+            EnsureMessageOutboxIndexes(db);
             return;
         }
 
@@ -101,7 +104,13 @@ public static class SqlSugarSchemaBootstrap
         EnsureColumn(db, logger, "admin_audit_entries", ToSnakeCase(nameof(ShineMusic.Model.Entities.AdminAuditEntry.ClientType)));
         EnsureColumn(db, logger, "admin_audit_entries", ToSnakeCase(nameof(ShineMusic.Model.Entities.AdminAuditEntry.DeviceInfo)));
         EnsureColumn(db, logger, "users", ToSnakeCase(nameof(ShineMusic.Model.Entities.ApplicationUser.TempAdminUntilUtc)), "timestamptz");
+        EnsureColumn(db, logger, "refresh_tokens", ToSnakeCase(nameof(ShineMusic.Model.Entities.RefreshToken.SessionId)), "uuid");
+        EnsureActiveRefreshSessionIndex(db);
+        EnsureMediaLeaseColumns(db, logger);
+        EnsureMediaLeaseIndexes(db);
+        EnsureMessageOutboxIndexes(db);
         EnsureColumn(db, logger, "external_download_tasks", ToSnakeCase(nameof(ShineMusic.Model.Entities.ExternalDownloadTask.ReleaseYear)), "integer");
+        EnsureColumn(db, logger, "external_download_tasks", "download_checkpoint_json", "text");
         EnsureColumn(db, logger, "user_playlist_pending_tracks", "search_diagnostics_json", "text");
         EnsureColumn(db, logger, "playlist_download_queue_items", "search_diagnostics_json", "text");
         // 元数据与导入身份升级：仅增加可空列，兼容存量数据，不重写既有列。
@@ -120,6 +129,7 @@ public static class SqlSugarSchemaBootstrap
         EnsureColumn(db, logger, "external_download_tasks", "expected_duration_ms", "bigint");
         // 资产回滚保留期：存量库不会执行实体表同步，必须显式补列；旧资产保持 NULL。
         EnsureMediaAssetRetentionColumn(db, logger);
+        EnsureLibraryWorkflowColumns(db, logger);
 
         // 存量库：details_json 早期由 CodeFirst 默认建为 varchar(255)，写入完整请求快照会触发
         // PG 22001（推荐策略保存 500 的根因）。varchar→text 在 PG 中二进制兼容、不重写表，幂等升级一次。
@@ -131,6 +141,24 @@ public static class SqlSugarSchemaBootstrap
     {
         logger.LogInformation("SqlSugar schema patch: ensuring media_assets.retain_until_utc.");
         db.Ado.ExecuteCommand("ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS retain_until_utc timestamptz NULL");
+    }
+
+    /// <summary>Additive workflow upgrade; retains all existing catalog and import records.</summary>
+    public static void EnsureLibraryWorkflowColumns(ISqlSugarClient db, ILogger logger)
+    {
+        logger.LogInformation("SqlSugar schema patch: ensuring library workflow columns.");
+        db.Ado.ExecuteCommand("ALTER TABLE tracks ADD COLUMN IF NOT EXISTS is_recycled boolean NOT NULL DEFAULT false");
+        db.Ado.ExecuteCommand("ALTER TABLE tracks ADD COLUMN IF NOT EXISTS recycled_at_utc timestamptz NULL");
+        db.Ado.ExecuteCommand("ALTER TABLE tracks ADD COLUMN IF NOT EXISTS recycle_expires_at_utc timestamptz NULL");
+        db.Ado.ExecuteCommand("ALTER TABLE library_import_items ADD COLUMN IF NOT EXISTS participates_in_public_review boolean NOT NULL DEFAULT false");
+        db.Ado.ExecuteCommand("ALTER TABLE library_import_items ADD COLUMN IF NOT EXISTS original_storage_key varchar(255) NULL");
+        foreach (var table in new[] { "library_import_items", "media_assets" })
+        {
+            foreach (var column in new[] { "sample_rate_hz", "bits_per_sample", "channels" })
+                db.Ado.ExecuteCommand($"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} integer NULL");
+            db.Ado.ExecuteCommand($"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS codec_profile varchar(255) NULL");
+        }
+        db.Ado.ExecuteCommand("ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS is_original boolean NOT NULL DEFAULT false");
     }
 
     /// <summary>
@@ -168,6 +196,41 @@ public static class SqlSugarSchemaBootstrap
             Length = dataType == "varchar" ? length : 0,
             IsNullable = true,
         });
+    }
+
+    /// <summary>Keep the per-request live-session lookup bounded by user/session and expiry.</summary>
+    private static void EnsureActiveRefreshSessionIndex(ISqlSugarClient db) =>
+        db.Ado.ExecuteCommand("CREATE INDEX IF NOT EXISTS ix_refresh_tokens_active_session ON refresh_tokens (user_id, session_id, expires_at_utc) WHERE revoked_at_utc IS NULL");
+
+    /// <summary>为存量库补齐媒体任务租约列；全部列可空以兼容已有处理中记录。</summary>
+    private static void EnsureMediaLeaseColumns(ISqlSugarClient db, ILogger logger)
+    {
+        logger.LogInformation("SqlSugar schema patch: ensuring media task lease columns.");
+        foreach (var table in new[] { "external_download_tasks", "library_import_items" })
+        {
+            // IF NOT EXISTS also handles two media schedulers starting at the same time.
+            db.Ado.ExecuteCommand($"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS worker_id varchar(255) NULL");
+            db.Ado.ExecuteCommand($"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS lease_until_utc timestamptz NULL");
+            db.Ado.ExecuteCommand($"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS attempt_id uuid NULL");
+            db.Ado.ExecuteCommand($"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS last_heartbeat_at_utc timestamptz NULL");
+        }
+    }
+
+    /// <summary>为待投递扫描、补偿去重和死信管理查询建立索引。</summary>
+    private static void EnsureMessageOutboxIndexes(ISqlSugarClient db)
+    {
+        db.Ado.ExecuteCommand("CREATE INDEX IF NOT EXISTS ix_message_outbox_pending ON message_outbox_entries (status, available_at_utc, lease_until_utc)");
+        db.Ado.ExecuteCommand("CREATE INDEX IF NOT EXISTS ix_message_outbox_task ON message_outbox_entries (queue_name, task_id)");
+        db.Ado.ExecuteCommand("CREATE INDEX IF NOT EXISTS ix_message_outbox_repair ON message_outbox_entries (queue_name, task_id, status, sent_at_utc)");
+        db.Ado.ExecuteCommand("CREATE INDEX IF NOT EXISTS ix_message_outbox_sent ON message_outbox_entries (status, sent_at_utc)");
+        db.Ado.ExecuteCommand("CREATE INDEX IF NOT EXISTS ix_message_dead_letters_failed ON message_dead_letters (failed_at_utc DESC, id)");
+        db.Ado.ExecuteCommand("CREATE INDEX IF NOT EXISTS ix_message_dead_letters_queue ON message_dead_letters (queue_name, failed_at_utc DESC, id)");
+    }
+
+    private static void EnsureMediaLeaseIndexes(ISqlSugarClient db)
+    {
+        db.Ado.ExecuteCommand("CREATE INDEX IF NOT EXISTS ix_external_download_tasks_status_lease ON external_download_tasks (status, lease_until_utc)");
+        db.Ado.ExecuteCommand("CREATE INDEX IF NOT EXISTS ix_library_import_items_status_lease ON library_import_items (status, lease_until_utc)");
     }
 
     /// <summary>

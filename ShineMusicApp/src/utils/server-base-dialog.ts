@@ -1,4 +1,4 @@
-import { currentApiBase, getApiBaseOverride, setApiBaseOverride } from '@/services/http'
+import { currentApiBase, currentApiOrigin, getApiBaseOverride, setApiBaseOverride } from '@/services/http'
 
 /**
  * 服务器地址编辑弹窗（个人抽屉与登录页共用）。
@@ -14,9 +14,19 @@ export function promptServerBase(t: (key: string) => string, onChanged?: (base: 
     confirmText: t('drawer.serverSaveTest'),
     success: ({ confirm, content }) => {
       if (!confirm) return
-      setApiBaseOverride(content ?? '')
+      const previousOrigin = currentApiOrigin()
+      try {
+        setApiBaseOverride(content ?? '')
+      } catch {
+        uni.showToast({ title: t('drawer.serverInvalidAddress'), icon: 'none' })
+        return
+      }
       const base = currentApiBase()
       onChanged?.(base)
+      if (currentApiOrigin() !== previousOrigin) {
+        // Dispose every old-server page instance and its form data before the user signs in again.
+        uni.reLaunch({ url: '/pages/auth/login' })
+      }
       if (!getApiBaseOverride()) {
         uni.showToast({ title: t('drawer.serverRestored'), icon: 'none' })
         return

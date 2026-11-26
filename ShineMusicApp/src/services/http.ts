@@ -14,7 +14,7 @@
  *    uni.request 层网络不可达（DNS/断网/超时）时 status 为 0、code 为 'network_error'。
  */
 import { t } from '@/locale'
-import { getAccessToken, getRefreshToken } from './tokens'
+import { clearTokens, getAccessToken, getRefreshToken } from './tokens'
 
 /** 后端 API 统一版本前缀，所有业务路径均以此开头，与后端路由 /api/v1 对齐 */
 export const API_PREFIX = '/api/v1'
@@ -32,8 +32,20 @@ export const SERVER_BASE_STORAGE_KEY = 'sm-server-base'
 
 /** 规范化服务器地址：去空白与尾部斜杠，未带协议时补 http:// */
 function normalizeServerBase(raw: string): string {
-  const trimmed = raw.trim().replace(/\/+$/, '')
-  return !trimmed || /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`
+  const trimmed = raw.trim()
+  if (!trimmed) return ''
+  const candidate = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`
+  let parsed: URL
+  try {
+    parsed = new URL(candidate)
+  } catch {
+    throw new Error(t('services.invalidServerAddress'))
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password ||
+      (parsed.pathname !== '/' && parsed.pathname !== '') || parsed.search || parsed.hash) {
+    throw new Error(t('services.serverOriginOnly'))
+  }
+  return parsed.origin
 }
 
 /** 运行时覆盖地址：设置页保存后立即生效，无需重启 App */
@@ -47,7 +59,11 @@ try {
 
 /** 当前生效的服务器地址：用户自定义 > 构建期内置 */
 export function currentApiBase(): string {
-  return overrideBase || API_BASE_URL
+  return overrideBase || API_BASE_URL.replace(/\/+$/, '')
+}
+
+export function currentApiOrigin(): string {
+  return contextOrigin(currentApiBase())
 }
 
 /** 读取用户自定义地址（设置页回显用），未自定义时为空串 */
@@ -55,12 +71,134 @@ export function getApiBaseOverride(): string {
   return overrideBase
 }
 
+export interface ApiRequestContext {
+  readonly revision: number
+  readonly base: string
+  readonly origin: string
+  readonly userId: string | null
+  readonly scope: string
+}
+
+export interface ApiContextChange {
+  readonly reason: 'origin' | 'user' | 'session'
+  readonly previous: ApiRequestContext
+  readonly current: ApiRequestContext
+}
+
+let apiRevision = 0
+let apiUserId: string | null = null
+const contextListeners = new Set<(change: ApiContextChange) => void>()
+const activeRequests = new Map<number, { revision: number; cancel: () => void }>()
+let requestId = 0
+
+function contextOrigin(base: string): string {
+  if (!base) {
+    // H5 relative requests are same-origin and use the proxy; browser origin is their trust boundary.
+    try { return typeof location !== 'undefined' ? location.origin : '(relative)' } catch { return '(relative)' }
+  }
+  try { return new URL(base).origin } catch { return base.replace(/\/+$/, '') }
+}
+
+function makeApiContext(): ApiRequestContext {
+  const base = currentApiBase()
+  const origin = contextOrigin(base)
+  return Object.freeze({
+    revision: apiRevision,
+    base,
+    origin,
+    userId: apiUserId,
+    scope: `${origin}|${apiUserId ?? 'anonymous'}`,
+  })
+}
+
+/** Capture the server/user boundary before starting any asynchronous work. */
+export function captureApiContext(): ApiRequestContext {
+  return makeApiContext()
+}
+
+export function isApiContextCurrent(context: ApiRequestContext): boolean {
+  return context.revision === apiRevision
+}
+
+export class ApiContextChangedError extends Error {
+  readonly code = 'api_context_changed'
+  constructor() {
+    super(t('services.apiContextChanged'))
+    this.name = 'ApiContextChangedError'
+  }
+}
+
+export function assertApiContextCurrent(context: ApiRequestContext): void {
+  if (!isApiContextCurrent(context)) throw new ApiContextChangedError()
+}
+
+/** Reject an absolute URL outside the server captured for this operation. */
+export function assertApiRequestOrigin(context: ApiRequestContext, url: string): void {
+  const target = new URL(url, context.base || (typeof location !== 'undefined' ? location.origin : undefined))
+  if (target.origin !== context.origin) {
+    throw new ApiError(0, 'untrusted_origin', t('services.untrustedOrigin'))
+  }
+  assertApiContextCurrent(context)
+  assertSessionAvailable()
+}
+
+/** Abort work that belongs to an older server/account before listeners can start new requests. */
+export function trackApiRequest(context: ApiRequestContext, cancel: () => void): () => void {
+  assertApiContextCurrent(context)
+  const id = ++requestId
+  activeRequests.set(id, { revision: context.revision, cancel })
+  return () => activeRequests.delete(id)
+}
+
+export function subscribeApiContextChange(listener: (change: ApiContextChange) => void): () => void {
+  contextListeners.add(listener)
+  return () => contextListeners.delete(listener)
+}
+
+function changeApiContext(reason: ApiContextChange['reason'], update: () => void, clearCredentials = false) {
+  const previous = makeApiContext()
+  update()
+  apiRevision += 1
+  if (clearCredentials) clearTokens()
+  const current = makeApiContext()
+  for (const [id, request] of activeRequests) {
+    if (request.revision === previous.revision) {
+      activeRequests.delete(id)
+      try { request.cancel() } catch { /* cancellation must not block isolation */ }
+    }
+  }
+  const change = Object.freeze({ reason, previous, current })
+  for (const listener of [...contextListeners]) {
+    try { listener(change) } catch (error) { console.error('API context reset failed', error) }
+  }
+}
+
+/** Associate subsequent user API work and persisted state with the authenticated server user. */
+export function setApiUserId(userId: string | null): void {
+  const normalized = userId?.trim() || null
+  if (normalized === apiUserId) return
+  changeApiContext('user', () => { apiUserId = normalized })
+}
+
+/** Every authentication boundary invalidates pending work, including while still anonymous. */
+export function invalidateApiSession(): void {
+  changeApiContext('session', () => { apiUserId = null })
+}
+
 /**
  * 保存用户自定义服务器地址（设置页调用）：立即生效并持久化到本地存储。
  * @param url 形如 http://域名或IP:端口；传空串清除自定义、恢复内置地址
  */
 export function setApiBaseOverride(url: string) {
-  overrideBase = normalizeServerBase(url)
+  const nextBase = normalizeServerBase(url)
+  if (nextBase === overrideBase) return
+  const previousOrigin = currentApiOrigin()
+  const nextOrigin = contextOrigin(nextBase || API_BASE_URL.replace(/\/+$/, ''))
+  if (nextOrigin !== previousOrigin) {
+    changeApiContext('origin', () => { overrideBase = nextBase; apiUserId = null }, true)
+  } else {
+    overrideBase = nextBase
+  }
   try {
     if (overrideBase) uni.setStorageSync(SERVER_BASE_STORAGE_KEY, overrideBase)
     else uni.removeStorageSync(SERVER_BASE_STORAGE_KEY)
@@ -164,8 +302,20 @@ function deviceInfoHeader(): string {
  * @returns resolve 为 { status, data }（HTTP 错误状态也在此返回，由上层统一抛错）；
  *          reject 仅发生在 uni.request 网络层失败，包装为 ApiError(0, 'network_error')
  */
-function sendRequest(method: HttpMethod, url: string, data: unknown, withAuth: boolean, timeoutMs?: number) {
+function sendRequest(method: HttpMethod, url: string, data: unknown, withAuth: boolean, context: ApiRequestContext, timeoutMs?: number) {
   return new Promise<{ status: number; data: unknown }>((resolve, reject) => {
+    let settled = false
+    let unregister: () => void = () => {}
+    const finish = <T>(handler: (value: T) => void, value: T) => {
+      if (settled) return
+      settled = true
+      unregister()
+      if (!isApiContextCurrent(context)) {
+        reject(new ApiContextChangedError())
+        return
+      }
+      handler(value)
+    }
     const header: Record<string, string> = {}
     if (data !== undefined && method !== 'GET') header['Content-Type'] = 'application/json'
     // 显式声明客户端类型与设备信息，后端审计日志据此区分 PC / App 并记录机型。
@@ -178,22 +328,65 @@ function sendRequest(method: HttpMethod, url: string, data: unknown, withAuth: b
     header['X-Client-Type'] = 'app'
     // #endif
     header['X-Device-Info'] = deviceInfoHeader()
+    let target: URL
+    try {
+      target = new URL(url, context.base || (typeof location !== 'undefined' ? location.origin : undefined))
+    } catch {
+      reject(new ApiError(0, 'invalid_url', t('services.invalidRequestUrl')))
+      return
+    }
+    if (target.origin !== context.origin) {
+      reject(new ApiError(0, 'untrusted_origin', t('services.untrustedOrigin')))
+      return
+    }
     const token = getAccessToken()
     if (withAuth && token) header.Authorization = `Bearer ${token}`
-    uni.request({
-      url,
+    let task: ReturnType<typeof uni.request> | undefined
+    try {
+      assertApiContextCurrent(context)
+      task = uni.request({
+      url: target.href,
       method: method as any,
       data: data as AnyObject | undefined,
       header,
       timeout: timeoutMs ?? REQUEST_TIMEOUT_MS,
-      success: ({ statusCode, data: body }) => resolve({ status: statusCode, data: body }),
-      fail: (error) => reject(new ApiError(0, 'network_error', error.errMsg || t('services.networkError'))),
+      success: ({ statusCode, data: body }) => finish(resolve, { status: statusCode, data: body }),
+      fail: (error) => finish(reject, new ApiError(0, 'network_error', error.errMsg || t('services.networkError'))),
     })
+      unregister = trackApiRequest(context, () => {
+        task?.abort?.()
+        finish(reject, new ApiContextChangedError())
+      })
+      if (settled) unregister()
+    } catch (error) {
+      reject(error)
+    }
   })
 }
 
 // 由 session 模块注册：401 时用 refresh token 换新 access token。
 let refreshHandler: (() => Promise<boolean>) | null = null
+let authRequestGuard: (() => boolean) | null = null
+let authenticationFailureHandler: (() => void) | null = null
+let authenticationUnavailableHandler: (() => void) | null = null
+
+export function setAuthenticationFailureHandler(handler: () => void): void {
+  authenticationFailureHandler = handler
+}
+
+export function setAuthenticationUnavailableHandler(handler: () => void): void {
+  authenticationUnavailableHandler = handler
+}
+
+export function setAuthRequestGuard(guard: () => boolean): void {
+  authRequestGuard = guard
+}
+
+function assertSessionAvailable(): void {
+  if (authRequestGuard && !authRequestGuard()) {
+    throw new ApiError(0, 'session_unavailable', t('services.sessionUnavailable'))
+  }
+}
 /**
  * 注册令牌刷新处理器（由 session 模块在初始化时调用）。
  * 处理器需返回布尔结果：true 表示刷新成功（可重试原请求），false 表示刷新失败（应放弃）。
@@ -209,7 +402,10 @@ export function setRefreshHandler(handler: () => Promise<boolean>) {
  * @returns 是否刷新成功（未注册处理器或无 refresh token 时为 false）
  */
 export async function refreshAccessToken(): Promise<boolean> {
-  if (!refreshHandler || !getRefreshToken()) return false
+  if (!refreshHandler || !getRefreshToken()) {
+    if (getAccessToken()) authenticationFailureHandler?.()
+    return false
+  }
   return refreshHandler()
 }
 
@@ -235,11 +431,25 @@ export async function request<T>(
   data?: unknown,
   options: RequestOptions = {},
 ): Promise<T> {
+  const context = captureApiContext()
   const { withAuth = true, _retry = false, timeoutMs } = options
-  const { status, data: body } = await sendRequest(method, resolveUrl(path), data, withAuth, timeoutMs)
+  // /me is the authentication probe used to recover an unavailable session.
+  if (withAuth && path !== `${API_PREFIX}/me`) assertSessionAvailable()
+  let response: { status: number; data: unknown }
+  try {
+    response = await sendRequest(method, resolveUrl(path), data, withAuth, context, timeoutMs)
+  } catch (error) {
+    if (withAuth && isApiContextCurrent(context) && error instanceof ApiError && error.code === 'network_error') {
+      authenticationUnavailableHandler?.()
+    }
+    throw error
+  }
+  const { status, data: body } = response
+  assertApiContextCurrent(context)
 
   if (status === 401 && !_retry && withAuth && getRefreshToken() && refreshHandler) {
     const refreshed = await refreshHandler()
+    assertApiContextCurrent(context)
     if (refreshed) {
       return request<T>(method, path, data, { withAuth, _retry: true, timeoutMs })
     }
@@ -248,6 +458,8 @@ export async function request<T>(
   if (status < 200 || status >= 300) {
     const errorBody = (body ?? {}) as ErrorBody
     const detail = errorBody.error ?? {}
+    if (status === 401 && withAuth) authenticationFailureHandler?.()
+    if (status >= 500 && withAuth) authenticationUnavailableHandler?.()
     throw new ApiError(
       status,
       detail.code || (status === 0 ? 'network_error' : 'internal_error'),

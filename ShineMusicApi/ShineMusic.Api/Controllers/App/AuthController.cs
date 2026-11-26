@@ -268,7 +268,7 @@ public sealed class AuthController : ControllerBase
         }
 
         // 校验通过：签发 JWT 访问令牌并落库新的刷新令牌（仅存哈希）。
-        var tokens = await IssueTokensAsync(user, userService, tokenService, db);
+        var tokens = await IssueTokensAsync(user, userService, tokenService, db, Guid.NewGuid());
         _logger.LogInformation("Login succeeded | Login={Login} | UserId={UserId} | Ip={Ip} | Ua={Ua}",
             loginIdentifier, user.Id, ClientIp, ClientAgent);
         WriteLoginAudit(db, loginIdentifier, user.Id, "success", "ok");
@@ -308,7 +308,7 @@ public sealed class AuthController : ControllerBase
         }
 
         var tokenUser = await userService.FindByIdAsync(storedToken.UserId);
-        if (tokenUser is null)
+        if (tokenUser is null || (tokenUser.LockoutEnabled && tokenUser.LockoutEnd is { } lockoutEnd && lockoutEnd >= DateTimeOffset.UtcNow))
         {
             // 刷新令牌仍有效但用户已被删除：令牌一并视为不可用。
             _logger.LogWarning("Token refresh failed | Reason=user_not_found | UserId={UserId} | Ip={Ip}", storedToken.UserId, ClientIp);
@@ -316,6 +316,7 @@ public sealed class AuthController : ControllerBase
         }
 
         var replacement = TokenService.CreateRefreshToken();
+        var sessionId = storedToken.SessionId ?? storedToken.Id;
         await db.Ado.BeginTranAsync();
         try
         {
@@ -323,6 +324,7 @@ public sealed class AuthController : ControllerBase
             var revoked = await db.Updateable<ShineMusic.Model.Entities.RefreshToken>()
                 .SetColumns(token => token.RevokedAtUtc == now)
                 .SetColumns(token => token.ReplacedByTokenHash == replacement.Hash)
+                .SetColumns(token => token.SessionId == sessionId)
                 .Where(token => token.Id == storedToken.Id && token.RevokedAtUtc == null && token.ExpiresAtUtc > now)
                 .ExecuteCommandAsync();
             if (revoked != 1)
@@ -334,11 +336,12 @@ public sealed class AuthController : ControllerBase
             }
 
             var roles = await userService.GetEffectiveRolesAsync(tokenUser);
-            var accessToken = tokenService.CreateAccessToken(tokenUser, roles);
+            var accessToken = tokenService.CreateAccessToken(tokenUser, roles, sessionId);
             // 落库的是新刷新令牌的哈希；明文 replacement.Token 仅在本次响应中返回给客户端。
             await db.Insertable(new ShineMusic.Model.Entities.RefreshToken
             {
                 UserId = storedToken.UserId,
+                SessionId = sessionId,
                 TokenHash = replacement.Hash,
                 CreatedAtUtc = now,
                 ExpiresAtUtc = tokenService.GetRefreshTokenExpiry(now)
@@ -412,19 +415,22 @@ public sealed class AuthController : ControllerBase
     /// <param name="userService">DI：读取用户角色，写入 JWT 角色声明。</param>
     /// <param name="tokenService">DI：创建访问/刷新令牌及计算到期时间。</param>
     /// <param name="db">DI：写入 RefreshTokens 表。</param>
+    /// <param name="sessionId">当前设备登录会话标识。</param>
     /// <returns>AuthTokenResponse（明文访问令牌 + 明文刷新令牌 + Bearer + 剩余秒数）。</returns>
     private static async Task<AuthTokenResponse> IssueTokensAsync(
         ApplicationUser user,
         UserService userService,
         TokenService tokenService,
-        ISqlSugarClient db)
+        ISqlSugarClient db,
+        Guid sessionId)
     {
         var now = DateTime.UtcNow;
         var refresh = TokenService.CreateRefreshToken();
-        var access = tokenService.CreateAccessToken(user, await userService.GetEffectiveRolesAsync(user));
+        var access = tokenService.CreateAccessToken(user, await userService.GetEffectiveRolesAsync(user), sessionId);
         await db.Insertable(new ShineMusic.Model.Entities.RefreshToken
         {
             UserId = user.Id,
+            SessionId = sessionId,
             TokenHash = refresh.Hash,
             CreatedAtUtc = now,
             ExpiresAtUtc = tokenService.GetRefreshTokenExpiry(now)

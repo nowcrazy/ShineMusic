@@ -6,7 +6,7 @@
  * 该插件接管 MediaSession，负责锁屏/通知栏的歌名、歌手、封面与播放控制。
  *
  * 设计要点：
- * - 插件缺失时全量降级为空操作：未打包含插件的 APK（普通基座/H5）不报错、不影响播放；
+ * - 未配置插件时跳过加载；已配置但基座缺失插件时只探测一次，不影响播放；
  * - 插件需先 createNotification 成功后才能 update，因此用 ready + pending 缓存首发元数据；
  * - 锁屏按钮事件通过 plus.globalEvent 回调到 player，由调用方注入，避免与 player 循环依赖。
  */
@@ -28,6 +28,8 @@ export interface MusicNotificationHandlers {
 
 /** 原生插件实例；null 表示当前环境不可用 */
 let plugin: any = null
+/** 原生插件在同一进程中不会改变；缓存失败，避免后续同步操作反复报缺失。 */
+let pluginAttempted = false
 /** createNotification 是否已回调成功 */
 let ready = false
 /** globalEvent 是否已绑定，避免重复注册 */
@@ -44,7 +46,14 @@ let lastPositionAt = 0
 function ensurePlugin(): any {
   // #ifdef APP-PLUS
   if (plugin) return plugin
+  if (
+    pluginAttempted ||
+    typeof __SM_MUSIC_NOTIFICATION_ENABLED__ === 'undefined' ||
+    !__SM_MUSIC_NOTIFICATION_ENABLED__
+  ) return null
+  pluginAttempted = true
   try {
+    if (plus.os.name !== 'Android') return null
     const mod = uni.requireNativePlugin('XZH-musicNotification') as any
     if (!mod || typeof mod.init !== 'function') return null
     plugin = mod
@@ -59,6 +68,7 @@ function ensurePlugin(): any {
     }
   } catch {
     plugin = null
+    ready = false
   }
   // #endif
   return plugin
@@ -149,11 +159,21 @@ export function syncMusicNotificationProgress(positionSec: number) {
 
 /** 移除通知栏（停止播放时调用） */
 export function cancelMusicNotification() {
-  const mod = ensurePlugin()
+  // 清理操作只取消已创建的通知，不能为了清理而加载/创建通知。
+  const mod = plugin
   if (!mod || typeof mod.cancel !== 'function') return
   try {
     mod.cancel()
   } catch {
     /* ignore */
   }
+}
+
+/** Clear pending metadata as well as the visible notification on an identity change. */
+export function resetMusicNotification() {
+  handlers = null
+  pendingTrack = null
+  pendingPlaying = false
+  lastPositionAt = 0
+  cancelMusicNotification()
 }

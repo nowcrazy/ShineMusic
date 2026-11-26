@@ -38,6 +38,14 @@ public class CreateAdminCommand
         var displayName = Environment.GetEnvironmentVariable("ADMIN_NAME");
         var password = Environment.GetEnvironmentVariable("ADMIN_PASSWORD");
 
+        if (Console.IsInputRedirected &&
+            (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(userName) ||
+             string.IsNullOrWhiteSpace(displayName) || string.IsNullOrWhiteSpace(password)))
+        {
+            Console.Error.WriteLine("Administrator details are missing and standard input is redirected. Run --create-admin in an interactive terminal, or set ADMIN_EMAIL, ADMIN_USERNAME, ADMIN_NAME and ADMIN_PASSWORD for this process.");
+            return false;
+        }
+
         if (string.IsNullOrWhiteSpace(email))
         {
             Console.Write("Admin email: ");

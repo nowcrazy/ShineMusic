@@ -228,6 +228,9 @@ public sealed class NeteaseVipFallbackOptions
 /// <summary>VIP 回退端点类型常量。</summary>
 public static class VipFallbackEndpointTypes
 {
+    /// <summary>显式配置的单步 GET/POST JSON 解析端点。</summary>
+    public const string HttpJson = "http-json";
+
     /// <summary>nextmusic.toubiec.cn：共享 VIP 账号，POST 两步（先取 IP 再取 url），返回完整歌曲（支持 320k/无损）。</summary>
     public const string NextMusic = "nextmusic";
 
@@ -241,11 +244,17 @@ public static class VipFallbackEndpointTypes
     public const string GdStudio = "gdstudio";
 }
 
-/// <summary>单个 VIP 回退端点配置。</summary>
-public sealed class NeteaseVipFallbackEndpoint
+/// <summary>有限 HTTP/JSON 协议的音频地址解析配置；默认关闭，不增加外部请求。</summary>
+public class HttpAudioUrlEndpointOptions
 {
-    /// <summary>端点类型（见 <see cref="VipFallbackEndpointTypes"/>），决定请求/响应解析方式。默认 gdstudio（唯一实测可靠档）。</summary>
-    public string Type { get; set; } = VipFallbackEndpointTypes.GdStudio;
+    /// <summary>该端点是否启用。通用端点需显式开启。</summary>
+    public bool Enabled { get; set; }
+
+    /// <summary>稳定的解析来源标识；不得放入 URL、凭据或签名参数。</summary>
+    public string? Id { get; set; }
+
+    /// <summary>端点类型（见 <see cref="VipFallbackEndpointTypes"/>）。</summary>
+    public string Type { get; set; } = VipFallbackEndpointTypes.HttpJson;
 
     /// <summary>
     /// GET 型端点的完整 URL 模板（含 {id}/{level} 占位符）。
@@ -259,8 +268,42 @@ public sealed class NeteaseVipFallbackEndpoint
     /// </summary>
     public string? BaseUrl { get; set; }
 
-    /// <summary>尝试的音质等级（按顺序，首个返回有效 url 的为准）。</summary>
+    /// <summary>通用端点方法，仅允许 GET 或 POST。POST 只支持 JSON 对象。</summary>
+    public string Method { get; set; } = "GET";
+
+    /// <summary>POST JSON 字符串字段；值支持 {id}/{level}/{provider}，序列化时统一转义。</summary>
+    public Dictionary<string, string> Body { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>解析请求头；可配置普通 HTTP 请求头，禁止 Host/长度/连接等传输控制头。</summary>
+    public Dictionary<string, string> Headers { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>后续音频 GET 所需请求头；不从解析响应自动复制敏感头。</summary>
+    public Dictionary<string, string> DownloadHeaders { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>音频 URL 的 JSON 路径，支持点分字段与数组下标，如 data[0].url。</summary>
+    public string ResponseUrlPath { get; set; } = "url";
+
+    /// <summary>可选容器字段的 JSON 路径。</summary>
+    public string? ResponseContainerPath { get; set; }
+
+    /// <summary>可选声明码率字段的 JSON 路径，单位 kbps。</summary>
+    public string? ResponseBitrateKbpsPath { get; set; }
+
+    /// <summary>可选过期时间字段的 JSON 路径，Unix 秒或 ISO 8601 UTC。</summary>
+    public string? ResponseExpiresAtPath { get; set; }
+
+    /// <summary>端点支持的音质参数；按允许音质档位调度，同档内保留配置顺序。</summary>
     public string[] Levels { get; set; } = ["320", "192"];
+}
+
+/// <summary>网易云既有回退端点配置，继承通用协议但保留原有默认启用行为。</summary>
+public sealed class NeteaseVipFallbackEndpoint : HttpAudioUrlEndpointOptions
+{
+    public NeteaseVipFallbackEndpoint()
+    {
+        Enabled = true;
+        Type = VipFallbackEndpointTypes.GdStudio;
+    }
 }
 
 /// <summary>咪咕音乐音源配置。</summary>

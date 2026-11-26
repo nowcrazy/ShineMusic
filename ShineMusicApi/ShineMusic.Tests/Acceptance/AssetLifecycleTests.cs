@@ -93,14 +93,15 @@ public sealed class AssetLifecycleTests
     {
         using var f = new LifecycleFixture();
         var source = Path.Combine(f.Root, "candidate.mp3");
-        var start = new System.Diagnostics.ProcessStartInfo("ffmpeg") { UseShellExecute = false, CreateNoWindow = true };
+        var ffmpegOptions = TestFfmpeg.Options();
+        var start = new System.Diagnostics.ProcessStartInfo(ffmpegOptions.ExecutablePath) { UseShellExecute = false, CreateNoWindow = true };
         foreach (var arg in new[] { "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=2", "-c:a", "libmp3lame", "-b:a", "320k", source }) start.ArgumentList.Add(arg);
         using (var process = System.Diagnostics.Process.Start(start)!)
         {
             await process.WaitForExitAsync();
             Assert.Equal(0, process.ExitCode);
         }
-        var media = new FfmpegMediaService(Options.Create(new FfmpegOptions()), NullLogger<FfmpegMediaService>.Instance);
+        var media = new FfmpegMediaService(Options.Create(ffmpegOptions), NullLogger<FfmpegMediaService>.Instance);
         var probe = await media.ProbeAsync(source, default);
         var old = f.Asset("old.mp3", null, true);
         var item = new LibraryImportItem { DisplayName = "candidate.mp3", SourceStorageKey = "candidate.mp3", ContentHash = "candidate", Codec = probe.Codec, Container = probe.Container, BitrateKbps = probe.BitrateKbps };
@@ -267,7 +268,7 @@ public sealed class AssetLifecycleTests
                     EntityNameService = (_, entity) => entity.DbTableName = System.Text.Json.JsonNamingPolicy.SnakeCaseLower.ConvertName(entity.DbTableName),
                     EntityService = (property, column) => column.DbColumnName = System.Text.Json.JsonNamingPolicy.SnakeCaseLower.ConvertName(property.Name)
                 } });
-            Db.CodeFirst.InitTables<MediaAsset, Artwork, LibraryImportItem>();
+            Db.CodeFirst.InitTables<MediaAsset, Artwork, LibraryImportItem, LibraryWorkflowReview>();
             Paths = new LibraryStoragePaths(Options.Create(new StorageOptions { LibraryRoot = Root }), new TestEnvironment { ContentRootPath = Root });
             Service = new StorageGovernanceService(Paths, NullLogger<StorageGovernanceService>.Instance);
         }

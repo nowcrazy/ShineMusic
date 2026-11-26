@@ -1,5 +1,5 @@
 // 下载任务重试扫描（每 15s 驱动）：把「queued 且已到 NextRetryAtUtc」和「queued + NextRetryAtUtc == null 超期未推进」
-// 的任务重新投递到 RabbitMQ。覆盖两类场景：
+// 的任务补入持久化 outbox。覆盖两类场景：
 //   1. SourceDownloadJob 自动退避写入 NextRetryAtUtc 的定时重排；
 //   2. SourceDownloadService.CreateTasks 投递时 RabbitMQ 短暂不可用导致的「裸排队」死任务
 //      （queued + NextRetryAtUtc == null，创建后超过裸排队滞后期仍未推进）。
@@ -50,23 +50,27 @@ public sealed class SourceDownloadRetrySweepJob(
             .Select(task => task.Id)
             .ToListAsync(cancellationToken);
 
-        var totalRepublished = 0;
+        var totalScheduled = 0;
 
         foreach (var taskId in retryDueIds)
         {
-            await messageBus.PublishAsync(QueueNames.Downloads, taskId, cancellationToken);
-            totalRepublished++;
+            var outboxId = await MessageOutbox.EnsureAsync(db, QueueNames.Downloads, taskId, cancellationToken);
+            if (!outboxId.HasValue) continue;
+            totalScheduled++;
+            await MessageOutboxDispatcher.TryDeliverAsync(db, messageBus, outboxId.Value, cancellationToken);
         }
 
         foreach (var taskId in bareStuckIds)
         {
-            await messageBus.PublishAsync(QueueNames.Downloads, taskId, cancellationToken);
-            totalRepublished++;
+            var outboxId = await MessageOutbox.EnsureAsync(db, QueueNames.Downloads, taskId, cancellationToken);
+            if (!outboxId.HasValue) continue;
+            totalScheduled++;
+            await MessageOutboxDispatcher.TryDeliverAsync(db, messageBus, outboxId.Value, cancellationToken);
         }
 
-        if (totalRepublished > 0)
+        if (totalScheduled > 0)
             logger.LogInformation(
-                "Re-published {Total} source download task(s) (retry-due={RetryDue}, bare-stuck={BareStuck}).",
-                totalRepublished, retryDueIds.Count, bareStuckIds.Count);
+                "Scheduled {Total} source download outbox trigger(s) (retry-due={RetryDue}, bare-stuck={BareStuck}).",
+                totalScheduled, retryDueIds.Count, bareStuckIds.Count);
     }
 }

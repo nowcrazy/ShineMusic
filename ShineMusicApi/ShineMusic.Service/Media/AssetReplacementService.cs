@@ -19,7 +19,8 @@ public sealed class AssetReplacementService(ISqlSugarClient db, LibraryStoragePa
     FfmpegMediaService media, TimeSpan retention)
 {
     public async Task<ImportPublishResult> ReplaceAsync(Track track, LibraryImportItem item,
-        string sourcePath, CancellationToken ct, Func<CancellationToken, Task>? beforeCommit = null)
+        string sourcePath, CancellationToken ct, Func<CancellationToken, Task>? beforeCommit = null,
+        Func<CancellationToken, Task>? beforeMutation = null, Func<CancellationToken, Task>? saveItem = null)
     {
         var previousTrackId = item.PublishedTrackId;
         var previousStatus = item.Status;
@@ -30,9 +31,11 @@ public sealed class AssetReplacementService(ISqlSugarClient db, LibraryStoragePa
             await db.Ado.BeginTranAsync();
             try
             {
+                if (beforeMutation is not null) await beforeMutation(ct);
                 item.PublishedTrackId = track.Id;
                 item.Status = LibraryImportItemStatuses.Published;
-                await db.Updateable(item).ExecuteCommandAsync(ct);
+                if (saveItem is not null) await saveItem(ct);
+                else await db.Updateable(item).ExecuteCommandAsync(ct);
                 if (beforeCommit is not null) await beforeCommit(ct);
                 await db.Ado.CommitTranAsync();
                 return ImportPublishResult.Success(track.Id, item.Status);
@@ -46,7 +49,7 @@ public sealed class AssetReplacementService(ISqlSugarClient db, LibraryStoragePa
             }
         }
         var asset = new MediaAsset { TrackId = track.Id, Container = item.Container!, Codec = item.Codec!,
-            ContentHash = item.ContentHash, BitrateKbps = item.BitrateKbps, IsPublished = true, IsPrimary = true,
+            ContentHash = item.ContentHash, BitrateKbps = item.BitrateKbps, IsOriginal = true, IsPublished = true, IsPrimary = true,
             StorageKey = $"original/{track.Id:N}/{Guid.NewGuid():N}.{item.Container}" };
         if (!paths.TryResolve(asset.StorageKey, out var destination))
             return ImportPublishResult.Failure(ImportPublishErrorKind.Internal, "invalid_asset_path");
@@ -65,6 +68,7 @@ public sealed class AssetReplacementService(ISqlSugarClient db, LibraryStoragePa
             await db.Ado.BeginTranAsync();
             try
             {
+                if (beforeMutation is not null) await beforeMutation(ct);
                 var until = DateTime.UtcNow.Add(retention);
                 var changed = await db.Updateable<MediaAsset>()
                     .SetColumns(a => a.IsPrimary == false).SetColumns(a => a.IsPublished == false)
@@ -79,7 +83,8 @@ public sealed class AssetReplacementService(ISqlSugarClient db, LibraryStoragePa
                 await db.Insertable(asset).ExecuteCommandAsync(ct);
                 item.PublishedTrackId = track.Id;
                 item.Status = LibraryImportItemStatuses.Published;
-                await db.Updateable(item).ExecuteCommandAsync(ct);
+                if (saveItem is not null) await saveItem(ct);
+                else await db.Updateable(item).ExecuteCommandAsync(ct);
                 if (beforeCommit is not null) await beforeCommit(ct);
                 await db.Ado.CommitTranAsync();
                 committed = true;
@@ -93,8 +98,8 @@ public sealed class AssetReplacementService(ISqlSugarClient db, LibraryStoragePa
             }
             return ImportPublishResult.Success(track.Id, item.Status);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or MediaProcessingException
-            or SqlSugarException or System.Data.Common.DbException or InvalidOperationException)
+        catch (Exception ex) when (ex is not Media.MediaLeaseLostException && (ex is IOException or UnauthorizedAccessException or MediaProcessingException
+            or SqlSugarException or System.Data.Common.DbException or InvalidOperationException))
         {
             return ImportPublishResult.Failure(ImportPublishErrorKind.Conflict, "replacement_failed");
         }

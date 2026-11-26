@@ -1,0 +1,4 @@
+<?xml version="1.0"?>
+<TestSequence>
+  <Test Name="ShineMusic.Tests.Acceptance.SourceDownloadCheckpointTests.Invalid_or_changed_checkpoints_are_discarded_and_never_spliced" DisplayName="ShineMusic.Tests.Acceptance.SourceDownloadCheckpointTests.Invalid_or_changed_checkpoints_are_discarded_and_never_spliced(change: &quot;corrupt-prefix&quot;)" Source="C:\Learn\ShineMusic\ShineMusicApi\.artifacts\build\download-continuation\bin\ShineMusic.Tests\release\ShineMusic.Tests.dll" Completed="False" />
+</TestSequence>

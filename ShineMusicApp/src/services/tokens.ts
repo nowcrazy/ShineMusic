@@ -14,6 +14,7 @@
  */
 const ACCESS_TOKEN_KEY = 'shine.auth.accessToken'
 const REFRESH_TOKEN_KEY = 'shine.auth.refreshToken'
+const TOKEN_ORIGIN_KEY = 'shine.auth.origin'
 
 // 进程内令牌缓存；'' 表示当前无令牌
 let accessToken = ''
@@ -23,7 +24,12 @@ let refreshToken = ''
  * 从平台本地存储恢复令牌到内存（App 启动时由 restoreSession 调用一次）。
  * 存储中不存在对应键时 uni.getStorageSync 返回 ''，此处以 ?? 兜底为空串。
  */
-export function restoreTokens() {
+export function restoreTokens(origin: string) {
+  const storedOrigin = uni.getStorageSync(TOKEN_ORIGIN_KEY) ?? ''
+  if (!storedOrigin || storedOrigin !== origin) {
+    clearTokens()
+    return
+  }
   accessToken = uni.getStorageSync(ACCESS_TOKEN_KEY) ?? ''
   refreshToken = uni.getStorageSync(REFRESH_TOKEN_KEY) ?? ''
 }
@@ -57,11 +63,13 @@ export function hasSession() {
  * @param access 新的 access token
  * @param refresh 新的 refresh token（刷新轮换后可能与旧值不同）
  */
-export function saveTokens(access: string, refresh: string) {
+export function saveTokens(access: string, refresh: string, origin: string) {
   accessToken = access
   refreshToken = refresh
   uni.setStorageSync(ACCESS_TOKEN_KEY, access)
   uni.setStorageSync(REFRESH_TOKEN_KEY, refresh)
+  // Write the binding last so an interrupted write fails closed on next startup.
+  uni.setStorageSync(TOKEN_ORIGIN_KEY, origin)
 }
 
 /**
@@ -71,6 +79,11 @@ export function saveTokens(access: string, refresh: string) {
 export function clearTokens() {
   accessToken = ''
   refreshToken = ''
-  uni.removeStorageSync(ACCESS_TOKEN_KEY)
-  uni.removeStorageSync(REFRESH_TOKEN_KEY)
+  try {
+    uni.removeStorageSync(ACCESS_TOKEN_KEY)
+    uni.removeStorageSync(REFRESH_TOKEN_KEY)
+    uni.removeStorageSync(TOKEN_ORIGIN_KEY)
+  } catch {
+    // In-memory credentials are cleared even when platform storage is unavailable.
+  }
 }

@@ -18,6 +18,9 @@
 *.suo
 
 # ---------- 环境变量 ----------
+/.env
+/.env.*
+!/.env.example
 **/.env.local
 **/.env.*.local
 **/.env.app
@@ -37,6 +40,9 @@
 *.pem
 *.pfx
 *.key
+
+# ---------- 下载器本地 Cookie（仅保留无凭据模板） ----------
+/ShineMusicApi/tools/youtube-cookies.txt
 
 # ---------- 操作系统垃圾文件 ----------
 .DS_Store
@@ -63,8 +69,8 @@ ShineMusicApp/package-lock.json
 # ---------- 第三方参考工程，不入库 ----------
 /ZrAdmin-tmp/
 
-# ---------- docs 目录不纳入版本管理 ----------
-docs/
+# ---------- docs 均为本地 / 生成文档，不提交到 GitHub ----------
+/docs/
 
 # ---------- PI-Desktop 本地工作记录，不提交 ----------
 /.pi/

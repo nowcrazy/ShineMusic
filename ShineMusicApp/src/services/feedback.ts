@@ -14,7 +14,7 @@
  */
 import { ref } from 'vue'
 import { API_PREFIX, http } from './http'
-import { isAuthenticated } from './session'
+import { isAuthenticated } from './session-state'
 
 /** 收听事件类型。 */
 export type PlayEventType = 'play' | 'complete' | 'skip'
@@ -24,6 +24,7 @@ export type FeedbackKind = 'like' | 'dislike' | 'not_interested'
 
 /** 本地反馈缓存：trackId -> 反馈类型（module 级单例，全局共享）。 */
 export const feedbackMap = ref<Map<string, FeedbackKind>>(new Map())
+let feedbackGeneration = 0
 
 /** 后端返回的反馈项 DTO。 */
 interface ApiUserFeedback {
@@ -58,6 +59,7 @@ export function reportPlayEvent(trackId: string, eventType: PlayEventType, posit
  * @param kind 反馈类型
  */
 export async function setFeedback(trackId: string, kind: FeedbackKind): Promise<void> {
+  const generation = feedbackGeneration
   const prev = feedbackMap.value.get(trackId)
   const next = new Map(feedbackMap.value)
   next.set(trackId, kind)
@@ -65,6 +67,7 @@ export async function setFeedback(trackId: string, kind: FeedbackKind): Promise<
   try {
     await http.put(`${API_PREFIX}/me/feedback/${trackId}`, { kind })
   } catch (error) {
+    if (generation !== feedbackGeneration) throw error
     const rollback = new Map(feedbackMap.value)
     if (prev) rollback.set(trackId, prev)
     else rollback.delete(trackId)
@@ -78,6 +81,7 @@ export async function setFeedback(trackId: string, kind: FeedbackKind): Promise<
  * @param trackId 曲目 ID
  */
 export async function clearFeedback(trackId: string): Promise<void> {
+  const generation = feedbackGeneration
   const prev = feedbackMap.value.get(trackId)
   if (!prev) return
   const next = new Map(feedbackMap.value)
@@ -86,6 +90,7 @@ export async function clearFeedback(trackId: string): Promise<void> {
   try {
     await http.delete(`${API_PREFIX}/me/feedback/${trackId}`)
   } catch (error) {
+    if (generation !== feedbackGeneration) throw error
     const rollback = new Map(feedbackMap.value)
     rollback.set(trackId, prev)
     feedbackMap.value = rollback
@@ -112,11 +117,12 @@ export async function toggleNotInterested(trackId: string): Promise<boolean> {
  */
 export async function loadFeedback(): Promise<void> {
   if (!isAuthenticated.value) return
+  const generation = feedbackGeneration
   try {
     const items = await http.get<ApiUserFeedback[]>(`${API_PREFIX}/me/feedback`)
     const map = new Map<string, FeedbackKind>()
     for (const item of items) map.set(item.trackId, item.kind)
-    feedbackMap.value = map
+    if (generation === feedbackGeneration) feedbackMap.value = map
   } catch {
     /* 忽略：反馈拉取失败不影响主流程 */
   }
@@ -124,5 +130,6 @@ export async function loadFeedback(): Promise<void> {
 
 /** 清空本地反馈缓存（登出/切换用户时调用）。 */
 export function resetFeedback(): void {
+  feedbackGeneration++
   feedbackMap.value = new Map()
 }

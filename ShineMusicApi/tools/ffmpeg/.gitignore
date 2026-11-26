@@ -1,0 +1,4 @@
+# Local FFmpeg binaries, archives, checksums and license copies are not source files.
+*
+!.gitignore
+!README.md

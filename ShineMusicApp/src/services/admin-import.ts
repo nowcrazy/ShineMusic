@@ -14,7 +14,7 @@
 import type { ApiPageResult } from '@/types/music'
 import { t } from '@/locale'
 import { getAccessToken } from './tokens'
-import { API_PREFIX, http, resolveUrl } from './http'
+import { API_PREFIX, assertApiContextCurrent, assertApiRequestOrigin, captureApiContext, http, resolveUrl, trackApiRequest } from './http'
 
 /** 导入源文件信息 */
 export interface ImportSourceFile {
@@ -147,29 +147,11 @@ export async function uploadImportFiles(filePaths: string[], songRequestId?: str
   // 实际上后端一次请求可接收多文件，但 uni.uploadFile 限制单文件，
   // 因此循环调用上传接口会创建多个批次——为保持单批次，这里只传第一个文件。
   const filePath = filePaths[0]
-  return new Promise((resolve, reject) => {
-    uni.uploadFile({
-      url: resolveUrl(`${API_PREFIX}/admin/library/imports`),
-      filePath,
-      name: 'files',
-      header: buildAuthHeader(),
-      formData: songRequestId ? { songRequestId } : undefined,
-      success: (res) => {
-        try {
-          const body = JSON.parse(res.data)
-          if (res.statusCode >= 200 && res.statusCode < 300) {
-            resolve(body as LibraryImportBatch)
-          } else {
-            const detail = body?.error ?? {}
-            reject(new Error(detail.message || t('services.uploadFailedWithStatus', { status: res.statusCode })))
-          }
-        } catch {
-          reject(new Error(t('services.uploadResponseParseFailed')))
-        }
-      },
-      fail: (err) => reject(new Error(err.errMsg || t('importReview.networkError'))),
-    })
-  })
+  return uploadJson<LibraryImportBatch>(
+    `${API_PREFIX}/admin/library/imports`, filePath, 'files',
+    songRequestId ? { songRequestId } : undefined,
+    t('importReview.networkError'),
+  )
 }
 
 /**
@@ -190,16 +172,28 @@ export async function uploadImportFilesBatch(files: File[], songRequestId?: stri
   if (songRequestId) form.append('songRequestId', songRequestId)
 
   // 不手动设置 Content-Type，交由浏览器生成带 boundary 的 multipart 头。
-  const response = await fetch(resolveUrl(`${API_PREFIX}/admin/library/imports`), {
-    method: 'POST',
-    headers: buildAuthHeader(),
-    body: form,
-  })
-  const body = await response.json().catch(() => null)
-  if (!response.ok) {
-    throw new Error(body?.error?.message ?? t('services.uploadFailedWithStatus', { status: response.status }))
+  const context = captureApiContext()
+  const target = resolveUrl(`${API_PREFIX}/admin/library/imports`)
+  assertApiRequestOrigin(context, target)
+  const controller = new AbortController()
+  const unregister = trackApiRequest(context, () => controller.abort())
+  try {
+    const response = await fetch(target, {
+      method: 'POST',
+      headers: buildAuthHeader(),
+      body: form,
+      signal: controller.signal,
+    })
+    assertApiContextCurrent(context)
+    const body = await response.json().catch(() => null)
+    assertApiContextCurrent(context)
+    if (!response.ok) {
+      throw new Error(body?.error?.message ?? t('services.uploadFailedWithStatus', { status: response.status }))
+    }
+    return body as LibraryImportBatch
+  } finally {
+    unregister()
   }
-  return body as LibraryImportBatch
 }
 
 /**
@@ -235,8 +229,10 @@ export async function getImportItem(itemId: string): Promise<LibraryImportItem> 
  *  <audio> 元素无法携带 Authorization 头，因此将访问令牌以 query string 形式附加，
  *  后端 JWT 中间件仅对 /preview、/stream 路径接受该方式。 */
 export function getPreviewUrl(itemId: string): string {
+  const context = captureApiContext()
   const token = getAccessToken()
   const url = resolveUrl(`${API_PREFIX}/admin/library/import-items/${itemId}/preview`)
+  assertApiRequestOrigin(context, url)
   return token ? `${url}?access_token=${encodeURIComponent(token)}` : url
 }
 
@@ -248,28 +244,13 @@ export function getPreviewUrl(itemId: string): string {
  * @returns 更新后的导入条目
  */
 export function uploadLyricsFile(itemId: string, filePath: string): Promise<LibraryImportItem> {
-  return new Promise((resolve, reject) => {
-    uni.uploadFile({
-      url: resolveUrl(`${API_PREFIX}/admin/library/import-items/${itemId}/lyrics-file`),
-      filePath,
-      name: 'file',
-      header: buildAuthHeader(),
-      success: (res) => {
-        try {
-          const body = JSON.parse(res.data)
-          if (res.statusCode >= 200 && res.statusCode < 300) {
-            resolve(body as LibraryImportItem)
-          } else {
-            const detail = body?.error ?? {}
-            reject(new Error(detail.message || t('services.uploadFailedWithStatus', { status: res.statusCode })))
-          }
-        } catch {
-          reject(new Error(t('services.uploadResponseParseFailed')))
-        }
-      },
-      fail: (err) => reject(new Error(err.errMsg || t('importReview.networkError'))),
-    })
-  })
+  return uploadJson<LibraryImportItem>(
+    `${API_PREFIX}/admin/library/import-items/${itemId}/lyrics-file`,
+    filePath,
+    'file',
+    undefined,
+    t('importReview.networkError'),
+  )
 }
 
 /** 修正导入条目的元数据（albumTitle / lyrics 传 null 表示清空该字段） */
@@ -384,4 +365,56 @@ export async function bulkReviewImportItems(payload: BulkReviewPayload): Promise
 function buildAuthHeader(): Record<string, string> {
   const token = getAccessToken()
   return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+/** Same-origin authenticated multipart upload, aborted on server/account change. */
+function uploadJson<T>(
+  path: string,
+  filePath: string,
+  name: string,
+  formData?: Record<string, string>,
+  networkMessage = t('services.uploadFailed'),
+): Promise<T> {
+  const context = captureApiContext()
+  const target = resolveUrl(path)
+  assertApiRequestOrigin(context, target)
+  return new Promise((resolve, reject) => {
+    let settled = false
+    let task: ReturnType<typeof uni.uploadFile> | undefined
+    let unregister: () => void = () => undefined
+    const finish = (fn: (value: any) => void, value: any) => {
+      if (settled) return
+      settled = true
+      unregister()
+      try { assertApiContextCurrent(context) } catch { reject(new Error(t('services.apiContextChanged'))); return }
+      fn(value)
+    }
+    task = uni.uploadFile({
+      url: target,
+      filePath,
+      name,
+      header: buildAuthHeader(),
+      formData,
+      success: (res) => {
+        try {
+          const body = JSON.parse(res.data)
+          assertApiContextCurrent(context)
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            finish(resolve, body as T)
+          } else {
+            const detail = body?.error ?? {}
+            finish(reject, new Error(detail.message || t('services.uploadFailedWithStatus', { status: res.statusCode })))
+          }
+        } catch (error) {
+          finish(reject, error instanceof Error ? error : new Error(t('services.uploadResponseParseFailed')))
+        }
+      },
+      fail: (err) => finish(reject, new Error(err.errMsg || networkMessage)),
+    })
+    unregister = trackApiRequest(context, () => {
+      task?.abort?.()
+      finish(reject, new Error(t('services.apiContextChanged')))
+    })
+    if (settled) unregister()
+  })
 }

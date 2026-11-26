@@ -17,10 +17,13 @@ import { reactive, readonly, ref } from 'vue'
 export const playerExpanded = ref(false)
 import type { ApiLyric, Track } from '@/types/music'
 import { checkTrackExists, getTrackDefaultLyric } from './catalog'
+import { captureApiContext, currentApiBase, isApiContextCurrent, subscribeApiContextChange } from './http'
+import { getAccessToken } from './tokens'
 import { reportPlayEvent } from './feedback'
 import { EQ_PRESETS, findEqPreset, type EqBand } from './eq-presets'
 import {
   initMusicNotification,
+  resetMusicNotification,
   syncMusicNotificationProgress,
   updateMusicNotification,
   updateMusicNotificationState,
@@ -43,6 +46,38 @@ interface PersistedPlayerState {
   queueIndex: number
   currentTime: number
   playMode: PlayMode
+}
+
+/** Keep a playback snapshot private to one normalized server and user identity. */
+function storageKeyForScope(scope: string): string {
+  return `${STATE_STORAGE_KEY}:${encodeURIComponent(scope)}`
+}
+
+/** Remove session credentials from a URL before a Track is cached or persisted. */
+function sanitizeTrack(track: Track): Track {
+  const audioUrl = track.audioUrl
+  try {
+    const base = typeof location !== 'undefined' ? location.href : 'http://local.invalid/'
+    const url = new URL(audioUrl, base)
+    if (!url.searchParams.has('access_token')) return track
+    url.searchParams.delete('access_token')
+    const sanitizedAudioUrl = url.origin === 'http://local.invalid'
+      ? `${url.pathname}${url.search}${url.hash}`
+      : url.toString()
+    return { ...track, audioUrl: sanitizedAudioUrl }
+  } catch {
+    return track
+  }
+}
+
+let playerContext = captureApiContext()
+let playerStorageKey = storageKeyForScope(playerContext.scope)
+let restoredPlayerScope: string | null = null
+// Older app versions used one unscoped key. It cannot be safely attributed to a server/user.
+try {
+  uni.removeStorageSync(STATE_STORAGE_KEY)
+} catch {
+  /* Storage can be unavailable in some app hosts. */
 }
 
 // 全局播放器单例：页面切换时保留播放状态与音频引擎。
@@ -107,13 +142,13 @@ function persistState(force = false) {
   lastPersistedAt = now
   try {
     const payload: PersistedPlayerState = {
-      track: state.currentTrack,
-      queue: [...state.queue],
+      track: sanitizeTrack(state.currentTrack),
+      queue: state.queue.map(sanitizeTrack),
       queueIndex: state.queueIndex,
       currentTime: state.currentTime,
       playMode: state.playMode,
     }
-    uni.setStorageSync(STATE_STORAGE_KEY, JSON.stringify(payload))
+    uni.setStorageSync(playerStorageKey, JSON.stringify(payload))
   } catch {
     /* 存储不可用时忽略 */
   }
@@ -128,16 +163,20 @@ let lastPersistedAt = 0
  * 是则直接接管播放态。
  */
 function restoreState() {
+  const context = playerContext
+  const generation = playbackGeneration
   let saved: Partial<PersistedPlayerState> | null = null
   try {
-    const raw = uni.getStorageSync(STATE_STORAGE_KEY)
+    const raw = uni.getStorageSync(playerStorageKey)
     saved = raw ? (JSON.parse(raw) as Partial<PersistedPlayerState>) : null
   } catch {
     saved = null
   }
   if (!saved?.track?.id || !saved.track.audioUrl) return
-  const track = saved.track
-  const queue = Array.isArray(saved.queue) && saved.queue.length ? saved.queue : [track]
+  const track = sanitizeTrack(saved.track)
+  const queue = Array.isArray(saved.queue) && saved.queue.length
+    ? saved.queue.map(sanitizeTrack)
+    : [track]
   const index = queue.findIndex((item) => item.id === track.id)
   const duration = track.duration || 0
   const position = typeof saved.currentTime === 'number' ? saved.currentTime : 0
@@ -150,7 +189,8 @@ function restoreState() {
   state.isPlaying = false
   // 歌词不走持久化，按需重新拉取
   void getTrackDefaultLyric(track.id).then((lyric) => {
-    if (state.currentTrack?.id === track.id) state.currentLyric = lyric
+    if (isApiContextCurrent(context) && playbackGeneration === generation && state.currentTrack?.id === track.id)
+      state.currentLyric = lyric
   })
   // App 端：若原生音频服务仍在播放，同步它的真实状态（可能比本地持久化更新）
   // 先把持久化 queue 暴露给下面的匹配逻辑（restoreState 此时还没 state.queue）
@@ -160,9 +200,56 @@ function restoreState() {
   // 曲库重建/曲目被删后，持久化现场可能引用已不存在的曲目：异步校验，确认 404 则清除，
   // 避免迷你播放条复活死曲目、一点播放就陷入 404 重试循环
   void checkTrackExists(track.id).then((exists) => {
-    if (!exists && state.currentTrack?.id === track.id) purgeDeadTrack(track.id, false)
+    if (isApiContextCurrent(context) && playbackGeneration === generation && !exists && state.currentTrack?.id === track.id)
+      purgeDeadTrack(track.id, false)
   })
 }
+
+/**
+ * Clear playback state and detach callbacks when the server or authenticated user changes.
+ * The previous scoped snapshot is retained for that exact context; it is never reused here.
+ */
+export function resetPlayerForIdentityChange() {
+  playbackGeneration++
+  goneCheckToken++
+  goneCheckInFlight = null
+  resetAutoRetry()
+  engineEpoch++
+  try {
+    engine?.reset()
+  } catch {
+    /* Native audio may already have been torn down by the host. */
+  }
+  engine = null
+  resetMusicNotification()
+  compatibilityTrackId = null
+  state.currentTrack = null
+  state.currentLyric = null
+  state.queue = []
+  state.queueIndex = -1
+  state.isPlaying = false
+  state.currentTime = 0
+  state.duration = 0
+  state.audioError = false
+  state.playMode = 'order'
+  playerContext = captureApiContext()
+  playerStorageKey = storageKeyForScope(playerContext.scope)
+  lastPersistedAt = 0
+  restoredPlayerScope = null
+  playerExpanded.value = false
+}
+
+/** Restore only the snapshot belonging to the current server/user context. */
+export function restorePlayerForIdentity() {
+  const context = captureApiContext()
+  if (context.scope !== playerContext.scope) resetPlayerForIdentityChange()
+  if (restoredPlayerScope === playerContext.scope) return
+  restoredPlayerScope = playerContext.scope
+  restoreState()
+}
+
+// Session and server changes notify the player even if a caller forgets explicit reset.
+subscribeApiContextChange(() => resetPlayerForIdentityChange())
 
 /** restoreState 内部暂存的 queue（供 syncFromBackgroundAudio 匹配曲目用，生命周期内为 null） */
 let _restoreQueueRef: Track[] | null = null
@@ -176,6 +263,9 @@ let _restoreQueueRef: Track[] | null = null
  */
 export function syncFromBackgroundAudio() {
   if (typeof plus === 'undefined') return
+  // Do not let a native source from a previous app process run before the scoped snapshot is loaded.
+  if (restoredPlayerScope !== playerContext.scope) return
+  const context = captureApiContext()
   try {
     const bgm = uni.getBackgroundAudioManager()
     if (!bgm.src) return
@@ -185,33 +275,40 @@ export function syncFromBackgroundAudio() {
       ? state.queue
       : (_restoreQueueRef ?? [])
     const bgmSrc = String(bgm.src)
-    // 从 BGM.src 提取路径部分：去掉 host 与 query，得到 /api/v1/tracks/{id}/stream
-    // 避免 bgmSrc 是绝对 URL（含 host）或带 query 时 endsWith 匹配失败
-    const urlPath = (() => {
+    const baseHref = currentApiBase() || (typeof location !== 'undefined' ? location.href : 'http://local.invalid/')
+    const trustedOrigin = new URL(baseHref, baseHref).origin
+    const bgmUrl = new URL(bgmSrc, baseHref)
+    if (bgmUrl.origin !== trustedOrigin) return
+    const urlPath = bgmUrl.pathname
+    const normalizedPath = (value: string) => {
       try {
-        const u = new URL(bgmSrc)
-        return u.pathname // 如 /api/v1/tracks/xxx/stream
+        const url = new URL(value, baseHref)
+        return url.origin === trustedOrigin ? url.pathname : ''
       } catch {
-        // 非标准 URL：直接取第一个 '?' 之前的部分
-        const q = bgmSrc.indexOf('?')
-        return q >= 0 ? bgmSrc.slice(0, q) : bgmSrc
+        return ''
       }
-    })()
-    const match = queueForMatch.find((t) => {
-      const au = t.audioUrl
-      // audioUrl 可能是相对路径（/api/v1/...）或完整 URL，统一取 path 部分比对
-      const auPath = au.startsWith('http')
-        ? (() => { try { return new URL(au).pathname } catch { return au } })()
-        : au
-      return urlPath === auPath || urlPath.endsWith(auPath) || auPath.endsWith(urlPath)
-    })
+    }
+    const match = queueForMatch.find((track) => normalizedPath(track.audioUrl) === urlPath)
+    // Ignore and stop a native source that does not belong to the active server and scoped queue.
+    if (!match) {
+      try {
+        bgm.stop()
+        bgm.src = ''
+      } catch {
+        /* Native host may reject clearing an already released source. */
+      }
+      return
+    }
     if (match && match.id !== state.currentTrack?.id) {
       state.currentTrack = match
       state.queueIndex = queueForMatch.findIndex((t) => t.id === match.id)
+      const generation = playbackGeneration
       void getTrackDefaultLyric(match.id).then((lyric) => {
-        if (state.currentTrack?.id === match.id) state.currentLyric = lyric
+        if (isApiContextCurrent(context) && playbackGeneration === generation && state.currentTrack?.id === match.id)
+          state.currentLyric = lyric
       })
     }
+    if (!isApiContextCurrent(context)) return
     // 以 BGM 为权威源纠正播放态/进度/时长
     state.isPlaying = !bgm.paused
     state.currentTime = bgm.currentTime || state.currentTime
@@ -223,8 +320,6 @@ export function syncFromBackgroundAudio() {
   }
 }
 
-restoreState()
-
 // ---------------------------------------------------------------------------
 // 音频引擎抽象：屏蔽 Web Audio（H5 + EQ）与 InnerAudioContext（其余端）之间的差异。
 // ---------------------------------------------------------------------------
@@ -233,7 +328,7 @@ restoreState()
 interface AudioEngineCallbacks {
   onTimeUpdate(time: number, duration: number): void
   onEnded(): void
-  onError(): void
+  onError(unsupportedFormat?: boolean): void
 }
 
 /** 统一的音频引擎接口 */
@@ -244,6 +339,8 @@ interface AudioEngine {
   pause(): void
   seek(seconds: number): void
   stop(): void
+  /** Stop playback and release the active source, including any URL carrying a session token. */
+  reset(): void
   /** 应用音效 EQ 滤波器；无 EQ 能力时为空操作 */
   setEqBands(bands: EqBand[]): void
 }
@@ -267,7 +364,7 @@ function createInnerAudioEngine(cb: AudioEngineCallbacks): AudioEngine {
   // #endif
   audio.onTimeUpdate(() => cb.onTimeUpdate(audio.currentTime || 0, audio.duration || 0))
   audio.onEnded(() => cb.onEnded())
-  audio.onError(() => cb.onError())
+  audio.onError((error) => cb.onError(Number((error as unknown as { errCode?: number }).errCode) === 10004))
   return {
     setSrc: (url, startAt) => {
       // startTime 必须在设置 src 前赋值，App 端据此从指定位置起播
@@ -278,6 +375,11 @@ function createInnerAudioEngine(cb: AudioEngineCallbacks): AudioEngine {
     pause: () => audio.pause(),
     seek: (seconds) => audio.seek(seconds),
     stop: () => audio.stop(),
+    reset: () => {
+      audio.pause()
+      audio.stop()
+      audio.src = ''
+    },
     setEqBands: () => {
       /* 该引擎无 EQ 能力 */
     },
@@ -293,6 +395,7 @@ function createInnerAudioEngine(cb: AudioEngineCallbacks): AudioEngine {
  */
 function createBackgroundAudioEngine(cb: AudioEngineCallbacks): AudioEngine {
   const bgm = uni.getBackgroundAudioManager()
+  const epoch = engineEpoch
   // setSrc 后 BGM 会自动起播，此时再调 play() 会打乱原生播放器（实测导致 ~20 秒延迟/停在起始位置）
   let autoStarting = false
   let autoStartTimer: ReturnType<typeof setTimeout> | null = null
@@ -314,16 +417,18 @@ function createBackgroundAudioEngine(cb: AudioEngineCallbacks): AudioEngine {
     onSeek: (seconds) => seek(seconds),
   })
   bgm.onTimeUpdate(() => {
+    if (epoch !== engineEpoch) return
     const time = bgm.currentTime || 0
     const duration = bgm.duration || 0
     cb.onTimeUpdate(time, duration)
     // 同步进度到通知栏（内部按 2 秒节流）
     syncMusicNotificationProgress(time)
   })
-  bgm.onEnded(() => cb.onEnded())
-  bgm.onError(() => cb.onError())
+  bgm.onEnded(() => { if (epoch === engineEpoch) cb.onEnded() })
+  bgm.onError((error) => { if (epoch === engineEpoch) cb.onError(Number((error as unknown as { errCode?: number }).errCode) === 10004) })
   // 用户在锁屏/通知栏操作时同步状态
   bgm.onPlay(() => {
+    if (epoch !== engineEpoch) return
     clearAutoStarting()
     if (pendingStart > 0) {
       // 起播后再跳到续播位置：Android 上直接设 startTime 会卡在起始位置不再前进
@@ -336,18 +441,20 @@ function createBackgroundAudioEngine(cb: AudioEngineCallbacks): AudioEngine {
     persistState(true)
   })
   bgm.onPause(() => {
+    if (epoch !== engineEpoch) return
     state.isPlaying = false
     updateMusicNotificationState(false)
     persistState(true)
   })
   bgm.onStop(() => {
+    if (epoch !== engineEpoch) return
     state.isPlaying = false
     updateMusicNotificationState(false)
     persistState(true)
   })
   // iOS 锁屏上一曲/下一曲（Android 不支持，注册无害）
-  bgm.onPrev(() => previousTrack())
-  bgm.onNext(() => nextTrack())
+  bgm.onPrev(() => { if (epoch === engineEpoch) previousTrack() })
+  bgm.onNext(() => { if (epoch === engineEpoch) nextTrack() })
   return {
     setSrc: (url, startAt) => {
       // 设置 src 会自动开始播放，先写元数据再写 src
@@ -391,6 +498,17 @@ function createBackgroundAudioEngine(cb: AudioEngineCallbacks): AudioEngine {
     stop: () => {
       clearAutoStarting()
       bgm.stop()
+    },
+    reset: () => {
+      clearAutoStarting()
+      pendingStart = 0
+      bgm.stop()
+      bgm.src = ''
+      bgm.title = ''
+      bgm.singer = ''
+      bgm.epname = ''
+      bgm.coverImgUrl = ''
+      bgm.webUrl = ''
     },
     setEqBands: () => {
       /* 该引擎无 EQ 能力 */
@@ -461,7 +579,7 @@ function createWebAudioEngine(cb: AudioEngineCallbacks): AudioEngine {
           cb.onTimeUpdate(audioEl!.currentTime || 0, audioEl!.duration || 0)
         })
         audioEl.addEventListener('ended', () => cb.onEnded())
-        audioEl.addEventListener('error', () => cb.onError())
+        audioEl.addEventListener('error', () => cb.onError(audioEl?.error?.code === 3 || audioEl?.error?.code === 4))
         source = ac.createMediaElementSource(audioEl)
       }
       if (audioEl.src !== url) {
@@ -504,6 +622,16 @@ function createWebAudioEngine(cb: AudioEngineCallbacks): AudioEngine {
         }
       }
     },
+    reset: () => {
+      if (!audioEl) return
+      audioEl.pause()
+      audioEl.removeAttribute('src')
+      try {
+        audioEl.load()
+      } catch {
+        /* ignore */
+      }
+    },
     setEqBands: (next) => {
       bands = next
       rebuild()
@@ -513,6 +641,31 @@ function createWebAudioEngine(cb: AudioEngineCallbacks): AudioEngine {
 
 /** 音频引擎单例；延迟到首次播放时构建，避免无谓占用系统音频资源 */
 let engine: AudioEngine | null = null
+/** Invalidates callbacks from a discarded native/web engine on identity changes. */
+let engineEpoch = 0
+
+// Store the original URL in the queue; compatibility mode is a per-playback choice, never a permanent asset.
+let compatibilityTrackId: string | null = null
+let playbackGeneration = 0
+
+function playbackUrl(track: Track, compatibility = compatibilityTrackId === track.id): string {
+  try {
+    const locationBase = typeof location !== 'undefined' ? location.href : 'http://local.invalid/'
+    const trustedBase = new URL(currentApiBase() || locationBase, locationBase)
+    const url = new URL(track.audioUrl, trustedBase)
+    // A queue may retain an old absolute URL. Never append this session's token to another server.
+    if (url.origin !== trustedBase.origin || !/^\/(?:api|app)\/v1\/tracks\/[^/]+\/stream$/.test(url.pathname))
+      return track.audioUrl
+    url.searchParams.delete('access_token')
+    const token = getAccessToken()
+    if (token) url.searchParams.set('access_token', token)
+    if (compatibility) url.searchParams.set('format', 'aac')
+    else url.searchParams.delete('format')
+    return url.origin === 'http://local.invalid' ? `${url.pathname}${url.search}` : url.toString()
+  } catch {
+    return track.audioUrl
+  }
+}
 
 /**
  * 播放错误自动重连（弱网容错）。
@@ -543,12 +696,13 @@ function scheduleAutoRetry(): boolean {
   autoRetryResumeAt = state.currentTime
   const resumeAt = autoRetryResumeAt
   const trackId = track.id
+  const generation = playbackGeneration
   if (autoRetryTimer) clearTimeout(autoRetryTimer)
   autoRetryTimer = setTimeout(() => {
     autoRetryTimer = null
-    if (state.currentTrack?.id !== trackId) return
+    if (state.currentTrack?.id !== trackId || playbackGeneration !== generation || !state.isPlaying) return
     // 从断点重新装载媒体源：App 端 BGM 设置 src 会自动起播，InnerAudio/H5 靠随后的 play()
-    ensureEngine().setSrc(track.audioUrl, resumeAt)
+    ensureEngine().setSrc(playbackUrl(track), resumeAt)
     ensureEngine().play()
     state.isPlaying = true
     state.audioError = false
@@ -559,6 +713,7 @@ function scheduleAutoRetry(): boolean {
 
 /** 正在进行存在性校验的曲目 id；防止引擎重复 onError 引发并发校验 */
 let goneCheckInFlight: string | null = null
+let goneCheckToken = 0
 
 /**
  * 把已确认不存在（404）的曲目从队列与播放现场中永久移除。
@@ -578,6 +733,7 @@ function purgeDeadTrack(trackId: string, autoplayNext: boolean) {
     if (state.currentTrack) persistState(true)
     return
   }
+  playbackGeneration++
   engine?.stop()
   resetAutoRetry()
   state.currentTrack = null
@@ -590,7 +746,7 @@ function purgeDeadTrack(trackId: string, autoplayNext: boolean) {
   if (!queue.length) {
     // 队列已空：连同持久化现场一起清掉（persistState 需要 currentTrack，只能直接删 key）
     try {
-      uni.removeStorageSync(STATE_STORAGE_KEY)
+      uni.removeStorageSync(playerStorageKey)
     } catch {
       /* 存储不可用时忽略 */
     }
@@ -603,7 +759,7 @@ function purgeDeadTrack(trackId: string, autoplayNext: boolean) {
   } else {
     // 无当前曲目时持久化现场不可还原（restoreState 要求 track 存在），直接清掉
     try {
-      uni.removeStorageSync(STATE_STORAGE_KEY)
+      uni.removeStorageSync(playerStorageKey)
     } catch {
       /* 存储不可用时忽略 */
     }
@@ -615,7 +771,7 @@ function purgeDeadTrack(trackId: string, autoplayNext: boolean) {
  * - 曲目 404（曲库重建/被下架/被移除权限）：永久移除并按需自动切下一首；
  * - 其余（弱网等瞬断）：维持原自动续播重试，重试耗尽才进入错误态。
  */
-function handleAudioError() {
+function handleAudioError(unsupportedFormat = false) {
   const track = state.currentTrack
   if (!track) {
     state.audioError = true
@@ -623,25 +779,36 @@ function handleAudioError() {
     persistState(true)
     return
   }
-  if (goneCheckInFlight === track.id) return
-  goneCheckInFlight = track.id
+  const generation = playbackGeneration
+  const checkKey = `${generation}:${track.id}`
+  if (goneCheckInFlight === checkKey) return
+  goneCheckInFlight = checkKey
+  const checkToken = ++goneCheckToken
+  const context = playerContext
   const wasPlaying = state.isPlaying
   void checkTrackExists(track.id)
     .then((exists) => {
       // 校验期间用户可能已切歌，仅当仍是同一曲目时才处置
-      if (state.currentTrack?.id !== track.id) return
+      if (!isApiContextCurrent(context) || state.currentTrack?.id !== track.id || playbackGeneration !== generation) return
       if (!exists) {
         purgeDeadTrack(track.id, wasPlaying)
         return
       }
+      if (unsupportedFormat && compatibilityTrackId !== track.id && wasPlaying && state.isPlaying) {
+        compatibilityTrackId = track.id
+        ensureEngine().setSrc(playbackUrl(track, true), state.currentTime)
+        ensureEngine().play()
+        state.audioError = false
+        return
+      }
       // 播放中（用户想听）才自动续播；已暂停或到重试上限则进入错误态
-      if (wasPlaying && scheduleAutoRetry()) return
+      if (wasPlaying && state.isPlaying && scheduleAutoRetry()) return
       state.audioError = true
       state.isPlaying = false
       persistState(true)
     })
     .finally(() => {
-      if (goneCheckInFlight === track.id) goneCheckInFlight = null
+      if (goneCheckToken === checkToken && goneCheckInFlight === checkKey) goneCheckInFlight = null
     })
 }
 
@@ -654,8 +821,11 @@ function ensureEngine(): AudioEngine {
     : isWebAudioSupported()
       ? createWebAudioEngine
       : createInnerAudioEngine
+  const epoch = engineEpoch
+  const isCurrentEngine = () => epoch === engineEpoch && isApiContextCurrent(playerContext)
   engine = create({
     onTimeUpdate: (time, duration) => {
+      if (!isCurrentEngine()) return
       state.currentTime = time
       if (duration) state.duration = duration
       // 续播稳定播放 5 秒后重置重试额度：长曲目多次抖动仍可自动恢复
@@ -663,8 +833,8 @@ function ensureEngine(): AudioEngine {
       // 播放进度按节流回写本地，App 被杀后仍能恢复到上次位置
       persistState()
     },
-    onEnded: handleEnded,
-    onError: handleAudioError,
+    onEnded: () => { if (isCurrentEngine()) handleEnded() },
+    onError: (unsupportedFormat) => { if (isCurrentEngine()) handleAudioError(unsupportedFormat) },
   })
   engine.setEqBands(findEqPreset(state.eqPreset).bands)
   return engine
@@ -749,6 +919,11 @@ function reportTransition(previous: Track | null, positionSec: number, nextTrack
  * @param queue 可选的播放队列
  */
 export function playTrack(track: Track, queue?: readonly Track[]) {
+  playbackGeneration++
+  const generation = playbackGeneration
+  compatibilityTrackId = null
+  track = sanitizeTrack(track)
+  queue = queue?.map(sanitizeTrack)
   const eng = ensureEngine()
   // 上报上一首的结束/跳过信号（此时 currentTime 仍为上一首的进度）
   reportTransition(state.currentTrack, state.currentTime, track.id)
@@ -768,7 +943,7 @@ export function playTrack(track: Track, queue?: readonly Track[]) {
   state.duration = track.duration || 0
   state.audioError = false
   resetAutoRetry()
-  eng.setSrc(track.audioUrl)
+  eng.setSrc(playbackUrl(track))
   eng.play()
   state.isPlaying = true
   persistState(true)
@@ -777,7 +952,8 @@ export function playTrack(track: Track, queue?: readonly Track[]) {
   // 异步拉取该曲目的默认歌词（不阻塞播放）
   void getTrackDefaultLyric(track.id).then((lyric) => {
     // 仅当当前曲目仍是这首时才写入，避免竞态覆盖
-    if (state.currentTrack?.id === track.id) state.currentLyric = lyric
+    if (isApiContextCurrent(playerContext) && playbackGeneration === generation && state.currentTrack?.id === track.id)
+      state.currentLyric = lyric
   })
 }
 
@@ -800,6 +976,7 @@ export function togglePlayback() {
   const track = state.currentTrack
   if (!track) return
   if (state.isPlaying) {
+    playbackGeneration++
     // 用户主动暂停：取消可能待触发的自动续播，避免暂停后自己又响起来
     resetAutoRetry()
     engine?.pause()
@@ -809,7 +986,7 @@ export function togglePlayback() {
   }
   if (!engine) {
     // 冷启动恢复的现场：建引擎并从上次进度接着播
-    ensureEngine().setSrc(track.audioUrl, state.currentTime)
+    ensureEngine().setSrc(playbackUrl(track), state.currentTime)
   }
   engine?.play()
   state.isPlaying = true

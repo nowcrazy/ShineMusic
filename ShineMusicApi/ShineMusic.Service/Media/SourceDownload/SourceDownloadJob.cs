@@ -1,16 +1,17 @@
 // 职责：外部音源抓歌的「下载编排层」——任务创建与 RabbitMQ 下载作业。
 // 该文件包含三个职责内聚的类型：
 //   1. SourceDownloadService：任务创建编排（GetTrackAsync 元数据快照 + (Provider,ProviderTrackId) 去重 + 投递消息）；
-//   2. SourceDownloadJob：下载处理器（解析下载地址 → 流式下载到隔离区边下边算 SHA-256
+//   2. SourceDownloadJob：下载处理器（解析下载地址 → 隔离区流式下载与有界恢复 → 完整文件 SHA-256
 //      → 内容哈希查重 → 建 LibraryImportBatch/Item 预填元数据 → 投递 LibraryImportJob）；
 //      由 RabbitMQ 消费端按消息触发（每条消息一个 DI 作用域），可直接注入 scoped 服务。
 //   3. 下载失败的领域异常（SourceDuplicateException / SourceDownloadTooLargeException）。
 //
 // 重试模型：业务退避（30s/2min/10min）写入任务表 NextRetryAtUtc，由 SourceDownloadRetrySweepService
 // 到点扫描重新投递；任务表 Status/NextRetryAtUtc 是管理端展示与手动重试的唯一事实源。
-// 消息重复投递是安全的：消费端先原子认领（queued → downloading），重复消息认领失败直接跳过。
+// 消息重复投递是安全的：消费端先原子认领租约，活跃租约不可重复领取，结果写入校验 AttemptId。
 // 下载失败的清理原则：半成品文件立即删除、任务标记 failed（可手动重试），异常收敛为任务级失败。
 
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
@@ -21,6 +22,7 @@ using ShineMusic.Repository.Data;
 using ShineMusic.Service.Messaging;
 using ShineMusic.Service.SourceProviders.Abstractions;
 using ShineMusic.Service.SourceProviders.Engine;
+using ShineMusic.Service.Media;
 using SqlSugar;
 
 namespace ShineMusic.Service.SourceDownload;
@@ -117,6 +119,7 @@ public sealed class SourceDownloadService(
         var created = new List<ExternalDownloadTask>();
         var skipped = new List<string>();
         var newTasks = new List<ExternalDownloadTask>();
+        var outboxIds = new List<Guid>();
 
         foreach (var originalGroup in groups)
         {
@@ -198,6 +201,10 @@ public sealed class SourceDownloadService(
                     continue;
                 }
                 // failed / completed → 重置复用。多候选模式下一并清空换源相关状态。
+                var snapshotStatus = existing.Status;
+                var snapshotAttempt = existing.AttemptId;
+                var snapshotUpdatedAt = existing.UpdatedAtUtc;
+                var resetTime = DateTime.UtcNow;
                 existing.Status = ExternalDownloadTaskStatuses.Queued;
                 existing.ErrorCode = null;
                 existing.ErrorMessage = null;
@@ -222,8 +229,23 @@ public sealed class SourceDownloadService(
                 existing.ArtistsJson = JsonSerializer.Serialize(primary.Artists);
                 existing.AlbumTitle = primary.AlbumTitle;
                 existing.DurationMs = primary.DurationMs;
-                existing.UpdatedAtUtc = DateTime.UtcNow;
-                await db.Updateable(existing).ExecuteCommandAsync(cancellationToken);
+                existing.UpdatedAtUtc = resetTime;
+                existing.WorkerId = null;
+                existing.AttemptId = null;
+                existing.LeaseUntilUtc = null;
+                existing.LastHeartbeatAtUtc = null;
+                var resetOutbox = await MessageOutbox.MutateIfAsync(db, QueueNames.Downloads, existing.Id, async () =>
+                    await db.Updateable(existing)
+                    .Where(row => row.Id == existing.Id && row.Status == snapshotStatus
+                        && row.AttemptId == snapshotAttempt && row.UpdatedAtUtc == snapshotUpdatedAt
+                        && (row.LeaseUntilUtc == null || row.LeaseUntilUtc <= resetTime))
+                    .ExecuteCommandAsync(cancellationToken) == 1, cancellationToken);
+                if (resetOutbox is null)
+                {
+                    skipped.Add(primary.ProviderTrackId);
+                    continue;
+                }
+                outboxIds.Add(resetOutbox.Value);
                 created.Add(existing);
                 continue;
             }
@@ -271,9 +293,24 @@ public sealed class SourceDownloadService(
         }
 
         if (newTasks.Count > 0)
-            await db.Insertable(newTasks).ExecuteCommandAsync(cancellationToken);
-        foreach (var task in created)
-            await messageBus.PublishAsync(QueueNames.Downloads, task.Id, cancellationToken);
+        {
+            var ownsTransaction = db.Ado.Transaction is null;
+            if (ownsTransaction) await db.Ado.BeginTranAsync();
+            try
+            {
+                await db.Insertable(newTasks).ExecuteCommandAsync(cancellationToken);
+                foreach (var task in newTasks)
+                    outboxIds.Add(await MessageOutbox.EnqueueAsync(db, QueueNames.Downloads, task.Id, cancellationToken));
+                if (ownsTransaction) await db.Ado.CommitTranAsync();
+            }
+            catch
+            {
+                if (ownsTransaction) await db.Ado.RollbackTranAsync();
+                throw;
+            }
+        }
+        foreach (var outboxId in outboxIds)
+            await MessageOutboxDispatcher.TryDeliverAsync(db, messageBus, outboxId, cancellationToken);
         return new CreateSourceDownloadTasksResult(created, skipped);
     }
 
@@ -306,7 +343,7 @@ public sealed class SourceDownloadService(
 
 /// <summary>
 /// 外部音源下载处理器（RabbitMQ 消费端按消息调用，每条消息一个 DI 作用域）。
-/// 单个任务流程：原子认领 → 详情基准 → ResolveDownloadAsync → 流式下载（80KB 缓冲 + 增量 SHA-256 + 体积上限熔断）
+/// 单个任务流程：原子认领 → 详情基准 → ResolveDownloadAsync → 流式下载（80KB 缓冲 + 有界恢复 + 完整文件 SHA-256 + 体积上限熔断）
 /// → 有效性校验（时长三层防线：绝对下限 / 基准偏差 / 跨源佐证）→ ContentHash 查重
 /// → 下载封面 → 建导入批次/条目（预填音源元数据）→ 投递 LibraryImportJob。
 /// 瞬时失败按 30s/2min/10min 指数退避写入 NextRetryAtUtc（重试扫描服务到点重新投递），
@@ -321,7 +358,8 @@ public sealed class SourceDownloadJob(
     QuarantineStoragePaths storagePaths,
     ShineMusic.Model.Ports.IMediaTranscoder mediaService,
     ILogger<SourceDownloadJob> logger,
-    ProviderAccessService providerAccess)
+    ProviderAccessService providerAccess,
+    MediaTaskLeaseService leaseService)
 {
     /// <summary>流式下载缓冲区大小（与 ImportStagingService 保持一致）。</summary>
     private const int CopyBufferSize = 81920;
@@ -363,19 +401,13 @@ public sealed class SourceDownloadJob(
     /// <summary>处理单个下载任务：下载 → 查重 → 移交导入流水线。由 RabbitMQ 消息触发（建任务投递 / 重试扫描 / 启动恢复 / 手动重试）。</summary>
     public async Task ProcessAsync(Guid taskId, CancellationToken cancellationToken)
     {
-        // 原子认领：仅当任务处于 queued 且已到重试点才推进为 downloading；
-        // 认领失败（不存在/已被其他 worker 拾取/重试未到点）直接跳过。
-        var claimTime = DateTime.UtcNow;
-        var claimed = await db.Updateable<ExternalDownloadTask>()
-            .SetColumns(candidate => candidate.Status == ExternalDownloadTaskStatuses.Downloading)
-            .SetColumns(candidate => candidate.UpdatedAtUtc == claimTime)
-            .Where(candidate => candidate.Id == taskId
-                && candidate.Status == ExternalDownloadTaskStatuses.Queued
-                && (candidate.NextRetryAtUtc == null || candidate.NextRetryAtUtc <= claimTime))
-            .ExecuteCommandAsync(cancellationToken);
-        if (claimed == 0)
+        // 原子认领 queued 或失去租约的任务；活跃 Worker 的任务及尚未到重试点的任务直接跳过。
+        var claim = await leaseService.TryClaimExternalDownloadAsync(taskId, cancellationToken);
+        if (!claim.Acquired)
             return;
+        var attemptId = claim.AttemptId;
         var task = await db.Queryable<ExternalDownloadTask>().FirstAsync(candidate => candidate.Id == taskId, cancellationToken);
+        var checkpoint = new DownloadCheckpointStore(db, storagePaths, task, attemptId, leaseService.WorkerId);
 
         // 下载产物路径：失败/查重命中时需要清理，全程跟踪。
         string? audioKey = null;
@@ -384,6 +416,11 @@ public sealed class SourceDownloadJob(
         var downloadVerified = false;
         var handoffCommitted = false;
         var downloadWatch = System.Diagnostics.Stopwatch.StartNew();
+        var heartbeat = leaseService.StartExternalDownloadHeartbeat(taskId, attemptId, cancellationToken);
+        var executionToken = heartbeat.Token;
+        try
+        {
+        // 外层处理失租约，包含业务异常分支中 fencing 保存失败的情况。
         try
         {
             var provider = providerAccess.RequireDownloadProvider(task.SourceProvider);
@@ -391,9 +428,9 @@ public sealed class SourceDownloadJob(
 
             // 阶段 1：解析下载地址（优先无损原文件，兜底平台高码率流）。
             // 自带下载能力的 provider（yt-dlp 系）跳过直链解析，下载分支直接调 DownloadToFileAsync。
-            var download = provider is ISourceFileDownloader or IQualityLadderProvider
+            var download = provider is ISourceFileDownloader or IQualityLadderProvider or ILazySourceDownloadProvider
                 ? null
-                : await provider.ResolveDownloadAsync(task.ProviderTrackId, cancellationToken);
+                : await provider.ResolveDownloadAsync(task.ProviderTrackId, executionToken);
 
             // 阶段 1.5：详情接口取权威基准 —— 搜索快照可能脏（平台错标/缓存），详情接口是该曲目当前的权威记录；
             // 时长用于下载校验基准（见 EvaluateDownloadedAudioAsync），标题缺失时顺手回填元数据快照。
@@ -401,7 +438,7 @@ public sealed class SourceDownloadJob(
             SourceSearchResult? detail = null;
             try
             {
-                detail = await providerAccess.GetMetadataAsync(task.SourceProvider, task.ProviderTrackId, cancellationToken);
+                detail = await providerAccess.GetMetadataAsync(task.SourceProvider, task.ProviderTrackId, executionToken);
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
@@ -412,7 +449,7 @@ public sealed class SourceDownloadJob(
             if (detail is not null && ApplyConfirmedMetadata(task, detail))
             {
                 task.UpdatedAtUtc = DateTime.UtcNow;
-                await db.Updateable(task).ExecuteCommandAsync(cancellationToken);
+                await SaveTaskAsync(task, attemptId, executionToken);
             }
 
             // 时长校验基准：详情时长优先（权威、实时），缺失或非法时退回任务快照。
@@ -420,20 +457,21 @@ public sealed class SourceDownloadJob(
                 : detail?.DurationMs is > 0 ? detail.DurationMs : task.DurationMs;
 
             // 阶段 2：下载到隔离区并计算内容哈希。
-            // 直链 provider：HttpClient 流式下载，边下边算 SHA-256，超限熔断；
+            // 直链 provider：HttpClient 流式下载、fenced 前缀快照与完整文件 SHA-256，超限熔断；
             // 自下载 provider（yt-dlp 系）：子进程落地后再补算哈希并校验体积。
             if (!storagePaths.TryResolve("sourcedl", out var downloadDir))
                 throw new MediaProcessingException(ErrorCodes.InternalError, "The download destination path is invalid.");
             Directory.CreateDirectory(downloadDir);
             var maxBytes = options.Value.Download.MaxFileSizeBytes;
-            using var downloadTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            using var downloadTimeout = CancellationTokenSource.CreateLinkedTokenSource(executionToken);
             string contentHash = string.Empty;
             long sizeBytes = 0;
             if (provider is ISourceFileDownloader selfDownloader)
             {
                 // 子进程下载含「下载 + wav 提取」两段耗时，超时上限按下载配置双倍放宽（下限 300s）。
                 downloadTimeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(300, options.Value.Download.TimeoutSeconds * 2)));
-                var file = await selfDownloader.DownloadToFileAsync(task.ProviderTrackId, downloadDir, task.Id.ToString("N"), downloadTimeout.Token);
+                var file = await selfDownloader.DownloadToFileAsync(task.ProviderTrackId, downloadDir,
+                    $"{task.Id:N}.{attemptId:N}", downloadTimeout.Token);
                 audioKey = $"sourcedl/{Path.GetFileName(file.FilePath)}";
                 sizeBytes = new FileInfo(file.FilePath).Length;
                 if (sizeBytes > maxBytes)
@@ -446,54 +484,72 @@ public sealed class SourceDownloadJob(
             else
             {
                 var client = httpClientFactory.CreateClient(task.SourceProvider);
-                // 在既有候选预算内按目标档优先下载，原文件实测合格即停止。
-                var candidates = provider is IQualityLadderProvider ladder
-                    ? await ladder.ResolveDownloadCandidatesAsync(task.ProviderTrackId, cancellationToken)
-                    : [download!];
-
                 SourceDownloadInfo? accepted = null;
                 Exception? lastCandidateDownloadException = null;
                 string? lastRejectReason = null;
                 var qualityChain = _qualityGate.GetAllowedQualityChain().ToArray();
-                foreach (var candidate in candidates.OrderBy(candidate =>
-                    candidate.BitrateKbps is null or <= 0 && !candidate.IsLossless ? int.MaxValue :
-                    Array.IndexOf(qualityChain, candidate.IsLossless ? AudioQualityLevel.Lossless
-                        : candidate.BitrateKbps is >= 320 ? AudioQualityLevel.High320K : AudioQualityLevel.Below320K)))
+                // 延迟源按其声明的优先级逐个解析，成功后立即停止；旧音质梯度源保留原排序。
+                await using var candidateEnumerator = EnumerateDownloadCandidatesAsync(provider,
+                    task.ProviderTrackId, download, qualityChain, executionToken).GetAsyncEnumerator(executionToken);
+                while (true)
                 {
+                    try
+                    {
+                        if (!await candidateEnumerator.MoveNextAsync())
+                            break;
+                    }
+                    catch (OperationCanceledException) when (executionToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception exception) when (exception is HttpRequestException
+                        or IOException or OperationCanceledException or SourceUnavailableException)
+                    {
+                        lastCandidateDownloadException = exception;
+                        logger.LogWarning(
+                            "Source download task {TaskId}: remaining candidate resolution failed ({ErrorType}).",
+                            task.Id, exception.GetType().Name);
+                        break;
+                    }
+                    var candidate = candidateEnumerator.Current;
                     if (!_qualityGate.IsCandidateAllowed(candidate.IsLossless, candidate.BitrateKbps))
                         continue;
                     try
                     {
                         // 每档独立超时：单文件下载覆盖「连接 + 整段流读取」全程，无损原文件体积大，默认 120s。
-                        using var attemptTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                        using var attemptTimeout = CancellationTokenSource.CreateLinkedTokenSource(executionToken);
                         attemptTimeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(30, options.Value.Download.TimeoutSeconds)));
 
                         var extension = ResolveExtension(candidate);
-                        audioKey = $"sourcedl/{task.Id:N}.{extension}";
+                        audioKey = $"sourcedl/{task.Id:N}.{attemptId:N}.{extension}";
                         if (!storagePaths.TryResolve(audioKey, out var audioPath))
                             throw new MediaProcessingException(ErrorCodes.InternalError, "The download destination path is invalid.");
                         Directory.CreateDirectory(Path.GetDirectoryName(audioPath)!);
 
-                        await using (var httpStream = await OpenDownloadStreamAsync(client, candidate.DownloadUrl, maxBytes, attemptTimeout.Token))
-                        await using (var fileStream = new FileStream(audioPath, FileMode.Create, FileAccess.Write, FileShare.None))
-                        {
-                            (contentHash, sizeBytes) = await CopyWithHashAsync(httpStream, fileStream, maxBytes, attemptTimeout.Token);
-                        }
+                        var downloadClient = candidate.UseIsolatedDownloadClient
+                            ? httpClientFactory.CreateClient(HttpAudioUrlResolver.DownloadHttpClientName)
+                            : client;
+                        var transferred = await DownloadCandidateAsync(downloadClient, candidate,
+                            provider as ILazySourceDownloadProvider, task.ProviderTrackId,
+                            audioPath, maxBytes, attemptTimeout.Token, checkpoint);
+                        (contentHash, sizeBytes) = (transferred.ContentHash, transferred.SizeBytes);
 
-                        var (valid, rejectReason) = await EvaluateDownloadedAudioAsync(task, expectedDurationMs, audioKey, cancellationToken, contentHash);
+                        var (valid, rejectReason) = await EvaluateDownloadedAudioAsync(task, expectedDurationMs, audioKey, executionToken, contentHash);
                         if (valid)
                         {
-                            accepted = candidate;
+                            await checkpoint.ClearAsync(executionToken);
+                            accepted = transferred.Candidate;
                             break;
                         }
 
                         lastRejectReason = rejectReason;
+                        await checkpoint.ClearAsync(executionToken);
                         logger.LogWarning(
                             "Source download task {TaskId}: quality {Quality} rejected ({Reason}), falling back to next candidate.",
                             task.Id, candidate.Quality, rejectReason);
                         TryDeleteQuarantineFile(audioKey);
                     }
-                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    catch (OperationCanceledException) when (executionToken.IsCancellationRequested)
                     {
                         throw;
                     }
@@ -504,9 +560,11 @@ public sealed class SourceDownloadJob(
                         or SourceDownloadTooLargeException)
                     {
                         lastCandidateDownloadException = exception;
-                        logger.LogWarning(exception,
-                            "Source download task {TaskId}: quality {Quality} download failed; falling back to next candidate.",
-                            task.Id, candidate.Quality);
+                        if (exception is SourceUnavailableException or SourceDownloadTooLargeException)
+                            await checkpoint.ClearAsync(executionToken);
+                        logger.LogWarning(
+                            "Source download task {TaskId}: quality {Quality} download failed ({ErrorType}); falling back to next candidate.",
+                            task.Id, candidate.Quality, exception.GetType().Name);
                         TryDeleteQuarantineFile(audioKey);
                     }
                 }
@@ -528,7 +586,7 @@ public sealed class SourceDownloadJob(
             // 阶段 2.5：有效性校验 —— 直链 provider 已在候选循环内逐档校验；
             // 自下载 provider（yt-dlp 系）只有一个产物，这里单独校验。
             if (provider is ISourceFileDownloader)
-                await EnsureDownloadedAudioMatchesTaskAsync(task, expectedDurationMs, audioKey!, cancellationToken, contentHash);
+                await EnsureDownloadedAudioMatchesTaskAsync(task, expectedDurationMs, audioKey!, executionToken, contentHash);
 
             downloadVerified = true;
             providerAccess.RecordDownloadSuccess(task.SourceProvider, downloadWatch.Elapsed);
@@ -538,14 +596,14 @@ public sealed class SourceDownloadJob(
             //       processing_failed / parsing_metadata / validating 等中间态或失败态的 ImportItem 被排除，
             //       因为它们对应的隔离文件可能已丢失、或入库流程没走完，本次下载就是为了重新跑一遍。
             var existingAsset = await db.Queryable<MediaAsset>()
-                .FirstAsync(asset => asset.ContentHash == contentHash, cancellationToken);
+                .FirstAsync(asset => asset.ContentHash == contentHash, executionToken);
             var effectiveImportItem = await db.Queryable<LibraryImportItem>()
                 .Where(item => item.ContentHash == contentHash
                     && (item.Status == LibraryImportItemStatuses.PendingReview
                         || item.Status == LibraryImportItemStatuses.ReadyToPublish
                         || item.Status == LibraryImportItemStatuses.Published))
                 .OrderByDescending(item => item.CreatedAtUtc)
-                .FirstAsync(cancellationToken);
+                .FirstAsync(executionToken);
 
             if (existingAsset is not null || effectiveImportItem is not null)
             {
@@ -559,7 +617,7 @@ public sealed class SourceDownloadJob(
                                 || item.Status == LibraryImportItemStatuses.ReadyToPublish
                                 || item.Status == LibraryImportItemStatuses.Published))
                         .OrderByDescending(item => item.CreatedAtUtc)
-                        .FirstAsync(cancellationToken);
+                        .FirstAsync(executionToken);
                     linkedItemId = trackImportItem?.Id;
                 }
 
@@ -569,10 +627,10 @@ public sealed class SourceDownloadJob(
                 task.ErrorCode = null;
                 task.ErrorMessage = null;
                 task.UpdatedAtUtc = DateTime.UtcNow;
-                await db.Updateable(task).ExecuteCommandAsync(cancellationToken);
+                await SaveTaskAsync(task, attemptId, executionToken);
 
                 // 去重命中的「有效导入条目」可能仍在等人工审核/发布。它引用的源文件就是
-                // sourcedl/<taskId>.<ext>（任务重跑时文件名不变，SourceStorageKey 与本次 audioKey 相同）。
+                // sourcedl/<taskId>.<attemptId>.<ext>；每次执行独立命名，旧执行不能删掉新执行产物。
                 // 若这里照常清理，该条目发布时会因暂存源文件缺失而恒返回 404，永远无法入库。
                 // 因此只清理没有被待发布条目引用的文件；本轮新下载的冗余文件仍正常删除。
                 var retainedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -587,10 +645,10 @@ public sealed class SourceDownloadJob(
                     TryDeleteQuarantineFile(audioKey);
                 if (coverKey is null || !retainedKeys.Contains(coverKey))
                     TryDeleteQuarantineFile(coverKey);
-                // TryDeleteQuarantinePartials 按 <taskId>.* 前缀批量删除，可能连带删掉上面要保留的源文件。
-                var retainedPartialPrefix = $"sourcedl/{task.Id:N}.";
+                // 半成品清理仅作用于本次 attempt，不能匹配其他 attempt 的产物。
+                var retainedPartialPrefix = $"sourcedl/{task.Id:N}.{attemptId:N}.";
                 if (!retainedKeys.Any(key => key.StartsWith(retainedPartialPrefix, StringComparison.OrdinalIgnoreCase)))
-                    TryDeleteQuarantinePartials(task.Id);
+                    TryDeleteQuarantinePartials(task.Id, attemptId);
 
                 logger.LogInformation(
                     "Source download task {TaskId} deduplicated: content already exists (asset={HasAsset}, importItem={HasImportItem}). Marked as completed.",
@@ -605,7 +663,9 @@ public sealed class SourceDownloadJob(
             // 阶段 4：下载封面到隔离区（可选内容，失败仅降级不影响入库）。
             if (!string.IsNullOrWhiteSpace(task.CoverUrl))
             {
-                coverKey = await TryDownloadCoverAsync(httpClientFactory.CreateClient(task.SourceProvider), task, cancellationToken);
+                coverKey = await TryDownloadCoverAsync(httpClientFactory.CreateClient(
+                    provider is NeteaseSourceProvider ? HttpAudioUrlResolver.DownloadHttpClientName : task.SourceProvider),
+                    task, attemptId, executionToken);
             }
 
             // 阶段 5：建导入批次 + 条目，预填音源快照元数据（TagLib 解析为空时流水线回退保留）。
@@ -641,17 +701,19 @@ public sealed class SourceDownloadJob(
             MetadataMerge.RecordExisting(item, "releaseYear", item.ReleaseYear, task.SourceProvider, task.ProviderTrackId);
             MetadataMerge.RecordExisting(item, "originalGenres", DeserializeList(task.GenresJson), task.SourceProvider, task.ProviderTrackId);
             MetadataMerge.RecordExisting(item, "cover", item.ArtworkStorageKey, task.SourceProvider, task.ProviderTrackId);
-            // 批次 + 条目同事务提交（SqlSugar 不级联保存）。
+            // 批次、条目、状态与导入触发事件同事务提交。
+            Guid handoffOutboxId;
             await db.Ado.BeginTranAsync();
             try
             {
-                await db.Insertable(batch).ExecuteCommandAsync(cancellationToken);
-                await db.Insertable(item).ExecuteCommandAsync(cancellationToken);
+                await db.Insertable(batch).ExecuteCommandAsync(executionToken);
+                await db.Insertable(item).ExecuteCommandAsync(executionToken);
                 task.Status = ExternalDownloadTaskStatuses.ImportQueued;
                 task.NextRetryAtUtc = null;
                 task.ImportItemId = item.Id;
                 task.UpdatedAtUtc = DateTime.UtcNow;
-                await db.Updateable(task).ExecuteCommandAsync(cancellationToken);
+                await SaveTaskAsync(task, attemptId, executionToken);
+                handoffOutboxId = await MessageOutbox.EnqueueAsync(db, QueueNames.Imports, item.Id, executionToken);
                 await db.Ado.CommitTranAsync();
                 handoffCommitted = true;
             }
@@ -662,9 +724,13 @@ public sealed class SourceDownloadJob(
             }
 
             // 阶段 6：移交导入流水线，任务推进为 import_queued 并回填关联（清掉可能存在的自动重试退避时间）。
-            await messageBus.PublishAsync(QueueNames.Imports, item.Id, cancellationToken);
+            await MessageOutboxDispatcher.TryDeliverAsync(db, messageBus, handoffOutboxId, executionToken);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (executionToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (MediaLeaseLostException)
         {
             throw;
         }
@@ -675,7 +741,7 @@ public sealed class SourceDownloadJob(
             {
                 TryDeleteQuarantineFile(audioKey);
                 TryDeleteQuarantineFile(coverKey);
-                TryDeleteQuarantinePartials(task.Id);
+                TryDeleteQuarantinePartials(task.Id, attemptId);
             }
             else
             {
@@ -718,7 +784,8 @@ public sealed class SourceDownloadJob(
                 task.ErrorCode = code;
                 task.ErrorMessage = message;
                 task.UpdatedAtUtc = DateTime.UtcNow;
-                await db.Updateable(task).ExecuteCommandAsync(cancellationToken);
+                await MessageOutbox.MutateAsync(db, QueueNames.Downloads, task.Id,
+                    () => SaveTaskAsync(task, attemptId, executionToken), executionToken, nextRetryAt);
                 logger.LogWarning(exception,
                     "Source download task {TaskId} (candidate {AttemptIndex}, provider {Provider}) failed with {ErrorCode}; {Mode} auto retry {Retry}/{Max} scheduled at {NextRetryAtUtc}.",
                     taskId, currentCandidateIndex, task.SourceProvider, code, IsRateLimited(exception) ? "rate-limit" : "standard", task.AutoRetryCount, MaxAutoRetries, nextRetryAt);
@@ -735,6 +802,7 @@ public sealed class SourceDownloadJob(
                     taskId, currentCandidateIndex, task.SourceProvider, nextCandidateIndex, next.Provider);
 
                 // 换源：更新当前尝试的 provider 信息，重置换源内的重试计数，清除单次错误。
+                await checkpoint.ClearAsync(executionToken);
                 task.SourceProvider = next.Provider;
                 task.ProviderTrackId = next.ProviderTrackId;
                 task.AttemptIndex = nextCandidateIndex;
@@ -758,7 +826,7 @@ public sealed class SourceDownloadJob(
                 // 仅更新当前候选元数据；原始目标身份留在 Expected* 字段，供评分和完整曲名校验使用。
                 try
                 {
-                    var snapshot = await providerAccess.GetMetadataAsync(next.Provider, next.ProviderTrackId, cancellationToken);
+                    var snapshot = await providerAccess.GetMetadataAsync(next.Provider, next.ProviderTrackId, executionToken);
                     if (snapshot is not null)
                     {
                         task.Title = snapshot.Title;
@@ -781,8 +849,9 @@ public sealed class SourceDownloadJob(
                 }
 
                 task.UpdatedAtUtc = DateTime.UtcNow;
-                await db.Updateable(task).ExecuteCommandAsync(cancellationToken);
-                await messageBus.PublishAsync(QueueNames.Downloads, task.Id, cancellationToken);
+                var fallbackOutboxId = await MessageOutbox.MutateAsync(db, QueueNames.Downloads, task.Id,
+                    () => SaveTaskAsync(task, attemptId, executionToken), executionToken);
+                await MessageOutboxDispatcher.TryDeliverAsync(db, messageBus, fallbackOutboxId, executionToken);
                 return;
             }
 
@@ -796,9 +865,47 @@ public sealed class SourceDownloadJob(
             task.ErrorCode = ErrorCodes.SourceUnavailable;
             task.ErrorMessage = finalMessage;
             task.UpdatedAtUtc = DateTime.UtcNow;
-            await db.Updateable(task).ExecuteCommandAsync(cancellationToken);
+            await SaveTaskAsync(task, attemptId, executionToken);
+        }
+        }
+        catch (OperationCanceledException) when (heartbeat.Lost)
+        {
+            // 续租失败或租约被回收：只删除本 attempt 文件，不得保存失败状态覆盖新执行。
+            if (!handoffCommitted)
+            {
+                TryDeleteQuarantineFile(audioKey);
+                TryDeleteQuarantineFile(coverKey);
+                TryDeleteQuarantinePartials(task.Id, attemptId);
+            }
+        }
+        catch (MediaLeaseLostException)
+        {
+            if (!handoffCommitted)
+            {
+                TryDeleteQuarantineFile(audioKey);
+                TryDeleteQuarantineFile(coverKey);
+                TryDeleteQuarantinePartials(task.Id, attemptId);
+            }
+        }
+        finally
+        {
+            if (task.Status is ExternalDownloadTaskStatuses.ImportQueued or ExternalDownloadTaskStatuses.Completed or ExternalDownloadTaskStatuses.Failed)
+            {
+                try { await checkpoint.ClearAsync(CancellationToken.None); }
+                catch (MediaLeaseLostException) { /* A successor owns both the pointer and its cleanup. */ }
+                catch (Exception cleanupFailure)
+                {
+                    logger.LogWarning("Download checkpoint cleanup deferred for task {TaskId} ({ErrorType}).",
+                        taskId, cleanupFailure.GetType().Name);
+                }
+            }
+            await heartbeat.DisposeAsync();
+            await leaseService.ReleaseExternalDownloadAsync(taskId, attemptId, CancellationToken.None);
         }
     }
+
+    private Task SaveTaskAsync(ExternalDownloadTask task, Guid attemptId, CancellationToken cancellationToken)
+        => leaseService.UpdateOwnedAsync(task, attemptId, cancellationToken);
 
     /// <summary>
     /// 从任务的 CandidateProvidersJson 解析多候选列表。
@@ -1033,8 +1140,8 @@ public sealed class SourceDownloadJob(
         return Convert.ToHexString(hasher.Hash!).ToLowerInvariant();
     }
 
-    /// <summary>清理某任务在隔离区 sourcedl/ 下的全部半成品（自下载子进程失败时可能残留 .part/.ytdl 临时文件）。</summary>
-    private void TryDeleteQuarantinePartials(Guid taskId)
+    /// <summary>只清理本次执行的半成品；旧 Worker 不得清理新 attempt 的音频和封面。</summary>
+    private void TryDeleteQuarantinePartials(Guid taskId, Guid attemptId)
     {
         if (!storagePaths.TryResolve("sourcedl", out var downloadDir))
             return;
@@ -1042,7 +1149,7 @@ public sealed class SourceDownloadJob(
         {
             if (!Directory.Exists(downloadDir))
                 return;
-            foreach (var path in Directory.EnumerateFiles(downloadDir, $"{taskId:N}.*"))
+            foreach (var path in Directory.EnumerateFiles(downloadDir, $"{taskId:N}.{attemptId:N}.*"))
             {
                 try { File.Delete(path); }
                 catch (IOException) { }
@@ -1051,14 +1158,74 @@ public sealed class SourceDownloadJob(
         catch (IOException) { }
     }
 
-    /// <summary>打开下载流：响应头到达后即开始流式读取；Content-Length 超限在下载前提前熔断。</summary>
-    private static async Task<Stream> OpenDownloadStreamAsync(HttpClient client, string url, long maxBytes, CancellationToken cancellationToken)
+    /// <summary>延迟源逐项解析；已有物化梯度源保留原有目标音质排序。</summary>
+    internal static async IAsyncEnumerable<SourceDownloadInfo> EnumerateDownloadCandidatesAsync(
+        IMusicSourceProvider provider,
+        string providerTrackId,
+        SourceDownloadInfo? preResolved,
+        AudioQualityLevel[] qualityChain,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-        response.EnsureSuccessStatusCode();
-        if (response.Content.Headers.ContentLength is > 0 && response.Content.Headers.ContentLength.Value > maxBytes)
-            throw new SourceDownloadTooLargeException();
-        return await response.Content.ReadAsStreamAsync(cancellationToken);
+        if (provider is ILazySourceDownloadProvider lazy)
+        {
+            await foreach (var candidate in lazy.ResolveDownloadCandidatesLazilyAsync(providerTrackId, qualityChain, cancellationToken)
+                .WithCancellation(cancellationToken))
+                yield return candidate;
+            yield break;
+        }
+
+        IReadOnlyList<SourceDownloadInfo> candidates = provider is IQualityLadderProvider ladder
+            ? await ladder.ResolveDownloadCandidatesAsync(providerTrackId, cancellationToken)
+            : preResolved is null ? [] : [preResolved];
+        foreach (var candidate in candidates.OrderBy(candidate =>
+            candidate.BitrateKbps is null or <= 0 && !candidate.IsLossless ? int.MaxValue :
+            Array.IndexOf(qualityChain, candidate.IsLossless ? AudioQualityLevel.Lossless
+                : candidate.BitrateKbps is >= 320 ? AudioQualityLevel.High320K : AudioQualityLevel.Below320K)))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return candidate;
+        }
+    }
+
+    /// <summary>
+    /// 在当前 attempt 内有界恢复单个候选；临近过期或授权状态错误共享一次刷新预算。
+    /// 响应、流和请求均在本方法链内释放，刷新不得改变资源、解析来源或音质。
+    /// </summary>
+    internal static Task<(SourceDownloadInfo Candidate, string ContentHash, long SizeBytes)> DownloadCandidateAsync(
+        HttpClient client,
+        SourceDownloadInfo candidate,
+        ILazySourceDownloadProvider? refreshProvider,
+        string providerTrackId,
+        string audioPath,
+        long maxBytes,
+        CancellationToken cancellationToken,
+        DownloadCheckpointStore? checkpoint = null)
+        => ResumableAudioDownload.DownloadAsync(client, candidate,
+            refreshProvider is null ? null : (previous, token) => RefreshCandidateAsync(refreshProvider, providerTrackId, previous, token),
+            audioPath, maxBytes, cancellationToken, checkpoint);
+
+    private static async Task<SourceDownloadInfo> RefreshCandidateAsync(
+        ILazySourceDownloadProvider provider,
+        string providerTrackId,
+        SourceDownloadInfo previous,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(previous.ResolverId) || string.IsNullOrWhiteSpace(previous.ResourceId))
+            throw new SourceUnavailableException("The audio candidate does not have a stable refresh identity.");
+        var refreshed = await provider.RefreshDownloadAsync(providerTrackId, previous, cancellationToken);
+        if (refreshed is null)
+            throw new SourceUnavailableException("The audio source link could not be refreshed.");
+        if (!string.Equals(previous.ResolverId, refreshed.ResolverId, StringComparison.Ordinal)
+            || !string.Equals(previous.ResourceId, refreshed.ResourceId, StringComparison.Ordinal)
+            || !string.Equals(previous.Quality, refreshed.Quality, StringComparison.Ordinal)
+            || !string.Equals(previous.Container, refreshed.Container, StringComparison.OrdinalIgnoreCase)
+            || previous.IsLossless != refreshed.IsLossless
+            || previous.BitrateKbps != refreshed.BitrateKbps
+            || previous.UseIsolatedDownloadClient != refreshed.UseIsolatedDownloadClient)
+            throw new SourceUnavailableException("Refreshing the audio source changed its resource or quality.");
+        if (refreshed.ExpiresAtUtc is { } expiresAt && expiresAt <= DateTimeOffset.UtcNow)
+            throw new SourceUnavailableException("The refreshed audio source link has already expired.");
+        return refreshed;
     }
 
     /// <summary>流式复制并增量计算 SHA-256；超过体积上限立即熔断（抛 <see cref="SourceDownloadTooLargeException"/>）。</summary>
@@ -1068,9 +1235,18 @@ public sealed class SourceDownloadJob(
         using var hasher = SHA256.Create();
         var buffer = new byte[CopyBufferSize];
         long total = 0;
-        int read;
-        while ((read = await source.ReadAsync(buffer, cancellationToken)) > 0)
+        while (true)
         {
+            int read;
+            try
+            {
+                read = await source.ReadAsync(buffer, cancellationToken);
+            }
+            catch (IOException)
+            {
+                throw new HttpRequestException("The audio source response body could not be read completely.");
+            }
+            if (read == 0) break;
             total += read;
             if (total > maxBytes)
                 throw new SourceDownloadTooLargeException();
@@ -1082,12 +1258,15 @@ public sealed class SourceDownloadJob(
     }
 
     /// <summary>下载封面到隔离区；任何失败（网络/超限/非法路径）都返回 null 仅降级。</summary>
-    private async Task<string?> TryDownloadCoverAsync(HttpClient client, ExternalDownloadTask task, CancellationToken cancellationToken)
+    private async Task<string?> TryDownloadCoverAsync(HttpClient client, ExternalDownloadTask task, Guid attemptId, CancellationToken cancellationToken)
     {
         try
         {
+            if (string.Equals(task.SourceProvider, "netease", StringComparison.OrdinalIgnoreCase)
+                && !PublicAudioHttpTransport.IsAllowedUri(task.CoverUrl))
+                return null;
             var coverExtension = ResolveCoverExtension(task.CoverUrl!);
-            var coverKey = $"sourcedl/{task.Id:N}.cover.{coverExtension}";
+            var coverKey = $"sourcedl/{task.Id:N}.{attemptId:N}.cover.{coverExtension}";
             if (!storagePaths.TryResolve(coverKey, out var coverPath))
                 return null;
             Directory.CreateDirectory(Path.GetDirectoryName(coverPath)!);

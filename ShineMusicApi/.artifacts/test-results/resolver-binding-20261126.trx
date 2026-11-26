@@ -1,0 +1,112 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="fa4725e1-e2b8-4a27-ab61-f9b5fd73441a" name="96561@暖树 2026-11-26 08:47:06" runUser="暖树\CodexSandboxOffline" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Times creation="2026-11-26T08:47:06.7502024+08:00" queuing="2026-11-26T08:47:06.7502031+08:00" start="2026-11-26T08:47:05.5650660+08:00" finish="2026-11-26T08:47:06.7786425+08:00" />
+  <TestSettings name="default" id="b778e524-a135-4a0b-a6a9-fbca3452e413">
+    <Deployment runDeploymentRoot="96561_暖树_2026-11-26_08_47_06" />
+  </TestSettings>
+  <Results>
+    <UnitTestResult executionId="9f1a1a86-89d9-43b9-a202-2be35e9cd61e" testId="df90a792-9cca-136d-5aa5-91811c2c7c2e" testName="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests.Explicitly_empty_resolver_list_does_not_restore_the_default_service(value: &quot;null&quot;)" computerName="暖树" duration="00:00:00.0013928" startTime="2026-11-26T08:47:06.7309349+08:00" endTime="2026-11-26T08:47:06.7310148+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="9f1a1a86-89d9-43b9-a202-2be35e9cd61e" />
+    <UnitTestResult executionId="f1ea2a6d-fd1f-4eb7-aeb8-6a95e64fc62c" testId="4d22ed1d-7987-7e2d-345a-61cc48bbd310" testName="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests.Startup_validation_rejects_a_config_that_would_silently_reopen_low_quality(key: &quot;SourceDownload:AutoPublishThreshold&quot;, value: &quot;60&quot;)" computerName="暖树" duration="00:00:00.0038700" startTime="2026-11-26T08:47:06.6700310+08:00" endTime="2026-11-26T08:47:06.6700797+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="f1ea2a6d-fd1f-4eb7-aeb8-6a95e64fc62c" />
+    <UnitTestResult executionId="32cc7fb9-77d4-4d4f-8205-cbf1ff4f6f57" testId="eebf86b1-0e79-9c6f-8def-a80878d14b37" testName="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests.Startup_validation_rejects_a_config_that_would_silently_reopen_low_quality(key: &quot;SourceDownload:Migu:ToneFlag&quot;, value: &quot;FLAC&quot;)" computerName="暖树" duration="00:00:00.0039317" startTime="2026-11-26T08:47:06.6693482+08:00" endTime="2026-11-26T08:47:06.6694409+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="32cc7fb9-77d4-4d4f-8205-cbf1ff4f6f57" />
+    <UnitTestResult executionId="54f7e587-e1f2-4243-b851-46c1ec084366" testId="17cc37d2-797e-5fb8-d6ff-d83d97f4a777" testName="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests.Migu_defaults_to_320_tier" computerName="暖树" duration="00:00:00.0000652" startTime="2026-11-26T08:47:06.7312624+08:00" endTime="2026-11-26T08:47:06.7313004+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="54f7e587-e1f2-4243-b851-46c1ec084366" />
+    <UnitTestResult executionId="1d69d580-0237-4f1c-92b3-c540a39c91d5" testId="370b84f0-d959-5793-64e8-9761e011abb8" testName="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests.Startup_validation_rejects_a_config_that_would_silently_reopen_low_quality(key: &quot;SourceDownload:ScoreWeights:Identity&quot;, value: &quot;41&quot;)" computerName="暖树" duration="00:00:00.0023197" startTime="2026-11-26T08:47:06.6701696+08:00" endTime="2026-11-26T08:47:06.6702107+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="1d69d580-0237-4f1c-92b3-c540a39c91d5" />
+    <UnitTestResult executionId="ed8a65c4-fb22-4b1c-906a-cfb58d6e9342" testId="e56447d7-f3f6-a519-5122-4f453828585b" testName="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests.Startup_validation_accepts_the_safe_defaults_when_config_section_is_missing" computerName="暖树" duration="00:00:00.0325550" startTime="2026-11-26T08:47:06.6172738+08:00" endTime="2026-11-26T08:47:06.6575920+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="ed8a65c4-fb22-4b1c-906a-cfb58d6e9342" />
+    <UnitTestResult executionId="77447656-ddb3-4b23-a5cf-63c3c76270cf" testId="0409da6e-5236-92fc-f1b7-d6fe74f0910c" testName="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests.Explicitly_empty_resolver_list_does_not_restore_the_default_service(value: &quot;[]&quot;)" computerName="暖树" duration="00:00:00.0056122" startTime="2026-11-26T08:47:06.7305906+08:00" endTime="2026-11-26T08:47:06.7306564+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="77447656-ddb3-4b23-a5cf-63c3c76270cf" />
+    <UnitTestResult executionId="4212e543-3f3d-45e5-b707-5fe6569975e2" testId="abe09866-cdec-b0db-e2d5-e480b0f4cf7d" testName="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests.Startup_validation_rejects_a_config_that_would_silently_reopen_low_quality(key: &quot;SourceDownload:ScoreWeights:Lyrics&quot;, value: &quot;-1&quot;)" computerName="暖树" duration="00:00:00.0008331" startTime="2026-11-26T08:47:06.6702912+08:00" endTime="2026-11-26T08:47:06.6703345+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="4212e543-3f3d-45e5-b707-5fe6569975e2" />
+    <UnitTestResult executionId="973a7dd0-6493-4519-841d-4c874f1b2cc1" testId="c6100bea-92a8-d2f6-2b06-38d0f6a2cdb7" testName="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests.Configured_resolvers_and_levels_replace_the_initialized_defaults" computerName="暖树" duration="00:00:00.0046252" startTime="2026-11-26T08:47:06.6726058+08:00" endTime="2026-11-26T08:47:06.6772265+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="973a7dd0-6493-4519-841d-4c874f1b2cc1" />
+    <UnitTestResult executionId="d669bc86-f42b-4c1d-a50d-1ab6effdace8" testId="bb577053-bba0-94d4-cefa-0444352604f8" testName="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests.A_128k_file_with_perfect_metadata_still_cannot_auto_publish" computerName="暖树" duration="00:00:00.0268319" startTime="2026-11-26T08:47:06.6776891+08:00" endTime="2026-11-26T08:47:06.7044663+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="d669bc86-f42b-4c1d-a50d-1ab6effdace8" />
+    <UnitTestResult executionId="99066c91-9e42-4556-9f13-ca38b9724380" testId="d9077bc6-787d-6684-efec-73f7861f599f" testName="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests.Auto_publish_threshold_stays_above_the_low_quality_score_ceiling" computerName="暖树" duration="00:00:00.0002589" startTime="2026-11-26T08:47:06.6774788+08:00" endTime="2026-11-26T08:47:06.6775472+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="99066c91-9e42-4556-9f13-ca38b9724380" />
+    <UnitTestResult executionId="b85f273b-8463-42f6-9124-a01fbc486111" testId="04f39090-31ab-d72c-35a4-f6823fede253" testName="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests.Only_the_two_verified_high_quality_sources_are_enabled_by_default" computerName="暖树" duration="00:00:00.0003371" startTime="2026-11-26T08:47:06.7313980+08:00" endTime="2026-11-26T08:47:06.7314367+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="b85f273b-8463-42f6-9124-a01fbc486111" />
+    <UnitTestResult executionId="d0bd8bc5-ea7e-4a18-bc47-2057394772b3" testId="3c92594b-9ef0-6bdc-5af9-5c1cb56114b0" testName="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests.Vip_fallback_default_chain_contains_only_the_verified_endpoint" computerName="暖树" duration="00:00:00.0033025" startTime="2026-11-26T08:47:06.6704935+08:00" endTime="2026-11-26T08:47:06.6724530+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="d0bd8bc5-ea7e-4a18-bc47-2057394772b3" />
+    <UnitTestResult executionId="d85eeee0-3555-4363-b0f9-7bb8385ab4b2" testId="3e44525e-4c8e-f49b-17af-c7d0566eea9b" testName="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests.Appsettings_and_code_defaults_agree_on_quality_policy" computerName="暖树" duration="00:00:00.0176686" startTime="2026-11-26T08:47:06.7311276+08:00" endTime="2026-11-26T08:47:06.7311666+08:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="d85eeee0-3555-4363-b0f9-7bb8385ab4b2" />
+  </Results>
+  <TestDefinitions>
+    <UnitTest name="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests.Auto_publish_threshold_stays_above_the_low_quality_score_ceiling" storage="c:\learn\shinemusic\shinemusicapi\shinemusic.tests\bin\release\net10.0\shinemusic.tests.dll" id="d9077bc6-787d-6684-efec-73f7861f599f">
+      <Execution id="99066c91-9e42-4556-9f13-ca38b9724380" />
+      <TestMethod codeBase="C:\Learn\ShineMusic\ShineMusicApi\ShineMusic.Tests\bin\Release\net10.0\ShineMusic.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests" name="Auto_publish_threshold_stays_above_the_low_quality_score_ceiling" />
+    </UnitTest>
+    <UnitTest name="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests.Startup_validation_rejects_a_config_that_would_silently_reopen_low_quality(key: &quot;SourceDownload:ScoreWeights:Lyrics&quot;, value: &quot;-1&quot;)" storage="c:\learn\shinemusic\shinemusicapi\shinemusic.tests\bin\release\net10.0\shinemusic.tests.dll" id="abe09866-cdec-b0db-e2d5-e480b0f4cf7d">
+      <Execution id="4212e543-3f3d-45e5-b707-5fe6569975e2" />
+      <TestMethod codeBase="C:\Learn\ShineMusic\ShineMusicApi\ShineMusic.Tests\bin\Release\net10.0\ShineMusic.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests" name="Startup_validation_rejects_a_config_that_would_silently_reopen_low_quality" />
+    </UnitTest>
+    <UnitTest name="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests.Migu_defaults_to_320_tier" storage="c:\learn\shinemusic\shinemusicapi\shinemusic.tests\bin\release\net10.0\shinemusic.tests.dll" id="17cc37d2-797e-5fb8-d6ff-d83d97f4a777">
+      <Execution id="54f7e587-e1f2-4243-b851-46c1ec084366" />
+      <TestMethod codeBase="C:\Learn\ShineMusic\ShineMusicApi\ShineMusic.Tests\bin\Release\net10.0\ShineMusic.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests" name="Migu_defaults_to_320_tier" />
+    </UnitTest>
+    <UnitTest name="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests.Configured_resolvers_and_levels_replace_the_initialized_defaults" storage="c:\learn\shinemusic\shinemusicapi\shinemusic.tests\bin\release\net10.0\shinemusic.tests.dll" id="c6100bea-92a8-d2f6-2b06-38d0f6a2cdb7">
+      <Execution id="973a7dd0-6493-4519-841d-4c874f1b2cc1" />
+      <TestMethod codeBase="C:\Learn\ShineMusic\ShineMusicApi\ShineMusic.Tests\bin\Release\net10.0\ShineMusic.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests" name="Configured_resolvers_and_levels_replace_the_initialized_defaults" />
+    </UnitTest>
+    <UnitTest name="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests.Explicitly_empty_resolver_list_does_not_restore_the_default_service(value: &quot;[]&quot;)" storage="c:\learn\shinemusic\shinemusicapi\shinemusic.tests\bin\release\net10.0\shinemusic.tests.dll" id="0409da6e-5236-92fc-f1b7-d6fe74f0910c">
+      <Execution id="77447656-ddb3-4b23-a5cf-63c3c76270cf" />
+      <TestMethod codeBase="C:\Learn\ShineMusic\ShineMusicApi\ShineMusic.Tests\bin\Release\net10.0\ShineMusic.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests" name="Explicitly_empty_resolver_list_does_not_restore_the_default_service" />
+    </UnitTest>
+    <UnitTest name="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests.Startup_validation_rejects_a_config_that_would_silently_reopen_low_quality(key: &quot;SourceDownload:ScoreWeights:Identity&quot;, value: &quot;41&quot;)" storage="c:\learn\shinemusic\shinemusicapi\shinemusic.tests\bin\release\net10.0\shinemusic.tests.dll" id="370b84f0-d959-5793-64e8-9761e011abb8">
+      <Execution id="1d69d580-0237-4f1c-92b3-c540a39c91d5" />
+      <TestMethod codeBase="C:\Learn\ShineMusic\ShineMusicApi\ShineMusic.Tests\bin\Release\net10.0\ShineMusic.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests" name="Startup_validation_rejects_a_config_that_would_silently_reopen_low_quality" />
+    </UnitTest>
+    <UnitTest name="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests.Explicitly_empty_resolver_list_does_not_restore_the_default_service(value: &quot;null&quot;)" storage="c:\learn\shinemusic\shinemusicapi\shinemusic.tests\bin\release\net10.0\shinemusic.tests.dll" id="df90a792-9cca-136d-5aa5-91811c2c7c2e">
+      <Execution id="9f1a1a86-89d9-43b9-a202-2be35e9cd61e" />
+      <TestMethod codeBase="C:\Learn\ShineMusic\ShineMusicApi\ShineMusic.Tests\bin\Release\net10.0\ShineMusic.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests" name="Explicitly_empty_resolver_list_does_not_restore_the_default_service" />
+    </UnitTest>
+    <UnitTest name="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests.Vip_fallback_default_chain_contains_only_the_verified_endpoint" storage="c:\learn\shinemusic\shinemusicapi\shinemusic.tests\bin\release\net10.0\shinemusic.tests.dll" id="3c92594b-9ef0-6bdc-5af9-5c1cb56114b0">
+      <Execution id="d0bd8bc5-ea7e-4a18-bc47-2057394772b3" />
+      <TestMethod codeBase="C:\Learn\ShineMusic\ShineMusicApi\ShineMusic.Tests\bin\Release\net10.0\ShineMusic.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests" name="Vip_fallback_default_chain_contains_only_the_verified_endpoint" />
+    </UnitTest>
+    <UnitTest name="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests.Startup_validation_accepts_the_safe_defaults_when_config_section_is_missing" storage="c:\learn\shinemusic\shinemusicapi\shinemusic.tests\bin\release\net10.0\shinemusic.tests.dll" id="e56447d7-f3f6-a519-5122-4f453828585b">
+      <Execution id="ed8a65c4-fb22-4b1c-906a-cfb58d6e9342" />
+      <TestMethod codeBase="C:\Learn\ShineMusic\ShineMusicApi\ShineMusic.Tests\bin\Release\net10.0\ShineMusic.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests" name="Startup_validation_accepts_the_safe_defaults_when_config_section_is_missing" />
+    </UnitTest>
+    <UnitTest name="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests.Startup_validation_rejects_a_config_that_would_silently_reopen_low_quality(key: &quot;SourceDownload:AutoPublishThreshold&quot;, value: &quot;60&quot;)" storage="c:\learn\shinemusic\shinemusicapi\shinemusic.tests\bin\release\net10.0\shinemusic.tests.dll" id="4d22ed1d-7987-7e2d-345a-61cc48bbd310">
+      <Execution id="f1ea2a6d-fd1f-4eb7-aeb8-6a95e64fc62c" />
+      <TestMethod codeBase="C:\Learn\ShineMusic\ShineMusicApi\ShineMusic.Tests\bin\Release\net10.0\ShineMusic.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests" name="Startup_validation_rejects_a_config_that_would_silently_reopen_low_quality" />
+    </UnitTest>
+    <UnitTest name="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests.Appsettings_and_code_defaults_agree_on_quality_policy" storage="c:\learn\shinemusic\shinemusicapi\shinemusic.tests\bin\release\net10.0\shinemusic.tests.dll" id="3e44525e-4c8e-f49b-17af-c7d0566eea9b">
+      <Execution id="d85eeee0-3555-4363-b0f9-7bb8385ab4b2" />
+      <TestMethod codeBase="C:\Learn\ShineMusic\ShineMusicApi\ShineMusic.Tests\bin\Release\net10.0\ShineMusic.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests" name="Appsettings_and_code_defaults_agree_on_quality_policy" />
+    </UnitTest>
+    <UnitTest name="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests.A_128k_file_with_perfect_metadata_still_cannot_auto_publish" storage="c:\learn\shinemusic\shinemusicapi\shinemusic.tests\bin\release\net10.0\shinemusic.tests.dll" id="bb577053-bba0-94d4-cefa-0444352604f8">
+      <Execution id="d669bc86-f42b-4c1d-a50d-1ab6effdace8" />
+      <TestMethod codeBase="C:\Learn\ShineMusic\ShineMusicApi\ShineMusic.Tests\bin\Release\net10.0\ShineMusic.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests" name="A_128k_file_with_perfect_metadata_still_cannot_auto_publish" />
+    </UnitTest>
+    <UnitTest name="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests.Only_the_two_verified_high_quality_sources_are_enabled_by_default" storage="c:\learn\shinemusic\shinemusicapi\shinemusic.tests\bin\release\net10.0\shinemusic.tests.dll" id="04f39090-31ab-d72c-35a4-f6823fede253">
+      <Execution id="b85f273b-8463-42f6-9124-a01fbc486111" />
+      <TestMethod codeBase="C:\Learn\ShineMusic\ShineMusicApi\ShineMusic.Tests\bin\Release\net10.0\ShineMusic.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests" name="Only_the_two_verified_high_quality_sources_are_enabled_by_default" />
+    </UnitTest>
+    <UnitTest name="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests.Startup_validation_rejects_a_config_that_would_silently_reopen_low_quality(key: &quot;SourceDownload:Migu:ToneFlag&quot;, value: &quot;FLAC&quot;)" storage="c:\learn\shinemusic\shinemusicapi\shinemusic.tests\bin\release\net10.0\shinemusic.tests.dll" id="eebf86b1-0e79-9c6f-8def-a80878d14b37">
+      <Execution id="32cc7fb9-77d4-4d4f-8205-cbf1ff4f6f57" />
+      <TestMethod codeBase="C:\Learn\ShineMusic\ShineMusicApi\ShineMusic.Tests\bin\Release\net10.0\ShineMusic.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="ShineMusic.Tests.Rules.SourceDownloadSafeDefaultsTests" name="Startup_validation_rejects_a_config_that_would_silently_reopen_low_quality" />
+    </UnitTest>
+  </TestDefinitions>
+  <TestEntries>
+    <TestEntry testId="df90a792-9cca-136d-5aa5-91811c2c7c2e" executionId="9f1a1a86-89d9-43b9-a202-2be35e9cd61e" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="4d22ed1d-7987-7e2d-345a-61cc48bbd310" executionId="f1ea2a6d-fd1f-4eb7-aeb8-6a95e64fc62c" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="eebf86b1-0e79-9c6f-8def-a80878d14b37" executionId="32cc7fb9-77d4-4d4f-8205-cbf1ff4f6f57" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="17cc37d2-797e-5fb8-d6ff-d83d97f4a777" executionId="54f7e587-e1f2-4243-b851-46c1ec084366" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="370b84f0-d959-5793-64e8-9761e011abb8" executionId="1d69d580-0237-4f1c-92b3-c540a39c91d5" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="e56447d7-f3f6-a519-5122-4f453828585b" executionId="ed8a65c4-fb22-4b1c-906a-cfb58d6e9342" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="0409da6e-5236-92fc-f1b7-d6fe74f0910c" executionId="77447656-ddb3-4b23-a5cf-63c3c76270cf" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="abe09866-cdec-b0db-e2d5-e480b0f4cf7d" executionId="4212e543-3f3d-45e5-b707-5fe6569975e2" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="c6100bea-92a8-d2f6-2b06-38d0f6a2cdb7" executionId="973a7dd0-6493-4519-841d-4c874f1b2cc1" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="bb577053-bba0-94d4-cefa-0444352604f8" executionId="d669bc86-f42b-4c1d-a50d-1ab6effdace8" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="d9077bc6-787d-6684-efec-73f7861f599f" executionId="99066c91-9e42-4556-9f13-ca38b9724380" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="04f39090-31ab-d72c-35a4-f6823fede253" executionId="b85f273b-8463-42f6-9124-a01fbc486111" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="3c92594b-9ef0-6bdc-5af9-5c1cb56114b0" executionId="d0bd8bc5-ea7e-4a18-bc47-2057394772b3" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="3e44525e-4c8e-f49b-17af-c7d0566eea9b" executionId="d85eeee0-3555-4363-b0f9-7bb8385ab4b2" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+  </TestEntries>
+  <TestLists>
+    <TestList name="列表中未列出的结果" id="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestList name="所有已加载的结果" id="19431567-8539-422a-85d7-44ee4e166bda" />
+  </TestLists>
+  <ResultSummary outcome="Completed">
+    <Counters total="14" executed="14" passed="14" failed="0" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="0" inProgress="0" pending="0" />
+    <Output>
+      <StdOut>[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v3.1.4+50e68bbb8b (64-bit .NET 10.0.15)&#xD;
+[xUnit.net 00:00:00.32]   Discovering: ShineMusic.Tests&#xD;
+[xUnit.net 00:00:00.54]   Discovered:  ShineMusic.Tests&#xD;
+[xUnit.net 00:00:00.57]   Starting:    ShineMusic.Tests&#xD;
+[xUnit.net 00:00:00.72]   Finished:    ShineMusic.Tests&#xD;
+</StdOut>
+    </Output>
+  </ResultSummary>
+</TestRun>

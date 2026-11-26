@@ -4,10 +4,15 @@
 namespace ShineMusic.Model.Ports;
 
 /// <summary>曲目的可见性信息。</summary>
-public sealed record TrackPlaybackVisibility(DateTimeOffset? PublishedAt, Guid? OwnerUserId);
+public sealed record TrackPlaybackVisibility(DateTimeOffset? PublishedAt, Guid? OwnerUserId, bool IsRecycled = false);
 
 /// <summary>已发布音频资产的位置与格式。</summary>
-public sealed record PublishedAudioAsset(string StorageKey, string Container);
+public sealed record PublishedAudioAsset(
+    string StorageKey,
+    string Container,
+    Guid AssetId = default,
+    string? ContentHash = null,
+    bool IsOriginal = false);
 
 /// <summary>播放端点专用的曲库读模型。</summary>
 public interface ITrackPlaybackStore
@@ -17,4 +22,8 @@ public interface ITrackPlaybackStore
 
     /// <summary>读取主已发布资产（优先 IsPrimary）；不存在返回 null。</summary>
     Task<PublishedAudioAsset?> GetPublishedAudioAsync(Guid trackId, CancellationToken cancellationToken);
+
+    /// <summary>Reads only a retained original asset for a separately authorized pending review.</summary>
+    Task<PublishedAudioAsset?> GetCandidateOriginalAsync(Guid trackId, CancellationToken cancellationToken) =>
+        Task.FromResult<PublishedAudioAsset?>(null);
 }

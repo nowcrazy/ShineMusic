@@ -11,7 +11,7 @@
  * 同一自然日内结果不变，跨日时静默刷新即可。
  */
 import type { ApiTrack, Track } from '@/types/music'
-import { API_PREFIX, http } from './http'
+import { API_PREFIX, assertSessionRevisionCurrent, captureSessionRevision, http } from './http'
 import { mapTrack } from './catalog'
 
 /** 每日推荐结果视图模型。 */
@@ -33,6 +33,7 @@ let _dailyCache: DailyRecommendation | null = null
 let _dailyInFlight: Promise<DailyRecommendation> | null = null
 
 async function fetchDailyRaw(limit?: number): Promise<DailyRecommendation> {
+  const revision = captureSessionRevision()
   const path = limit == null
     ? `${API_PREFIX}/recommendations/daily`
     : `${API_PREFIX}/recommendations/daily?limit=${limit}`
@@ -40,6 +41,7 @@ async function fetchDailyRaw(limit?: number): Promise<DailyRecommendation> {
     path,
     false,
   )
+  assertSessionRevisionCurrent(revision)
   return {
     date: data.date,
     personalized: data.personalized,
@@ -48,8 +50,11 @@ async function fetchDailyRaw(limit?: number): Promise<DailyRecommendation> {
 }
 
 async function refreshDailySilently(limit?: number): Promise<void> {
+  const revision = captureSessionRevision()
   try {
-    _dailyCache = await fetchDailyRaw(limit)
+    const result = await fetchDailyRaw(limit)
+    assertSessionRevisionCurrent(revision)
+    _dailyCache = result
   } catch {
     // 静默失败
   }
@@ -63,20 +68,30 @@ async function refreshDailySilently(limit?: number): Promise<void> {
  * - 跨日时刷新会自动替换缓存。
  */
 export async function getDailyRecommendations(limit?: number): Promise<DailyRecommendation> {
+  const revision = captureSessionRevision()
   if (_dailyCache) {
     void refreshDailySilently(limit)
     return _dailyCache
   }
   if (!_dailyInFlight) {
-    _dailyInFlight = fetchDailyRaw(limit).finally(() => {
-      _dailyInFlight = null
+    const promise = fetchDailyRaw(limit).finally(() => {
+      if (_dailyInFlight === promise) _dailyInFlight = null
     })
+    _dailyInFlight = promise
   }
-  _dailyCache = await _dailyInFlight
+  const result = await _dailyInFlight
+  assertSessionRevisionCurrent(revision)
+  _dailyCache = result
   return _dailyCache
 }
 
 /** 同步读取每日推荐缓存（页面先用它填充，避免 loading 闪烁）。 */
 export function peekDailyCache(): DailyRecommendation | null {
   return _dailyCache
+}
+
+/** 丢弃上一会话的推荐及单飞入口；旧执行只会拒绝，不会回填。 */
+export function resetDailyRecommendations(): void {
+  _dailyCache = null
+  _dailyInFlight = null
 }
